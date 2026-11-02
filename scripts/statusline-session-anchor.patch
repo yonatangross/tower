@@ -1,0 +1,40 @@
+--- a/statusline-command.sh
++++ b/statusline-command.sh
+@@ -411,6 +411,37 @@
+ esac
+ [ -n "$nick" ] || { acct="?"; amark=""; acol="$DIM"; }
+ 
++# ── session anchor for Tower: this session's own reset pair, keyed by session ──
++# Tower's SESSIONS list cannot name a session's account: `claude agents` and the
++# ~/.claude/sessions registry carry no account, and Claude Code 2.1.283 writes no
++# quotaLimits record into the transcript. This payload is the one place that
++# pairs session_id with the rate_limits reset anchors, so publish exactly that:
++# $CFG/session-anchors/<session_id> = "r5|r7|epoch". Tower resolves it through
++# the same reset-to-account match (90s) as the label above, so a session whose
++# anchor matches zero or several accounts stays "account unknown" there too.
++# Rewritten only when the pair changes (a /login flips it), so steady state is
++# one builtin read and zero forks. Opt out with HQ_STATUSLINE_SESSION_ANCHOR=0.
++# Installed by yonatangross/tower scripts/install-statusline-anchor.sh.
++if [ "${HQ_STATUSLINE_SESSION_ANCHOR:-1}" = "1" ] && [ -n "$sid" ] && [ -n "$r5" ]; then
++  case "$sid" in
++    *[!A-Za-z0-9_-]*) : ;;                  # never let a payload value steer the path
++    *)
++      _ad="$CFG/session-anchors"; _af="$_ad/$sid"; _abody="$r5|$r7|"; _aprev=""
++      # silent: fail-open an absent or torn record just forces a rewrite
++      [ -r "$_af" ] && read -r _aprev 2>/dev/null <"$_af"
++      case "$_aprev" in
++        "$_abody"*) : ;;
++        *)
++          [ -d "$_ad" ] || mkdir -p "$_ad" 2>/dev/null
++          # silent: fail-open, same redirect order as the fable cache above
++          printf '%s%s\n' "$_abody" "$now" 2>/dev/null >"$_af.$$" \
++            && command mv -f "$_af.$$" "$_af" 2>/dev/null
++          ;;
++      esac
++      ;;
++  esac
++fi
++
+ # ── dirty count, 10s cache per repo root ───────────────────────────────────
+ # `git status --porcelain` measured at 62-90ms on a large repo (an earlier comment
+ # here claimed ~33ms; that was wrong and understated the cost this cache exists to

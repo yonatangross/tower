@@ -1,0 +1,9 @@
+.build/
+dist/
+*.xcodeproj
+.DS_Store
+.lane-cache/
+.recap/
+
+# Product icons are extracted locally by scripts/extract-brand-marks.sh and never committed.
+Resources/BrandMarks/*.png

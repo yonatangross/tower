@@ -1,0 +1,51 @@
+# Tower CI. Swift 6 / SPM macOS menubar app (Package.swift: platforms macOS 14,
+# swift-tools-version 6.0), so this needs a macOS runner with Xcode 16+.
+# The secret scan runs in secret-scan.yml.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Supersede PR runs; other events never cancel an in-progress run.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Swift toolchain
+        run: swift --version
+      - name: Resolve and build
+        run: swift build -c release
+      - name: Retention mutation proof
+        run: bash scripts/test-retention-mutations.sh
+      - name: Binding limit mutation proof
+        run: bash scripts/test-binding-mutations.sh
+      - name: Cursor pool mutation proof
+        run: bash scripts/test-cursor-mutations.sh
+      - name: Keychain mutation proof
+        run: bash scripts/test-keychain-mutations.sh
+      # /bin/bash, not PATH bash: the scripts target the macOS 3.2 builtin, and
+      # Homebrew bash 5 on the runner would hide a 3.2 violation until the
+      # release workflow, which already invokes /bin/bash, ran it on main.
+      - name: Installer and update script tests
+        run: |
+          /bin/bash scripts/test-install.sh
+          /bin/bash scripts/test-update.sh
+          /bin/bash scripts/test-statusline-anchor.sh
+      - name: Unit tests
+        run: |
+          swift test
+          .build/debug/Tower selftest

@@ -1,0 +1,92 @@
+import Foundation
+import AppKit
+
+// Single-instance guard: if another Tower is running, activate it and exit.
+func enforceSingleInstance() {
+    let bundleID = ProductIdentity.bundleIdentifier
+    let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    guard let first = others.first else { return }
+    // activate() without options is the macOS 14+ replacement for activateIgnoringOtherApps
+    first.activate()
+    exit(0)
+}
+
+// `claude-limits status`    -> one-shot text table, no GUI.
+// `claude-limits selftest`  -> pure-logic checks, no network, no GUI.
+// `tower mcp`               -> stdio MCP server, no GUI (docs/mcp-surface.md).
+// `tower mcp --self-test`   -> list the tools and read one account, then exit.
+// no args                   -> menubar app.
+let args = Set(CommandLine.arguments.dropFirst())
+
+if args.contains("selftest") {
+    exit(CLI.selftest())
+}
+
+if args.contains("mcp") {
+    // A first Keychain read can raise the dialog, exactly as `tower status` can, so the
+    // server never reads a token until a tool that needs one is called.
+    let service = TowerMCPService(env: .live())
+    if args.contains("--self-test") {
+        exit(MCPSelfTest.run(service))
+    }
+    let sem = DispatchSemaphore(value: 0)
+    Task {
+        let server = MCPServer(service: service, send: { MCPStdio.write($0) })
+        let watcher = MCPQuotaWatcher(service: service, server: server)
+        watcher.start()
+        await MCPStdio.serve(server)
+        watcher.stop()
+        sem.signal()
+    }
+    sem.wait()
+    exit(0)
+}
+
+if args.contains("rotate") {
+    exit(CLI.rotate())
+}
+
+if args.contains("login-item") {
+    if args.contains("on") || args.contains("off") {
+        if let err = LaunchAtLogin.set(args.contains("on")) {
+            print("failed: \(err)")
+            exit(1)
+        }
+    }
+    print("start at login: \(LaunchAtLogin.isEnabled ? "ENABLED" : "disabled")")
+    exit(0)
+}
+
+if args.contains("status") {
+    let sem = DispatchSemaphore(value: 0)
+    Task {
+        await CLI.run()
+        sem.signal()
+    }
+    sem.wait()
+    exit(0)
+}
+
+if args.contains("panelshot") {
+    let out = CommandLine.arguments.dropFirst().first(where: { $0.hasSuffix(".png") })
+        ?? "/tmp/tower-panel.png"
+    // The renderer must live on the main actor, so block on the run loop rather
+    // than a semaphore, which would deadlock it.
+    var code: Int32 = 1
+    var done = false
+    Task { @MainActor in
+        code = await PanelShot.run(to: URL(fileURLWithPath: out))
+        done = true
+    }
+    while !done { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    exit(code)
+}
+
+enforceSingleInstance()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.run()
+}
