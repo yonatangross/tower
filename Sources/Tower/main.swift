@@ -23,6 +23,21 @@ if args.contains("selftest") {
     exit(CLI.selftest())
 }
 
+// TOWER_DEMO=1 promises no real credential is read. Only the MCP server and panelshot
+// are wired for it (TowerMCPService.Environment.demo, the cached panel); status, rotate,
+// login-item and the app read the Keychain or the network directly, so they refuse
+// instead of quietly running live. TOWER_DEMO without TOWER_SUPPORT_DIR refuses too.
+if ProcessInfo.processInfo.environment["TOWER_DEMO"] == "1" {
+    if DemoMode.isMisconfigured() {
+        FileHandle.standardError.write(Data("TOWER_DEMO=1 needs TOWER_SUPPORT_DIR pointing at a demo store\n".utf8))
+        exit(2)
+    }
+    if !args.contains("mcp") && !args.contains("panelshot") {
+        FileHandle.standardError.write(Data("TOWER_DEMO=1 runs only `tower mcp` and `tower panelshot`\n".utf8))
+        exit(2)
+    }
+}
+
 // Every mode below reads the store or the settings, so a pre-v0.1 install is carried
 // over first. A no-op once done.
 LegacyInstallMigration.runAtLaunch()

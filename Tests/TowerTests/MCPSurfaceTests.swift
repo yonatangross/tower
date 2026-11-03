@@ -391,7 +391,10 @@ final class MCPSurfaceTests: XCTestCase {
     /// says the active seat is unknown.
     func testAdviceReportsActiveUnknownWhenIdentityIsUnverified() async throws {
         let blind = TowerMCPService(env: fixture.environment(verifiedActiveEmail: .some(nil)))
-        let advice = try await blind.callTool("tower_advice", arguments: [:]).structuredContent!
+        let result = try await blind.callTool("tower_advice", arguments: [:])
+        let advice = result.structuredContent!
+        guard case .text(let summary)? = result.content.first else { return XCTFail("no summary") }
+        XCTAssertTrue(summary.hasPrefix("no verified active seat; most room: cal ("), summary)
         XCTAssertEqual(advice["kind"], "activeUnknown")
         XCTAssertEqual(advice["nickname"], "cal")
         XCTAssertEqual(advice["percentUsed"], .null)

@@ -1351,6 +1351,62 @@ struct VerifiedActiveSeat: Codable, Equatable {
     }
 }
 
+/// The invented-store demo (scripts/demo-store.py): `TOWER_DEMO=1` together with
+/// `TOWER_SUPPORT_DIR`. A demo must never read this Mac's login. Without this mode a
+/// demo store could never show a verified seat (its record binds to an invented token,
+/// not the real one) and every demo run read the real Claude Code credential to find
+/// that out. In demo mode the live credential is `<support>/demo-credential.json` and
+/// nothing else: no Keychain read, no network refresh.
+enum DemoMode {
+    static let credentialFileName = "demo-credential.json"
+
+    /// The demo store, or nil when this is not a demo run. TOWER_DEMO alone does not
+    /// count: a demo with no store to point at would read the real one.
+    static func supportDirectory(env: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
+        guard env["TOWER_DEMO"] == "1", let dir = env["TOWER_SUPPORT_DIR"], !dir.isEmpty else { return nil }
+        return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
+    }
+
+    /// TOWER_DEMO asked for without a store: the caller refuses to start rather than
+    /// quietly running against the real store and Keychain.
+    static func isMisconfigured(env: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        env["TOWER_DEMO"] == "1" && supportDirectory(env: env) == nil
+    }
+
+    /// The invented active login. nil when the file is absent or unreadable, which reads
+    /// as an unverified seat, exactly like a real Mac with no login.
+    static func credential(in dir: URL) -> ClaudeCredential? {
+        struct File: Decodable {
+            let accessToken: String
+            let emailHint: String?
+            let subscriptionType: String?
+        }
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent(credentialFileName)),
+              let file = try? JSONDecoder().decode(File.self, from: data),
+              !file.accessToken.isEmpty else { return nil }
+        return ClaudeCredential(
+            service: Keychain.defaultService, accessToken: file.accessToken,
+            subscriptionType: file.subscriptionType ?? "max", rateLimitTier: nil,
+            expiresAt: nil, emailHint: file.emailHint)
+    }
+}
+
+/// The seat vault's Keychain in demo mode: holds nothing and writes nothing, so the
+/// retention tools answer from an empty roster instead of the real login Keychain.
+struct DemoSeatKeychain: ClaudeSeatKeychain {
+    func readSeats(interaction: ClaudeSeatReadInteraction) -> Result<ClaudeSeatKeychainReadout, ClaudeSeatVaultError> {
+        .success(ClaudeSeatKeychainReadout())
+    }
+
+    func writeSeat(service: String, account: String, label: String, data: Data) -> String? {
+        "demo mode keeps no seats in the Keychain"
+    }
+
+    func removeSeat(service: String, account: String, label: String) -> String? {
+        nil
+    }
+}
+
 final class Store {
     static let shared = Store()
 
@@ -1393,6 +1449,11 @@ final class Store {
     static func defaultMirrorPath(
         env: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
+        // A demo store's rows are invented; mirroring them into ~/.claude would feed
+        // them to the real hooks.
+        if let demo = DemoMode.supportDirectory(env: env) {
+            return demo.appendingPathComponent("quota-cache.json")
+        }
         let cfg: URL
         if let value = env["CLAUDE_CONFIG_DIR"], !value.isEmpty {
             cfg = URL(fileURLWithPath: (value as NSString).expandingTildeInPath)
@@ -2070,6 +2131,8 @@ final class Store {
     /// do I pick"). An account with no Chrome profile is genuinely harder to switch into,
     /// so the gate still means something; it just now means the true thing.
     func switchProfilesByEmail() -> [String: ChromeProfileHint] {
+        // Chrome's profile list holds this Mac's real Google accounts; a demo shows none.
+        guard DemoMode.supportDirectory() == nil else { return [:] }
         let home = FileManager.default.homeDirectoryForCurrentUser
         let localState = home.appendingPathComponent(
             "Library/Application Support/Google/Chrome/Local State")
