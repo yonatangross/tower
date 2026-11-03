@@ -2085,6 +2085,13 @@ enum CLI {
                       && DemoMode.refusal(args: ["panelshot", "out.png"]) == nil)
             check("demo refuses the app and plain status", DemoMode.refusal(args: []) != nil
                       && DemoMode.refusal(args: ["status"]) != nil)
+            // Same contract as MCPSurfaceTests.testEveryCLIVerbHasATool, runnable without XCTest.
+            let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
+            let toolNames = Set(TowerMCPService.tools.map(\.name))
+            check("every CLI verb dispatches to itself and maps to a listed MCP tool",
+                  cliVerbs.allSatisfy { DemoMode.dispatched(args: [$0.rawValue]) == $0 }
+                      && cliVerbs.allSatisfy { TowerMCPService.verbToTool[$0.rawValue].map(toolNames.contains) == true }
+                      && Set(TowerMCPService.verbToTool.keys) == Set(cliVerbs.map(\.rawValue)))
         }
 
         print("  " + String(repeating: "─", count: 56))

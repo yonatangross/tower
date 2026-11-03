@@ -1376,8 +1376,10 @@ enum DemoMode {
     /// The one mode main.swift runs for a set of arguments. Both the dispatch and the demo
     /// gate read this, in this order, so the gate always judges the verb that will run:
     /// a gate that only asked "is panelshot present" let `panelshot status` run status live.
-    enum Verb: Equatable {
-        case selftest, mcp, rotate, loginItem, status, panelshot, app
+    /// Raw values are the CLI words, so tests can walk every verb (MCPSurfaceTests checks
+    /// each one dispatches to itself and has an MCP tool). `app` is the no-argument mode.
+    enum Verb: String, CaseIterable, Equatable {
+        case selftest, mcp, rotate, loginItem = "login-item", status, panelshot, app
     }
 
     static func dispatched(args: Set<String>) -> Verb {
