@@ -64,8 +64,18 @@ and repoints a `~/.local/bin/tower` link that named the old executable.
 
 What macOS ties to the old id and asks for once more:
 
-- **Keychain.** Each remembered seat asks once for access by the new build;
-  choose **Always Allow** and Tower re-trusts the item for this build.
+- **Keychain.** Until you press **Re-trust** (beside **Forget** in the panel),
+  Tower reads only the seat you are signed into, through the Claude Code
+  credential; the other remembered seats stay unread. Nothing else ever shows the
+  Keychain dialog: launches, background refreshes, `tower status` and `tower mcp`
+  never do, and Tower never asks for your login password.
+
+  | Situation | Keychain prompts |
+  | --- | --- |
+  | Fresh install | 0 |
+  | First Re-trust after upgrading from a build before v0.1 | one **Always Allow** per remembered seat, once (macOS gives each old item its own access list) |
+  | Any later identity change (a new release, which is ad hoc signed) | 1, when you press Re-trust |
+  | Background refresh, CLI, MCP | 0, always |
 - **Privacy prompts.** Any permission macOS granted the old build (for example
   access to another app's data) is asked for again the first time Tower needs it.
 - **Start at login**, if you installed by unzipping rather than with

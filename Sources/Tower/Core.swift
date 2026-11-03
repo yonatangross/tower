@@ -457,7 +457,9 @@ enum UsageAPI {
 
     static func usage(token: String) async throws -> UsageResponse {
         let data = try await get("/api/oauth/usage", token: token)
-        return try JSONDecoder().decode(UsageResponse.self, from: data)
+        let usage = try JSONDecoder().decode(UsageResponse.self, from: data)
+        UsageShape.logIfFiveHourMissing(data, usage: usage)
+        return usage
     }
 
     /// Cached per access token. The email bound to a token never changes, and this app polls
@@ -472,6 +474,58 @@ enum UsageAPI {
         let resolved = (try? JSONDecoder().decode(ProfileResponse.self, from: data))?.resolvedEmail
         emailCache = (token, resolved)
         return resolved
+    }
+}
+
+/// The SHAPE of a provider reply, for finding where a window lives when a decoder misses
+/// it. 2026-11-02: three max seats replied with no `five_hour`, so the 5h window sat
+/// somewhere the decoder did not read. The shape names the top-level keys, and for each
+/// `limits[]` entry its `kind` and `group` labels and its own keys. It never carries a
+/// number, a date, a token or any other value, so it is safe to log in public.
+enum UsageShape {
+    /// Read with `log show --last 1d --predicate 'subsystem == "ai.yonyon.tower"
+    /// AND category == "usage-shape"'`.
+    static let logger = Logger(subsystem: ProductIdentity.bundleIdentifier, category: "usage-shape")
+    private static let lock = NSLock()
+    private static var logged: Set<String> = []
+    static let labelLimit = 32
+
+    static func describe(_ data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let top = object as? [String: Any] else { return nil }
+        var out = "keys=" + top.keys.sorted().joined(separator: ",")
+        guard let limits = top["limits"] else { return out }
+        guard let entries = limits as? [Any] else { return out + "; limits=<not a list>" }
+        let parts = entries.map { entry -> String in
+            guard let fields = entry as? [String: Any] else { return "<not an object>" }
+            return label(fields["kind"]) + "/" + label(fields["group"])
+                + "{" + fields.keys.sorted().joined(separator: ",") + "}"
+        }
+        out += "; limits=[" + parts.joined(separator: ", ") + "]"
+        return out
+    }
+
+    /// A categorical label as text, cut to `labelLimit`; anything that is not a string is named
+    /// by its type, so a number can never reach the log through a label slot.
+    private static func label(_ value: Any?) -> String {
+        switch value {
+        case nil, is NSNull: return "<none>"
+        case let text as String: return String(text.prefix(labelLimit))
+        case let number as NSNumber:
+            return CFGetTypeID(number) == CFBooleanGetTypeID() ? "<bool>" : "<number>"
+        default: return "<object>"
+        }
+    }
+
+    /// Logs a reply's shape once per distinct shape per process, only when the decoded reply
+    /// has no `five_hour` window.
+    static func logIfFiveHourMissing(_ data: Data, usage: UsageResponse) {
+        guard usage.five_hour == nil, let shape = describe(data) else { return }
+        lock.lock()
+        let first = logged.insert(shape).inserted
+        lock.unlock()
+        guard first else { return }
+        logger.notice("usage reply without five_hour: \(shape, privacy: .public)")
     }
 }
 

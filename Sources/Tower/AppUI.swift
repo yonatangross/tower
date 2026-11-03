@@ -448,6 +448,18 @@ final class LimitsModel: ObservableObject {
         DispatchQueue.main.async { AppDelegate.shared?.fitPanel() }
     }
 
+    /// The one place the Keychain dialog may appear: after an identity change the operator
+    /// approves remembered seats once, here, instead of every poll prompting per seat.
+    func retrustRetainedClaudeSeats() {
+        seatRetentionError = nil
+        switch ClaudeSeatVault.shared.retrust() {
+        case .failure(let error): seatRetentionError = error.message
+        case .success(let counts) where counts.unreadable > 0:
+            seatRetentionError = "\(counts.unreadable) remembered seat(s) still not readable"
+        case .success: Task { await refresh() }
+        }
+    }
+
     func forgetRetainedClaudeSeats() {
         seatRetentionError = nil
         loginRetentionEpoch += 1
@@ -1981,6 +1993,9 @@ struct MenuContent: View {
                 .toggleStyle(.checkbox)
                 .font(TowerType.font(.body))
                 Spacer()
+                Button("Re-trust") { model.retrustRetainedClaudeSeats() }
+                    .font(TowerType.font(.body))
+                    .help("Approve remembered seats once after Tower's signature or bundle id changed")
                 Button("Forget") { model.forgetRetainedClaudeSeats() }
                     .font(TowerType.font(.body))
             }

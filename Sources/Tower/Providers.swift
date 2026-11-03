@@ -1279,14 +1279,14 @@ enum CursorUsage {
         "Cursor is installed and signed in, but Tower cannot build a session from its stored login: "
         + "the token is not a JWT and no membership auth id is stored. Usage is unreadable."
 
-    /// The reason text a refused read leaves on the row. An opaque token gets its own
-    /// wording: telling the operator to sign in again would send them after a fix that
-    /// cannot work, because the token is fresh and the route no longer accepts its shape.
+    /// The reason text a refused read leaves on the row. An opaque token is sent as a
+    /// bearer to the editor's own route (`fetchBearer`), which accepts that shape, so a
+    /// refusal there means the session itself was refused. The text still names the token
+    /// kind so a refusal is never mistaken for the old cookie-route format problem.
     static func refusedError(code: Int, opaqueToken: Bool) -> String {
         if opaqueToken {
-            return "Cursor session refused (HTTP \(code)): the stored token is not a JWT "
-                + "and the dashboard route no longer accepts it. Usage is unreadable; "
-                + "signing in again will not fix this."
+            return "Cursor session refused (HTTP \(code)) on the editor usage route; the stored "
+                + "token is not a JWT. Sign in again in Cursor to refresh it."
         }
         return "Cursor session refused (HTTP \(code)). "
             + "Sign in again in Cursor to refresh it."
@@ -1357,6 +1357,7 @@ enum CursorUsage {
             return loginPresent(home: home) ? .identityUnreadable(identityUnreadableReason)
                                             : .notConfigured
         }
+        if id.opaqueToken { return await fetchBearer(id, now: now) }
         let cookie = CursorAuth.sessionCookie(id)
 
         guard let usageReq = request("/api/usage-summary", cookie: cookie, body: nil)
@@ -1376,6 +1377,92 @@ enum CursorUsage {
         return .ok(Reading(email: id.email, plan: dashboardPlan,
                            cursorModelsPct: summary.individualUsage?.plan?.autoPercentUsed,
                            otherModelsPct: summary.individualUsage?.plan?.apiPercentUsed,
+                           periodResetsAt: reset))
+    }
+
+    // MARK: Bearer route (opaque token)
+
+    /// The route the Cursor editor itself calls for the current period. Since 2026-10-23
+    /// Cursor stores an opaque access token that the dashboard cookie route refuses; the
+    /// editor sends that same token as a bearer to this Connect RPC.
+    ///
+    /// ⚠️ UNDOCUMENTED, same risk class as the dashboard route. Measured 2026-11-03 with no
+    /// credentials: POST answers 401 `ERROR_NOT_LOGGED_IN` (the route exists; a missing one
+    /// answers 404). The authenticated reply shape is NOT yet verified, so `parseBearer`
+    /// reads the pool percentages from the top level or from `planUsage`, and an unknown
+    /// shape is logged (keys only) and reported as unavailable, never as zero.
+    static let bearerURL = URL(
+        string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage")!
+
+    static func bearerRequest(token: String) -> URLRequest {
+        var req = URLRequest(url: bearerURL)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        req.setValue(UsageAPI.userAgent, forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 15
+        req.httpBody = Data("{}".utf8)
+        return req
+    }
+
+    struct BearerReading: Equatable {
+        let plan: String?
+        let cursorModelsPct: Double?
+        let otherModelsPct: Double?
+        let periodResetsAt: Date?
+    }
+
+    /// Reads a GetCurrentPeriodUsage reply. Returns nil when neither pool percentage is
+    /// present anywhere it looks, so the caller can log the shape instead of rendering 0 %.
+    static func parseBearer(_ data: Data) -> BearerReading? {
+        guard let top = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+        let plan = top["planUsage"] as? [String: Any]
+        func number(_ key: String) -> Double? {
+            for source in [plan, top] {
+                if let n = source?[key] as? NSNumber { return n.doubleValue }
+                if let s = source?[key] as? String, let d = Double(s) { return d }
+            }
+            return nil
+        }
+        let auto = number("autoPercentUsed")
+        let api = number("apiPercentUsed")
+        guard auto != nil || api != nil else { return nil }
+        let membership = (top["membershipType"] as? String)
+            .flatMap { $0.isEmpty ? nil : $0 }
+        return BearerReading(plan: membership, cursorModelsPct: auto, otherModelsPct: api,
+                             periodResetsAt: cycleDate(top["billingCycleEnd"]))
+    }
+
+    /// Connect encodes int64 as a JSON string, so the cycle end can arrive as ISO text,
+    /// epoch milliseconds in a string, or a bare number.
+    static func cycleDate(_ value: Any?) -> Date? {
+        if let s = value as? String {
+            if let ms = Double(s) { return Date(timeIntervalSince1970: ms / 1000) }
+            return DateParse.parse(s)
+        }
+        if let n = value as? NSNumber { return Date(timeIntervalSince1970: n.doubleValue / 1000) }
+        return nil
+    }
+
+    static func fetchBearer(_ id: CursorAuth.Identity, now: Date) async -> Outcome {
+        let data: Data
+        switch await send(bearerRequest(token: id.accessToken)) {
+        case .failed(let outcome): return outcome
+        case .body(let d): data = d
+        }
+        guard let parsed = parseBearer(data) else {
+            if let shape = UsageShape.describe(data) {
+                UsageShape.logger.notice(
+                    "cursor bearer reply without pool percentages: \(shape, privacy: .public)")
+            }
+            return .unavailable
+        }
+        let reset = parsed.periodResetsAt.flatMap { $0 > now ? $0 : nil }
+        return .ok(Reading(email: id.email, plan: parsed.plan ?? id.plan,
+                           cursorModelsPct: parsed.cursorModelsPct,
+                           otherModelsPct: parsed.otherModelsPct,
                            periodResetsAt: reset))
     }
 

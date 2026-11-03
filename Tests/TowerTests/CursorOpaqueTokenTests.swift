@@ -164,7 +164,8 @@ final class CursorOpaqueTokenTests: XCTestCase {
         let opaque = CursorUsage.refusedError(code: 401, opaqueToken: true)
         XCTAssertTrue(opaque.contains("HTTP 401"))
         XCTAssertTrue(opaque.contains("not a JWT"),
-                      "a format change must not read as a plain expired session: \(opaque)")
+                      "the token kind is named on the row: \(opaque)")
+        XCTAssertTrue(opaque.contains("editor usage route"), opaque)
         let plain = CursorUsage.refusedError(code: 401, opaqueToken: false)
         XCTAssertTrue(plain.contains("Sign in again"), plain)
     }

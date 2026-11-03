@@ -11,8 +11,9 @@ import Foundation
 ///   new domain already has.
 ///
 /// What it cannot move, and why the README says so: macOS keys privacy grants and the
-/// login item by bundle id, so either may ask again once; the Keychain asks once per
-/// remembered seat before Tower re-trusts the item for the new build.
+/// login item by bundle id, so either may ask again once. Remembered Keychain seats are
+/// not touched here: the panel's Re-trust reads them once (one Always Allow per old
+/// seat item, the first time only) and writes the new build's seat bundle.
 enum LegacyInstallMigration {
     /// Written into the new settings domain after the copy, naming the domain it came from.
     static let settingsMarkerKey = "migratedFromLegacyDomain"

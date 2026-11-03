@@ -7,8 +7,9 @@ import AppKit
 /// `ai.yonatan-hq.claude-limits` with the executable and support directory
 /// `HQClaudeLimits`; `LegacyInstallMigration` carries such an install over on its
 /// first launch. Keychain seat items are found by their own label and service, not by
-/// the bundle id, so they survive the rename; their ACL names the old build and is
-/// re-trusted by the normal repair path after one Keychain approval.
+/// the bundle id, so they survive the rename; their access list names the old build,
+/// so they are read only by the panel's explicit Re-trust, which writes the new build's
+/// own seat bundle (`SeatBundle`).
 enum ProductIdentity {
     static let displayName = "Tower"
     static let bundleIdentifier = "ai.yonyon.tower"
@@ -19,6 +20,11 @@ enum ProductIdentity {
     static let legacyBundleIdentifier = "ai.yonatan-hq.claude-limits"
     static let legacySupportDirectoryName = "HQClaudeLimits"
     static let legacyProcessName = "HQClaudeLimits"
+
+    /// Signing identifiers of every Tower build whose Keychain seat items a Re-trust may
+    /// import. The v0.1 rename adds the old id, so items an earlier build wrote stay
+    /// importable once, by the user's explicit Re-trust.
+    static let keychainTrustedIdentifiers: Set<String> = [bundleIdentifier, legacyBundleIdentifier]
 
     /// The Tower.app this process runs from. `Bundle.main` answers that only when the
     /// executable was started by its path inside the bundle. `tower` on the PATH is a

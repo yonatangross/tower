@@ -65,6 +65,13 @@ final class LegacyInstallMigrationTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: currentDir.path), "no directory is created for nothing")
     }
 
+    /// A Re-trust after the rename may import seat items that the pre-v0.1 build wrote,
+    /// and nothing that names another product.
+    func testKeychainTrustsTheCurrentAndTheLegacyIdOnly() {
+        XCTAssertEqual(ProductIdentity.keychainTrustedIdentifiers,
+                       ["ai.yonyon.tower", "ai.yonatan-hq.claude-limits"])
+    }
+
     func testLegacyDomainMapping() {
         XCTAssertEqual(LegacyInstallMigration.legacyDomain(for: "ai.yonyon.tower"),
                        "ai.yonatan-hq.claude-limits")

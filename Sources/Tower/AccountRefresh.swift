@@ -110,10 +110,12 @@ struct ClaudeSeatVaultError: Error, LocalizedError, Equatable {
     var errorDescription: String? { message }
 }
 
-/// Whether a seat-item read may raise the Keychain dialog. Only the first real read of a
-/// launch runs `allowed`: that is the one chance an Always Allow click has to bless the
-/// current signer. Every later read runs `suppressed`, so a denial or a locked keychain
-/// can never start a prompt storm.
+/// Whether a seat-item read may raise the Keychain dialog. Only the operator's explicit
+/// re-trust (`ClaudeSeatVault.retrust`, the menu's "Re-trust" button) runs `allowed`. It has
+/// no CLI verb or MCP tool on purpose: an agent must never be able to raise the dialog.
+/// Every launch, poll, CLI and MCP read runs `suppressed`, so neither an identity change nor
+/// a bare build can start a prompt storm (2026-11-03: 8 item prompts plus login password
+/// prompts in one minute).
 enum ClaudeSeatReadInteraction {
     case allowed
     case suppressed
@@ -123,6 +125,14 @@ protocol ClaudeSeatKeychain {
     func readSeats(interaction: ClaudeSeatReadInteraction) -> Result<ClaudeSeatKeychainReadout, ClaudeSeatVaultError>
     func writeSeat(service: String, account: String, label: String, data: Data) -> String?
     func removeSeat(service: String, account: String, label: String) -> String?
+    /// Forget and disable: remove every Tower-owned seat store, including ones another
+    /// signing identity wrote, so a forgotten seat cannot return at a later Re-trust.
+    func purgeAll() -> String?
+}
+
+extension ClaudeSeatKeychain {
+    /// One item per seat: the per-seat removals Forget already makes are the whole job.
+    func purgeAll() -> String? { nil }
 }
 
 /// Counts the `SecItemCopyMatching` calls the seat adapter makes (#68), so the Keychain cost
@@ -259,6 +269,14 @@ enum TowerSeatKeychainAccess {
         }
     }
 
+    /// True only for a validly signed Tower app bundle. A bare build (`swift run`,
+    /// `.build/debug/Tower`) matches no item's ACL, so a read it makes with the dialog
+    /// allowed prompts for every item and can never be trusted afterwards.
+    static func runningFromSignedBundle() -> Bool {
+        if case .success = currentApplicationPath() { return true }
+        return false
+    }
+
     private static func currentApplicationPath() -> Result<String, ClaudeSeatVaultError> {
         guard let path = ProductIdentity.runningBundle()?.bundlePath, !path.isEmpty else {
             return .failure(ClaudeSeatVaultError("Keychain access requires a signed Tower app bundle"))
@@ -318,7 +336,7 @@ enum TowerSeatKeychainAccess {
 ///    signer at the next verified login of that seat (the CLI credential) by deleting that
 ///    exact item and writing a fresh one, once per launch per token; any other status is
 ///    left untouched.
-/// 3. Reads may show the Keychain dialog only on the launch's first attempt: an
+/// 3. Reads may show the Keychain dialog only inside the operator's explicit re-trust: an
 ///    `interaction` of `allowed` attaches no suppression, `suppressed` attaches an
 ///    LAContext with interactionNotAllowed (the non-deprecated replacement for
 ///    kSecUseAuthenticationUIFail, which macOS 11+ ignores and which let a denied read
@@ -460,10 +478,27 @@ struct SystemClaudeSeatKeychain: ClaudeSeatKeychain {
         guard CFGetTypeID(reference) == SecKeychainItemGetTypeID() else {
             return .failure(SeatKeychainAccessInspectionError(status: errSecParam))
         }
-        let item = unsafeBitCast(reference, to: SecKeychainItem.self)
         guard case .success(let required) = TowerSeatKeychainAccess.requiredApplicationRequirements() else {
             return .failure(SeatKeychainAccessInspectionError(status: errSecInternalComponent))
         }
+        switch aclEntries(reference) {
+        case .failure(let error): return .failure(error)
+        case .success(let entries):
+            return .success(SeatKeychainAccessSnapshot(
+                requiresRepair: TowerSeatKeychainAccess.requiresRepair(
+                    required: required, aclEntries: entries)))
+        }
+    }
+
+    /// The item's ACL entries: authorizations plus the code requirements each trusts (nil =
+    /// every application). Reading an ACL never shows a dialog.
+    static func aclEntries(
+        _ reference: CFTypeRef
+    ) -> Result<[SeatKeychainACLEntry], SeatKeychainAccessInspectionError> {
+        guard CFGetTypeID(reference) == SecKeychainItemGetTypeID() else {
+            return .failure(SeatKeychainAccessInspectionError(status: errSecParam))
+        }
+        let item = unsafeBitCast(reference, to: SecKeychainItem.self)
         var access: SecAccess?
         let accessStatus = SecKeychainItemCopyAccess(item, &access)
         guard accessStatus == errSecSuccess, let access else {
@@ -502,9 +537,7 @@ struct SystemClaudeSeatKeychain: ClaudeSeatKeychain {
             entries.append(SeatKeychainACLEntry(
                 authorizations: authorizations, applicationRequirements: requirements))
         }
-        return .success(SeatKeychainAccessSnapshot(
-            requiresRepair: TowerSeatKeychainAccess.requiresRepair(
-                required: required, aclEntries: entries)))
+        return .success(entries)
     }
 
     private static func itemData(_ result: CFTypeRef?) -> Data? {
@@ -585,9 +618,11 @@ final class ClaudeSeatLaunchCache {
     private var readout: ClaudeSeatKeychainReadout?
     private var lastFailure: ClaudeSeatVaultError?
     private var lastAttemptAt: Date?
-    /// The one read this launch may show a dialog for. Once it has run (however it
-    /// answered) every later read is suppressed, so a denied dialog is never re-asked.
-    private var allowedAttemptDone = false
+    /// Set only by the operator's explicit re-trust; consumed by the next read. No launch,
+    /// poll, CLI call or MCP call may show the Keychain dialog on its own: after an identity
+    /// change (a new signer or bundle id) every item would prompt, plus a login password
+    /// prompt per item for the access repair, in every process that starts.
+    private var interactiveReadRequested = false
     private var reported: Set<String> = []
     private var recreateAttempts: Set<String> = []
 
@@ -595,7 +630,13 @@ final class ClaudeSeatLaunchCache {
     var failureForLaunch: ClaudeSeatVaultError? { lock.withLock { lastFailure } }
 
     var interactionForNextAttempt: ClaudeSeatReadInteraction {
-        lock.withLock { allowedAttemptDone ? .suppressed : .allowed }
+        lock.withLock { interactiveReadRequested ? .allowed : .suppressed }
+    }
+
+    /// The operator asked to re-trust remembered seats. The next read may prompt (and may
+    /// repair item access); every read after it is suppressed again.
+    func requestInteractiveRead() {
+        lock.withLock { interactiveReadRequested = true }
     }
 
     /// Whether the vault may make another real Keychain read: never inside `backoff` of the
@@ -615,7 +656,7 @@ final class ClaudeSeatLaunchCache {
             readout = value
             lastFailure = nil
             lastAttemptAt = now
-            if interaction == .allowed { allowedAttemptDone = true }
+            if interaction == .allowed { interactiveReadRequested = false }
         }
     }
 
@@ -625,7 +666,7 @@ final class ClaudeSeatLaunchCache {
         lock.withLock {
             lastFailure = error
             lastAttemptAt = now
-            if interaction == .allowed { allowedAttemptDone = true }
+            if interaction == .allowed { interactiveReadRequested = false }
         }
     }
 
@@ -690,16 +731,19 @@ struct ClaudeSeatVault {
     private let setRetentionEnabled: (Bool) -> Void
     private let log: (String) -> Void
     private let now: () -> Date
+    private let mayPrompt: () -> Bool
 
     init(
-        keychain: any ClaudeSeatKeychain = SystemClaudeSeatKeychain(),
+        keychain: any ClaudeSeatKeychain = BundledClaudeSeatKeychain(),
         lockURL: URL? = nil,
         stateURL: URL? = nil,
         retentionEnabled: @escaping () -> Bool = { ClaudeSeatRetention.isEnabled() },
         setRetentionEnabled: @escaping (Bool) -> Void = { ClaudeSeatRetention.setEnabled($0) },
         log: @escaping (String) -> Void = ClaudeSeatVault.defaultLog,
-        now: @escaping () -> Date = { Date() }
+        now: @escaping () -> Date = { Date() },
+        mayPrompt: @escaping () -> Bool = { TowerSeatKeychainAccess.runningFromSignedBundle() }
     ) {
+        self.mayPrompt = mayPrompt
         self.keychain = keychain
         let directory = Self.defaultDirectory()
         self.lockURL = lockURL ?? directory.appendingPathComponent(".seat-keychain.lock")
@@ -942,7 +986,13 @@ struct ClaudeSeatVault {
             // loop and reads this launch's copy.
             switch launchReadout(fresh: freshRead) {
             case .success(let value): readout = value
-            case .failure(let error): return error.message
+            case .failure(let error):
+                // A store that cannot be read (locked, corrupt) must not keep the operator's
+                // Forget from deleting: purging works by name and needs no read. The read
+                // failure is still returned and the preference left as it was, so the
+                // operator sees it and a retry (now reading an empty store) completes.
+                if advanceGeneration, let purgeError = keychain.purgeAll() { return purgeError }
+                return error.message
             }
             for record in readout.records {
                 guard validOwnership(record), keep(ClaudeCredential(
@@ -964,6 +1014,11 @@ struct ClaudeSeatVault {
                     service: item.service, account: item.account, label: item.label), firstError == nil {
                     firstError = error
                 }
+            }
+            // Forget and disable (the generation-advancing forms) also remove every store
+            // another identity wrote; retirement stays per seat.
+            if advanceGeneration, firstError == nil, let error = keychain.purgeAll() {
+                firstError = error
             }
             guard firstError == nil else { return firstError }
             if let setRetentionAfterSuccess { setRetentionEnabled(setRetentionAfterSuccess) }
@@ -988,12 +1043,33 @@ struct ClaudeSeatVault {
         }
     }
 
-    /// #68: the refresh loop reads each seat item at most once per launch. The first real
-    /// read may show the Keychain dialog (the operator's one Always Allow chance to bless
-    /// this signer); whatever it answers is kept for the life of the process. A denied,
+    /// #68: the refresh loop reads each seat item at most once per launch, always with the
+    /// dialog suppressed (blessing a new signer is `retrust`, an explicit operator action);
+    /// whatever it answers is kept for the life of the process. A denied,
     /// locked or failed read is asked again only after `readRetryBackoff`, always with
     /// interaction suppressed, so it can never re-prompt. `fresh` is for the operator's
     /// Forget and disable, which must see the Keychain as it is now and also never prompts.
+    /// The only path that may show the Keychain dialog: the operator's explicit "Re-trust"
+    /// after an identity change (new signer or bundle id). One read with the dialog allowed;
+    /// readable items whose access names another build are repaired in that same read.
+    /// Refused for a bare build, which can never become trusted. Returns how many remembered
+    /// seats are readable and how many are not.
+    func retrust() -> Result<(readable: Int, unreadable: Int), ClaudeSeatVaultError> {
+        guard mayPrompt() else {
+            return .failure(ClaudeSeatVaultError(
+                "Re-trust needs the signed Tower app; a bare build never reads seat items with the Keychain dialog"))
+        }
+        launch.requestInteractiveRead()
+        switch keychain.readSeats(interaction: launch.interactionForNextAttempt) {
+        case .failure(let error):
+            launch.noteFailure(error, now: now(), interaction: .allowed)
+            return .failure(error)
+        case .success(let readout):
+            launch.keep(readout, now: now(), interaction: .allowed)
+            return .success((readout.records.count, readout.unreadable.count))
+        }
+    }
+
     private func launchReadout(fresh: Bool = false) -> Result<ClaudeSeatKeychainReadout, ClaudeSeatVaultError> {
         if !fresh && !launch.readDue(now: now(), backoff: Self.readRetryBackoff) {
             if let kept = launch.readoutForLaunch { return .success(kept) }
