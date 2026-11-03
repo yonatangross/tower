@@ -8,6 +8,29 @@ you which one to switch to before you get stuck.
 
 *The screenshot uses invented accounts (`scripts/demo-store.py`).*
 
+## Quick start
+
+macOS 14 or later, Apple silicon:
+
+```bash
+gh release download --repo yonatangross/tower --pattern 'Tower.app.zip*'
+shasum -a 256 -c Tower.app.zip.sha256 && ditto -x -k Tower.app.zip ~/Applications
+open ~/Applications/Tower.app
+```
+
+Then sign into each Claude Code account once with `/login`. Blocked on first
+launch? See [troubleshooting](docs/playbooks/troubleshooting.md#macos-blocks-the-first-launch).
+
+## Playbooks
+
+| Playbook | For |
+| --- | --- |
+| [Setup](docs/playbooks/setup.md) | install, first run, Keychain trust, adding accounts |
+| [Multi-account](docs/playbooks/multi-account.md) | several Claude Code seats, Codex, Cursor, switching fast |
+| [MCP](docs/playbooks/mcp.md) | let Claude Code, Codex or Cursor ask which account has room |
+| [Troubleshooting](docs/playbooks/troubleshooting.md) | Gatekeeper, Intel Macs, build errors, odd rows |
+| [Uninstall](docs/playbooks/uninstall.md) | remove the app and everything it stored |
+
 ## What it does
 
 - **Seats.** Real Claude Code usage for each account you have signed into: the
@@ -50,7 +73,9 @@ shasum -a 256 -c Tower.app.zip.sha256
 ditto -x -k Tower.app.zip ~/Applications
 ```
 
-Release builds are ad hoc signed, so macOS asks once before the first launch.
+Release builds are ad hoc signed, so macOS asks once before the first launch
+([what to do](docs/playbooks/troubleshooting.md#macos-blocks-the-first-launch)).
+To remove Tower, follow [uninstall](docs/playbooks/uninstall.md).
 
 ### Upgrading from a build before v0.1
 
@@ -125,7 +150,8 @@ for example in a project `.mcp.json`:
 }
 ```
 
-Check it with `tower mcp --self-test`.
+Check it with `tower mcp --self-test`. Codex and Cursor configs and example
+agent prompts are in the [MCP playbook](docs/playbooks/mcp.md).
 
 | Tools | What they answer |
 | --- | --- |
