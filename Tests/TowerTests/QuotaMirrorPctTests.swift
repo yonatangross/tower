@@ -160,7 +160,7 @@ final class QuotaMirrorPctTests: XCTestCase {
     }
 
     /// The statusline producer renders OpenRouter room straight off the mirror
-    /// row: it needs `balanceUSD` (hq_tower.py reads that exact name) and
+    /// row: it needs `balanceUSD` (statusline readers read that exact name) and
     /// `availablePct`, the same percent-LEFT number the BudgetRow shows.
     func testOpenRouterRowPublishesBalanceAndAvailablePct() throws {
         let now = Date(timeIntervalSince1970: 2_000_000_000)

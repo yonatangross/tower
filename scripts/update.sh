@@ -69,7 +69,7 @@ artifact_sha="${artifact_name#tower-app-}"
 if [ "${#old_sha}" -ge 7 ]; then
   case "$artifact_sha" in
     "$old_sha"*)
-      if pgrep -f "HQClaudeLimits" >/dev/null 2>&1; then
+      if pgrep -f "$DEST/Contents/MacOS/(Tower|HQClaudeLimits)( |\$)" >/dev/null 2>&1; then
         echo "Already at $old_sha ($artifact_name). Nothing to do."
       else
         echo "Already at $old_sha, but the app is not running; relaunching."

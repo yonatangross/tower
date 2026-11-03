@@ -437,7 +437,7 @@ enum Keychain {
 
 enum UsageAPI {
     static let host = "https://api.anthropic.com"
-    static let userAgent = "claude-limits/0.1 (personal usage monitor)"
+    static let userAgent = "Tower/0.1 (usage monitor)"
 
     private static func get(_ path: String, token: String) async throws -> Data {
         var req = URLRequest(url: URL(string: host + path)!)
@@ -548,7 +548,7 @@ struct AccountSnapshot: Codable, Identifiable {
     /// Standing rail crossing for this account, advanced by `Rail.evaluate`: "amber"
     /// while the account stands at or above 80 percent of the 5h meter, "red" at or
     /// above 90 percent of the 5h or 7d meter, key omitted below 80. This is the mirror
-    /// field station.sh (hq-ext R8a) reads to refuse an open above amber. It is machine
+    /// field a lane launcher can read to refuse an open above amber. It is machine
     /// state, not a fresh claim: it holds at the last observed band until a capture or a
     /// window reset observes the drop that clears it, which is the safe direction while
     /// nobody is looking.
@@ -818,8 +818,8 @@ struct AccountSnapshot: Codable, Identifiable {
     ///
     /// INFORMATIONAL ONLY. It used to gate `isRecommendable`, on the reasoning that a model
     /// capped at 100% is unusable however much aggregate headroom remains. True in general,
-    /// wrong for this operator: `~/.claude/settings.json` pins `model: opus[1m]`, no agent in
-    /// ork or hq-ext selects fable, and Fable is nonetheless the ONLY scoped bucket the API
+    /// wrong in practice: a typical `~/.claude/settings.json` pins `model: opus[1m]`, no agent
+    /// selects fable, and Fable is nonetheless the ONLY scoped bucket the API
     /// returns (35-95% across all six accounts, 2026-08-03). Gating on a model you never
     /// choose banishes accounts that are perfectly usable for the model you do.
     ///
@@ -1321,7 +1321,7 @@ final class Store {
         self.init(dir: Self.defaultSupportDirectory(), mirror: Self.defaultMirrorPath())
     }
 
-    /// `~/Library/Application Support/HQClaudeLimits`, or `TOWER_SUPPORT_DIR` when set.
+    /// `~/Library/Application Support/Tower`, or `TOWER_SUPPORT_DIR` when set.
     /// The override exists for the MCP integration test, which runs the real binary
     /// against a throwaway store; nothing else sets it.
     static func defaultSupportDirectory(
@@ -2696,7 +2696,7 @@ struct RailCrossing: Equatable {
 /// The quota rail: amber and red marks on the row's two meters (80 and 90 percent of
 /// the 5h meter, 90 percent of the 7d meter), one toast when an account crosses up onto
 /// a mark, and the standing crossing written to the mirror as the account's `crossing`
-/// field so station.sh (hq-ext R8a) can refuse an open above amber without scraping
+/// field so a lane launcher can refuse an open above amber without scraping
 /// the UI.
 ///
 /// The machine is per ACCOUNT and its state is that field. A stored percentage only

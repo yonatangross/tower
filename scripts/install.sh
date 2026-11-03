@@ -143,14 +143,47 @@ if [ ! -d "$SRC" ]; then
   exit 1
 fi
 
+# "Tower" is also the executable of an unrelated Git client, so nothing here
+# matches the bare name: the process pattern is anchored to this install's path,
+# and a Tower.app at DEST that carries another bundle id is never replaced.
+# Before v0.1 the executable was HQClaudeLimits (bundle id
+# ai.yonatan-hq.claude-limits); that name is unique, so it still matches anywhere.
+PROCESS_PATTERN="$DEST/Contents/MacOS/(Tower|HQClaudeLimits)( |\$)"
+if [ -f "$DEST/Contents/Info.plist" ]; then
+  existing_id="$(plutil -extract CFBundleIdentifier raw "$DEST/Contents/Info.plist" 2>/dev/null)" || existing_id="unreadable"
+  case "$existing_id" in
+    ai.yonyon.tower|ai.yonyon.tower.*|ai.yonatan-hq.claude-limits|ai.yonatan-hq.claude-limits.*) ;;
+    *) fail "$DEST belongs to another app (bundle id $existing_id). Move it, then run this again." ;;
+  esac
+fi
+
 echo "==> stopping any running instance"
 # pkill exits 1 when nothing matched, which is the normal first-install case.
 # Any other exit code is a real failure and is surfaced.
-# silent: best-effort
-pkill -f "HQClaudeLimits" || rc=$?
-if [ "${rc:-0}" -gt 1 ]; then
-  echo "pkill failed with exit $rc" >&2
-  exit "$rc"
+for pattern in "/Contents/MacOS/HQClaudeLimits( |\$)" "$PROCESS_PATTERN"; do
+  rc=0
+  pkill -f "$pattern" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "pkill failed with exit $rc" >&2
+    exit "$rc"
+  fi
+done
+
+# An install that still runs the pre-v0.1 executable registered its login item
+# under the old bundle id. Ask the old binary whether it is on, switch it off
+# there, and switch it on for the new id after the copy, so the setting carries
+# over and no stale registration is left behind.
+legacy_login=0
+LEGACY_EXE="$DEST/Contents/MacOS/HQClaudeLimits"
+if [ -x "$LEGACY_EXE" ]; then
+  legacy_status="$("$LEGACY_EXE" login-item 2>/dev/null)" || legacy_status=""
+  case "$legacy_status" in
+    *ENABLED*)
+      legacy_login=1
+      echo "==> moving start-at-login from the pre-v0.1 build"
+      "$LEGACY_EXE" login-item off >/dev/null 2>&1 || echo "   WARNING: could not switch the old login item off" >&2
+      ;;
+  esac
 fi
 
 mkdir -p "$DEST_DIR"
@@ -193,24 +226,43 @@ echo "==> launching"
 open "$DEST"
 sleep 3
 
-if pgrep -f "HQClaudeLimits" >/dev/null; then
+if pgrep -f "$DEST/Contents/MacOS/Tower( |\$)" >/dev/null; then
   echo "Running from $DEST"
 else
   echo "WARNING: app did not stay running" >&2
   exit 1
 fi
 
-# Only re-register when a rename actually happened. On a plain reinstall the
-# path is unchanged and the existing registration is still correct, so touching
-# it would flip a user setting nobody asked us to flip.
-if [ "$migrated" = 1 ]; then
-  echo "==> path changed, re-registering login item at $DEST"
-  if ! "$DEST/Contents/MacOS/HQClaudeLimits" login-item on; then
-    echo "   WARNING: re-register failed. Start-at-login now points at a bundle" >&2
+# Only re-register when the registration moved: a renamed bundle path, or a
+# pre-v0.1 install whose login item was on under the old bundle id. On a plain
+# reinstall the existing registration is still correct, so touching it would
+# flip a user setting nobody asked us to flip.
+if [ "$migrated" = 1 ] || [ "$legacy_login" = 1 ]; then
+  echo "==> re-registering login item at $DEST"
+  if ! "$DEST/Contents/MacOS/Tower" login-item on; then
+    echo "   WARNING: re-register failed. Start-at-login is off or points at a bundle" >&2
     echo "   that no longer exists. Fix with the command below." >&2
   fi
 fi
 
+# A ~/.local/bin/tower link made for a pre-v0.1 build names the old executable,
+# which this install just removed. Point it at the new one. The test suite sets
+# TOWER_TEST_LINK; with TOWER_TEST_INSTALLED set and no link given, the real one
+# is never touched.
+if [ -n "${TOWER_TEST_INSTALLED:-}" ]; then
+  LINK="${TOWER_TEST_LINK:-}"
+else
+  LINK="$HOME/.local/bin/tower"
+fi
+if [ -n "$LINK" ] && [ -L "$LINK" ]; then
+  case "$(readlink "$LINK")" in
+    */Tower.app/Contents/MacOS/HQClaudeLimits)
+      ln -sf "$DEST/Contents/MacOS/Tower" "$LINK"
+      echo "==> repointed $LINK at $DEST/Contents/MacOS/Tower"
+      ;;
+  esac
+fi
+
 echo ""
 echo "Enable start-at-login with:"
-echo "  \"$DEST/Contents/MacOS/HQClaudeLimits\" login-item on"
+echo "  \"$DEST/Contents/MacOS/Tower\" login-item on"

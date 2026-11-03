@@ -3,14 +3,22 @@ import CoreGraphics
 import SwiftUI
 import AppKit
 
-/// Display name versus install identity. Changing the bundle id, support
-/// directory, or process name orphans Keychain ACLs (#45, #68); those stay
-/// until a signing identity lands. User-facing copy uses `displayName` only.
+/// Display name and install identity. Builds before v0.1 installed as
+/// `ai.yonatan-hq.claude-limits` with the executable and support directory
+/// `HQClaudeLimits`; `LegacyInstallMigration` carries such an install over on its
+/// first launch. Keychain seat items are found by their own label and service, not by
+/// the bundle id, so they survive the rename; their ACL names the old build and is
+/// re-trusted by the normal repair path after one Keychain approval.
 enum ProductIdentity {
     static let displayName = "Tower"
-    static let bundleIdentifier = "ai.yonatan-hq.claude-limits"
-    static let supportDirectoryName = "HQClaudeLimits"
-    static let processName = "HQClaudeLimits"
+    static let bundleIdentifier = "ai.yonyon.tower"
+    static let supportDirectoryName = "Tower"
+    static let processName = "Tower"
+
+    /// The pre-v0.1 identity, read only by the migration and the installers.
+    static let legacyBundleIdentifier = "ai.yonatan-hq.claude-limits"
+    static let legacySupportDirectoryName = "HQClaudeLimits"
+    static let legacyProcessName = "HQClaudeLimits"
 
     /// The Tower.app this process runs from. `Bundle.main` answers that only when the
     /// executable was started by its path inside the bundle. `tower` on the PATH is a
@@ -23,7 +31,7 @@ enum ProductIdentity {
         return enclosingAppBundle(executablePath: main.executablePath)
     }
 
-    /// `.../Tower.app/Contents/MacOS/HQClaudeLimits`, after resolving symlinks, names
+    /// `.../Tower.app/Contents/MacOS/Tower`, after resolving symlinks, names
     /// `.../Tower.app`; anything else (a `swift build` product in `.build`) is no bundle.
     static func enclosingAppBundle(executablePath: String?) -> Bundle? {
         guard let executablePath, !executablePath.isEmpty else { return nil }

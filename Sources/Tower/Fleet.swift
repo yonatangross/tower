@@ -191,7 +191,7 @@ enum ClaudeModelSetting {
 /// Measured 2026-09-22: the ceiling all night was the machine, not quota (load1 180 to
 /// 320, 14 to 34 GB compressed) while the dispatch gate refused at load1 120. A panel that
 /// only says "seat has room" invited a dispatch the gate would then refuse. The marks are
-/// the gate's OWN defaults (`hq_dispatch.py` DISPATCH_MEM_LOAD1 = 120,
+/// the defaults of the dispatch gate Tower was built beside (DISPATCH_MEM_LOAD1 = 120,
 /// DISPATCH_MEM_COMPRESSOR_GB = 25), so Tower and the gate agree on what "no room" means.
 struct MachineLoad: Equatable {
     static let gateLoad1: Double = 120

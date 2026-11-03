@@ -666,7 +666,7 @@ enum PanelShotHydration {
     }
 
     /// Lanes are hydrated too: `AgentLane.readAll` is bounded file reads of each CLI's
-    /// config, logs and herdr's ledgers, no credential and no network, so the LANES
+    /// config, logs and the optional dispatch ledgers, no credential and no network, so the LANES
     /// section renders offscreen instead of coming out empty.
     static func load(
         store: Store,
@@ -1684,7 +1684,7 @@ private struct BalanceLine: View {
 /// A provider row that is BROKEN rather than absent.
 ///
 /// Exists because hiding on failure is indistinguishable from hiding on "not configured",
-/// and the operator lost a rotated key that way: the section simply vanished and he found
+/// and an operator lost a rotated key that way: the section simply vanished and they found
 /// out by opening the OpenRouter dashboard himself. A refusal gets a row, a colour, and the
 /// exact command that fixes it.
 struct OpenRouterProblem: View {

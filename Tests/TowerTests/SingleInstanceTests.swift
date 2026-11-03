@@ -6,7 +6,7 @@ final class SingleInstanceTests: XCTestCase {
     func testBundleIdentifierMatchesApp() {
         // The bundle ID used in enforceSingleInstance must match the app's CFBundleIdentifier
         let bundleID = ProductIdentity.bundleIdentifier
-        XCTAssertEqual(bundleID, "ai.yonatan-hq.claude-limits", "Bundle ID must match CFBundleIdentifier")
+        XCTAssertEqual(bundleID, "ai.yonyon.tower", "Bundle ID must match CFBundleIdentifier")
     }
 
     func testRunningApplicationsReturnsArray() {

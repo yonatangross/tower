@@ -469,7 +469,7 @@ enum CLI {
 
         // --- Store ------------------------------------------------------------------
         let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("claude-limits-selftest-\(UUID().uuidString)")
+            .appendingPathComponent("tower-selftest-\(UUID().uuidString)")
         let store = Store(dir: tmp)
         var one = AccountSnapshot(email: "a@a", nickname: "a", plan: "max")
         one.weeklyPct = 42
@@ -483,10 +483,31 @@ enum CLI {
         check("mutate returns the merged map", merged.count == 2)
         check("mutate is visible to a fresh load", store.load().count == 2)
         check("display name is Tower", ProductIdentity.displayName == "Tower")
-        check("bundle id stays claude-limits",
-              ProductIdentity.bundleIdentifier == "ai.yonatan-hq.claude-limits")
-        check("support dir stays HQClaudeLimits",
-              ProductIdentity.supportDirectoryName == "HQClaudeLimits")
+        check("bundle id is ai.yonyon.tower",
+              ProductIdentity.bundleIdentifier == "ai.yonyon.tower")
+        check("support dir is Tower",
+              ProductIdentity.supportDirectoryName == "Tower")
+        do {
+            // A pre-v0.1 support directory moves under the new name, keeping what the
+            // new directory already holds.
+            let base = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tower-selftest-legacy-\(UUID().uuidString)")
+            let legacy = base.appendingPathComponent(ProductIdentity.legacySupportDirectoryName)
+            let current = base.appendingPathComponent(ProductIdentity.supportDirectoryName)
+            try? FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: current, withIntermediateDirectories: true)
+            try? Data("old".utf8).write(to: legacy.appendingPathComponent("accounts.json"))
+            try? Data("old".utf8).write(to: legacy.appendingPathComponent("nicknames.json"))
+            try? Data("new".utf8).write(to: current.appendingPathComponent("nicknames.json"))
+            let report = LegacyInstallMigration.migrateSupportDirectory(base: base)
+            check("legacy support dir: store moved",
+                  (try? String(contentsOf: current.appendingPathComponent("accounts.json"), encoding: .utf8)) == "old")
+            check("legacy support dir: newer entry kept",
+                  (try? String(contentsOf: current.appendingPathComponent("nicknames.json"), encoding: .utf8)) == "new")
+            check("legacy support dir: report names only the moved entry",
+                  report.movedEntries == ["accounts.json"] && report.problems.isEmpty)
+            try? FileManager.default.removeItem(at: base)
+        }
         let hydratedRows = SeatCacheHydration.rows(from: store)
         check("hydration reads last known seats from disk",
               hydratedRows.contains(where: { $0.email == "a@a" && $0.weeklyPct == 42 }))
@@ -796,7 +817,7 @@ enum CLI {
         // "provider":"quantum-abacus" stands in for any provider a future build adds. The
         // point is not that string, it is that ONE unreadable row must cost exactly itself.
         let fwd = FileManager.default.temporaryDirectory
-            .appendingPathComponent("claude-limits-selftest-fwd-\(UUID().uuidString)")
+            .appendingPathComponent("tower-selftest-fwd-\(UUID().uuidString)")
         let fwdStore = Store(dir: fwd)
         let fwdJSON = """
         {"keep@a": {"email":"keep@a","nickname":"keep","plan":"max","scoped":[],\
@@ -847,7 +868,7 @@ enum CLI {
             print("  ⏭  unwritable-store check skipped (running as root)")
         } else {
             let readOnly = FileManager.default.temporaryDirectory
-                .appendingPathComponent("claude-limits-selftest-ro-\(UUID().uuidString)")
+                .appendingPathComponent("tower-selftest-ro-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(
                 at: readOnly, withIntermediateDirectories: true)
             try? FileManager.default.setAttributes(
@@ -1086,7 +1107,7 @@ enum CLI {
 
         // --- Scoped limits REPORT, they do not bind ----------------------------------
         // Reversed 2026-08-03. Gating here was principled in the abstract and wrong in
-        // fact: settings.json pins `model: opus[1m]`, no ork or hq-ext agent selects fable,
+        // fact: settings.json pins `model: opus[1m]`, no configured agent selects fable,
         // and Fable is the only scoped bucket this API returns. Blocking on a model the
         // operator never picks banished accounts that were fine for the model they do pick.
         var capped = AccountSnapshot(email: "c@c", nickname: "c", plan: "max")

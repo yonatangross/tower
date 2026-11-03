@@ -88,7 +88,7 @@ write_mock ditto \
   'echo "ditto $*" >> "$TOWER_TEST_LOG"' \
   'destination="${!#}"' \
   '/bin/mkdir -p "$destination/Tower.app/Contents/MacOS"' \
-  'printf fixture > "$destination/Tower.app/Contents/MacOS/HQClaudeLimits"' \
+  'printf fixture > "$destination/Tower.app/Contents/MacOS/Tower"' \
   'printf "%s\n" "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" "<plist version=\"1.0\"><dict>" "<key>CFBundleVersion</key><string>$TOWER_TEST_NEW_SHA</string>" "</dict></plist>" > "$destination/Tower.app/Contents/Info.plist"'
 write_mock gh \
   'echo "gh $*" >> "$TOWER_TEST_LOG"' \
@@ -130,11 +130,11 @@ run_update() {
 install_fake_app() {
   local sha="$1"
   mkdir -p "$INSTALLED/Tower.app/Contents/MacOS"
-  printf binary > "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  printf binary > "$INSTALLED/Tower.app/Contents/MacOS/Tower"
   printf '%s\n' \
     '<?xml version="1.0" encoding="UTF-8"?>' \
     '<plist version="1.0"><dict>' \
-    "  <key>CFBundleVersion</key><string>$sha</string>" \
+    "  <key>CFBundleIdentifier</key><string>ai.yonyon.tower</string><key>CFBundleVersion</key><string>$sha</string>" \
     '</dict></plist>' \
     > "$INSTALLED/Tower.app/Contents/Info.plist"
 }
@@ -147,7 +147,7 @@ test_installs_newer_artifact_and_reports_shas() {
   assert_contains 'gh run download 123' "$LOG"
   assert_contains 'ditto -x -k' "$LOG"
   assert_contains 'pkill ' "$LOG"
-  assert_file "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  assert_file "$INSTALLED/Tower.app/Contents/MacOS/Tower"
   assert_contains "<string>$NEW_SHA</string>" "$INSTALLED/Tower.app/Contents/Info.plist"
   assert_stdout_contains "$out" "Build sha: aaaaaaa -> $NEW_SHA"
   rm -rf "$INSTALLED"
@@ -186,7 +186,7 @@ test_prestamp_build_does_not_skip() {
 
 test_installs_when_nothing_installed() {
   out="$(run_update)"
-  assert_file "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  assert_file "$INSTALLED/Tower.app/Contents/MacOS/Tower"
   assert_stdout_contains "$out" "Build sha: not-installed -> $NEW_SHA"
   rm -rf "$INSTALLED"
 }

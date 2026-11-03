@@ -83,7 +83,7 @@ write_mock pgrep 'echo "pgrep $*" >> "$TOWER_TEST_LOG"' 'exit 0'
 write_mock mkdir \
   'echo "mkdir $*" >> "$TOWER_TEST_LOG"' \
   '/bin/mkdir "$@"'
-write_mock rm 'echo "rm $*" >> "$TOWER_TEST_LOG"'
+write_mock rm 'echo "rm $*" >> "$TOWER_TEST_LOG"' 'if [ "${TOWER_TEST_REAL_RM:-0}" = 1 ]; then /bin/rm "$@"; fi'
 write_mock find 'echo "find $*" >> "$TOWER_TEST_LOG"'
 write_mock cp \
   'echo "cp $*" >> "$TOWER_TEST_LOG"' \
@@ -92,7 +92,7 @@ write_mock ditto \
   'echo "ditto $*" >> "$TOWER_TEST_LOG"' \
   'destination="${!#}"' \
   '/bin/mkdir -p "$destination/Tower.app/Contents/MacOS"' \
-  'printf fixture > "$destination/Tower.app/Contents/MacOS/HQClaudeLimits"'
+  'printf fixture > "$destination/Tower.app/Contents/MacOS/Tower"'
 write_mock gh \
   'echo "gh $*" >> "$TOWER_TEST_LOG"' \
   'if [ "$1" = "api" ] && [ "${TOWER_TEST_NO_RUN:-0}" = 1 ] && printf "%s" "$2" | grep -F "/runs?" >/dev/null; then exit 0; fi' \
@@ -158,13 +158,13 @@ run_install_dry() {
 
 prepare_local_bundle() {
   mkdir -p "$PROJECT_ROOT/dist/Tower.app/Contents/MacOS"
-  printf local > "$PROJECT_ROOT/dist/Tower.app/Contents/MacOS/HQClaudeLimits"
+  printf local > "$PROJECT_ROOT/dist/Tower.app/Contents/MacOS/Tower"
 }
 
 test_default_uses_local_bundle() {
   prepare_local_bundle
   run_install
-  assert_file "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  assert_file "$INSTALLED/Tower.app/Contents/MacOS/Tower"
   assert_not_contains 'gh ' "$LOG"
   rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
 }
@@ -174,7 +174,7 @@ test_artifact_uses_successful_main_run_and_verifies_before_install() {
   assert_contains 'gh api repos/yonatangross/tower/actions/workflows/release-app.yml/runs?branch=main&event=push&status=success&per_page=1' "$LOG"
   assert_contains 'gh run download 123 --repo yonatangross/tower --name tower-app-deadbeef --dir' "$LOG"
   assert_contains 'ditto -x -k' "$LOG"
-  assert_file "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  assert_file "$INSTALLED/Tower.app/Contents/MacOS/Tower"
   rm -rf "$INSTALLED"
 }
 
@@ -191,7 +191,7 @@ test_artifact_rejects_missing_successful_main_run() {
 test_release_downloads_requested_tag() {
   run_install --from-release v1.2.3
   assert_contains 'gh release download v1.2.3 --repo yonatangross/tower --pattern Tower.app.zip --pattern Tower.app.zip.sha256 --dir' "$LOG"
-  assert_file "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  assert_file "$INSTALLED/Tower.app/Contents/MacOS/Tower"
   rm -rf "$INSTALLED"
 }
 
@@ -220,7 +220,7 @@ test_env_install_from_artifact_matches_flag() {
   TOWER_INSTALL_FROM=""
   assert_contains 'gh api repos/yonatangross/tower/actions/workflows/release-app.yml/runs?' "$LOG"
   assert_contains 'gh run download 123' "$LOG"
-  assert_file "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  assert_file "$INSTALLED/Tower.app/Contents/MacOS/Tower"
   rm -rf "$INSTALLED"
 }
 
@@ -262,7 +262,89 @@ test_local_bundle_is_not_resigned() {
   rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
 }
 
+# v0.1 rename: a pre-v0.1 install runs HQClaudeLimits under the old bundle id.
+legacy_install() {
+  mkdir -p "$INSTALLED/Tower.app/Contents/MacOS"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'echo "legacy $*" >> "$TOWER_TEST_LOG"' \
+    'if [ "$#" = 1 ]; then echo "start at login: ${TOWER_TEST_LEGACY_LOGIN:-disabled}"; fi' \
+    > "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  chmod +x "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits"
+  plutil -create xml1 "$INSTALLED/Tower.app/Contents/Info.plist"
+  plutil -insert CFBundleIdentifier -string ai.yonatan-hq.claude-limits "$INSTALLED/Tower.app/Contents/Info.plist"
+}
+
+# The new build in these tests is a script, so `login-item on` is recorded, not run.
+prepare_scripted_bundle() {
+  mkdir -p "$PROJECT_ROOT/dist/Tower.app/Contents/MacOS"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo "tower $*" >> "$TOWER_TEST_LOG"' \
+    > "$PROJECT_ROOT/dist/Tower.app/Contents/MacOS/Tower"
+  chmod +x "$PROJECT_ROOT/dist/Tower.app/Contents/MacOS/Tower"
+}
+
+test_legacy_login_item_moves_to_the_new_id() {
+  legacy_install
+  prepare_scripted_bundle
+  TOWER_TEST_REAL_RM=1 TOWER_TEST_LEGACY_LOGIN=ENABLED run_install
+  assert_contains 'legacy login-item off' "$LOG"
+  assert_contains 'tower login-item on' "$LOG"
+  off_line="$(grep -n '^legacy login-item off' "$LOG" | cut -d: -f1)"
+  on_line="$(grep -n '^tower login-item on' "$LOG" | cut -d: -f1)"
+  [ "$off_line" -lt "$on_line" ] || fail "expected the old item off before the new one on"
+  rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
+}
+
+test_legacy_login_item_left_off_stays_off() {
+  legacy_install
+  prepare_scripted_bundle
+  TOWER_TEST_REAL_RM=1 run_install
+  assert_contains 'legacy login-item' "$LOG"
+  assert_not_contains 'legacy login-item off' "$LOG"
+  assert_not_contains 'tower login-item on' "$LOG"
+  rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
+}
+
+test_foreign_tower_app_is_never_replaced() {
+  mkdir -p "$INSTALLED/Tower.app/Contents/MacOS"
+  plutil -create xml1 "$INSTALLED/Tower.app/Contents/Info.plist"
+  plutil -insert CFBundleIdentifier -string com.example.git-client "$INSTALLED/Tower.app/Contents/Info.plist"
+  prepare_local_bundle
+  if run_install; then
+    fail 'expected a foreign Tower.app to stop the install'
+  fi
+  assert_not_contains 'pkill ' "$LOG"
+  assert_not_contains 'rm ' "$LOG"
+  rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
+}
+
+test_process_match_is_anchored_to_the_install_path() {
+  prepare_local_bundle
+  run_install
+  assert_contains "pkill -f $INSTALLED/Tower.app/Contents/MacOS/(Tower|HQClaudeLimits)( |\$)" "$LOG"
+  assert_contains "pgrep -f $INSTALLED/Tower.app/Contents/MacOS/Tower( |\$)" "$LOG"
+  assert_not_contains 'pkill -f Tower' "$LOG"
+  rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
+}
+
+test_legacy_cli_link_is_repointed() {
+  local link="$TEST_ROOT/link/tower" other="$TEST_ROOT/link/other"
+  mkdir -p "$TEST_ROOT/link"
+  ln -s "$INSTALLED/Tower.app/Contents/MacOS/HQClaudeLimits" "$link"
+  ln -s /usr/bin/true "$other"
+  prepare_local_bundle
+  TOWER_TEST_LINK="$link" run_install
+  [ "$(readlink "$link")" = "$INSTALLED/Tower.app/Contents/MacOS/Tower" ] || fail "link not repointed: $(readlink "$link")"
+  TOWER_TEST_LINK="$other" run_install
+  [ "$(readlink "$other")" = /usr/bin/true ] || fail "an unrelated link was changed"
+  rm -rf "$PROJECT_ROOT/dist" "$INSTALLED" "$TEST_ROOT/link"
+}
+
 test_default_uses_local_bundle
+test_legacy_login_item_moves_to_the_new_id
+test_legacy_login_item_left_off_stays_off
+test_foreign_tower_app_is_never_replaced
+test_process_match_is_anchored_to_the_install_path
+test_legacy_cli_link_is_repointed
 test_artifact_uses_successful_main_run_and_verifies_before_install
 test_artifact_is_resigned_with_tower_dev
 test_artifact_keeps_its_signature_without_identity

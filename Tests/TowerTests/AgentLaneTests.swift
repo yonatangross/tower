@@ -2,7 +2,7 @@ import XCTest
 import Foundation
 @testable import Tower
 
-/// Fixtures follow the exact text shapes devin 3000.10.27, muse 1.3.0, agy 1.2.4 and herdr's
+/// Fixtures follow the exact text shapes devin 3000.10.27, muse 1.3.0, agy 1.2.4 and a dispatcher's
 /// dispatch ledger write. Identifiers (trace ids, repos, branches, lane ids, build paths) are
 /// invented; the fields the parsers read keep their real format.
 final class AgentLaneTests: XCTestCase {
@@ -38,7 +38,7 @@ final class AgentLaneTests: XCTestCase {
 
     static let museOtherEvent = #"2026-09-16T06:55:27.644294Z INFO tbh.local.security src/crates/config/src/trust/diagnostic.rs:16 event="trust.resolve" outcome="trusted" source="run_flag" duration_ms=0"#
 
-    /// herdr dispatch-worktrees.jsonl rows with repo_path, worktree, pane and workspace
+    /// dispatch-worktrees.jsonl rows with repo_path, worktree, pane and workspace
     /// dropped. One torn line is appended the way an interrupted writer leaves it.
     static let ledger = """
     {"repo": "example-repo", "branch": "dsp/10001-task-1", "agent": "task-24", "kind": "muse", "model": "muse-spark-1.3", "created_at": 1789541736.861883}
@@ -49,7 +49,7 @@ final class AgentLaneTests: XCTestCase {
     {"repo": "demo-app", "branch": "dsp/10006-task-6
     """
 
-    /// herdr lanes.jsonl rows in the shape written on 2026-09-17. This is where the conveyor
+    /// lanes.jsonl rows in the shape written on 2026-09-17. This is where the conveyor
     /// writes dispatches it opens as lanes (all of today's devin ones, for a start), so
     /// dispatch-worktrees.jsonl never sees them. One torn line ends the file.
     static let lanesLedger = """
@@ -159,7 +159,7 @@ final class AgentLaneTests: XCTestCase {
                              at: Date(timeIntervalSince1970: 1789541736.861883)))
         XCTAssertEqual(newest["gemini"]?.at, Date(timeIntervalSince1970: 1789545272.941458))
         XCTAssertEqual(newest["pi"]?.model, "z-ai/glm-5.3-flash")
-        XCTAssertNil(newest["devin"], "herdr's worktree ledger has never seen a devin lane")
+        XCTAssertNil(newest["devin"], "the worktree ledger has never seen a devin lane")
         XCTAssertEqual(AgentLane.ledgerKind(.agy), "gemini")
         XCTAssertEqual(AgentLane.ledgerKind(.muse), "muse")
         XCTAssertEqual(AgentLane.ledgerKind(.cursor), "cursor")
@@ -180,17 +180,17 @@ final class AgentLaneTests: XCTestCase {
 
     /// End to end: a home whose worktree ledger is empty for devin but whose lanes
     /// ledger has today's lanes must still report a dispatch. Before the merge this
-    /// read as "no herdr dispatch recorded" while seven devin lanes were running.
+    /// read as "no dispatch recorded" while seven devin lanes were running.
     func testDevinDispatchIsReadFromTheLanesLedger() throws {
         let home = try makeHome()
         try write("#!/bin/sh\n", ".local/bin/devin", in: home, executable: true)
         try write(Self.ledger,
-                  ".config/herdr/plugins/hq-crossrepo/.state/dispatch-worktrees.jsonl",
+                  "ledgers/dispatch-worktrees.jsonl",
                   in: home)
         try write(Self.lanesLedger,
-                  ".config/herdr/plugins/hq-crossrepo/.state/lanes.jsonl", in: home)
+                  "ledgers/lanes.jsonl", in: home)
 
-        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: [:]) else {
+        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("devin should read")
         }
         XCTAssertEqual(devin.lastDispatch?.at, DateParse.parse("2026-09-17T20:51:28Z"))
@@ -204,9 +204,9 @@ final class AgentLaneTests: XCTestCase {
         try write("#!/bin/sh\n", ".local/bin/cursor", in: home, executable: true)
         try write(Self.cursorConfig, ".cursor/cli-config.json", in: home)
         try write(Self.lanesLedger,
-                  ".config/herdr/plugins/hq-crossrepo/.state/lanes.jsonl", in: home)
+                  "ledgers/lanes.jsonl", in: home)
 
-        guard case .ok(let cursor) = AgentLane.read(.cursor, home: home, env: [:]) else {
+        guard case .ok(let cursor) = AgentLane.read(.cursor, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("cursor should read")
         }
         XCTAssertEqual(cursor.configModel, "auto")
@@ -223,12 +223,12 @@ final class AgentLaneTests: XCTestCase {
         let home = try makeHome()
         try write("#!/bin/sh\n", ".local/bin/muse", in: home, executable: true)
         try write(Self.ledger,
-                  ".config/herdr/plugins/hq-crossrepo/.state/dispatch-worktrees.jsonl",
+                  "ledgers/dispatch-worktrees.jsonl",
                   in: home)
         try write(Self.lanesLedger,
-                  ".config/herdr/plugins/hq-crossrepo/.state/lanes.jsonl", in: home)
+                  "ledgers/lanes.jsonl", in: home)
 
-        guard case .ok(let muse) = AgentLane.read(.muse, home: home, env: [:]) else {
+        guard case .ok(let muse) = AgentLane.read(.muse, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("muse should read")
         }
         // The worktree ledger's muse row (created_at 1789541736 = 2026-09-15) is newer
@@ -279,7 +279,7 @@ final class AgentLaneTests: XCTestCase {
         try write(String(data: Self.devinStatusJSON(), encoding: .utf8)!,
                   ".cache/devin/cli/user_status.aaaaaaaa.bin", in: home)
 
-        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: [:]) else {
+        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("devin should read")
         }
         guard case .quota(let q) = devin.usage else {
@@ -296,7 +296,7 @@ final class AgentLaneTests: XCTestCase {
     func testDevinLaneWithoutStatusCacheIsNotReadable() throws {
         let home = try makeHome()
         try write("#!/bin/sh\n", ".local/bin/devin", in: home, executable: true)
-        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: [:]) else {
+        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("devin should read")
         }
         XCTAssertEqual(devin.usage, .notReadable("no user status cache on disk"))
@@ -386,7 +386,7 @@ final class AgentLaneTests: XCTestCase {
             provider: .devin, configModel: "swe-2-high", lastDispatch: nil, lastLimitHit: nil)
         XCTAssertEqual(AgentLane.modelLine(neverDispatched), "model swe-2-high")
         XCTAssertEqual(AgentLane.dispatchLine(neverDispatched, now: now),
-                       "no herdr dispatch recorded")
+                       "no dispatch recorded")
 
         let bare = AgentLane.Reading(provider: .agy, configModel: nil,
                                      lastDispatch: nil, lastLimitHit: nil)
@@ -433,7 +433,7 @@ final class AgentLaneTests: XCTestCase {
 
     func testUninstalledLaneHides() throws {
         let home = try makeHome()
-        XCTAssertEqual(AgentLane.read(.devin, home: home, env: [:]), .notConfigured)
+        XCTAssertEqual(AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)), .notConfigured)
         XCTAssertEqual(AgentLane.readAll(home: home, env: [:]).count, 4)
     }
 
@@ -444,32 +444,69 @@ final class AgentLaneTests: XCTestCase {
         }
         try write(Self.devinConfig, ".config/devin/config.json", in: home)
         try write(Self.museSettings, ".config/muse/settings.json", in: home)
-        try write(Self.ledger, ".config/herdr/plugins/hq-crossrepo/.state/dispatch-worktrees.jsonl",
+        try write(Self.ledger, "ledgers/dispatch-worktrees.jsonl",
                   in: home)
         try write(Self.devinLog, ".local/share/devin/cli/logs/devin_20260915-211423_17388.log",
                   in: home)
         try write([Self.museSuccess, Self.museRateLimited].joined(separator: "\n"),
                   ".local/share/muse/local-tracing/bootstrap/cli-7f127d7a.log", in: home)
 
-        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: [:]) else {
+        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("devin should read")
         }
         XCTAssertEqual(devin.modelPin, "swe-2-high")
         XCTAssertNil(devin.lastDispatch)
         XCTAssertEqual(devin.lastLimitHit?.summary, "daily quota exhausted")
 
-        guard case .ok(let muse) = AgentLane.read(.muse, home: home, env: [:]) else {
+        guard case .ok(let muse) = AgentLane.read(.muse, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("muse should read")
         }
         XCTAssertEqual(muse.configModel, "muse-spark-1.3-contributor")
         XCTAssertEqual(muse.modelPin, "muse-spark-1.3")
         XCTAssertEqual(muse.lastLimitHit?.summary, "rate limited (HTTP 429)")
 
-        guard case .ok(let agy) = AgentLane.read(.agy, home: home, env: [:]) else {
+        guard case .ok(let agy) = AgentLane.read(.agy, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("agy should read")
         }
         XCTAssertEqual(agy.modelPin, "gemini-3.8-flash-medium")
         XCTAssertNil(agy.lastLimitHit, "agy writes no quota value anywhere on disk")
+    }
+
+    /// The fixtures' ledgers live in `<home>/ledgers`, named the way a user names them.
+    static func ledgerEnv(_ home: URL) -> [String: String] {
+        ["TOWER_DISPATCH_LEDGER_DIR": home.appendingPathComponent("ledgers").path]
+    }
+
+    /// The dispatch ledger is an optional integration: with no directory named, Tower reads
+    /// none, even when a dispatcher's state happens to sit at some well-known path.
+    func testNoLedgerDirectoryMeansNoDispatchAndNoGuessedPath() throws {
+        let home = try makeHome()
+        try write("#!/bin/sh\n", ".local/bin/agy", in: home, executable: true)
+        try write(Self.ledger, ".config/herdr/plugins/some-plugin/.state/dispatch-worktrees.jsonl", in: home)
+        let suite = "tower-ledger-\(UUID().uuidString)"
+        let empty = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { empty.removePersistentDomain(forName: suite) }
+        XCTAssertNil(AgentLane.dispatchLedgerDirectory(home: home, env: [:], defaults: empty))
+        guard case .ok(let agy) = AgentLane.read(.agy, home: home, env: [:]) else {
+            return XCTFail("agy should read")
+        }
+        XCTAssertNil(agy.lastDispatch)
+    }
+
+    func testLedgerDirectoryPrecedence() throws {
+        let home = try makeHome()
+        let suite = "tower-ledger-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("/from/setting", forKey: AgentLane.dispatchLedgerDirectoryKey)
+        XCTAssertEqual(AgentLane.dispatchLedgerDirectory(home: home, env: [:], defaults: defaults)?.path,
+                       "/from/setting")
+        XCTAssertEqual(AgentLane.dispatchLedgerDirectory(
+            home: home, env: ["HERDR_PLUGIN_STATE_DIR": "/from/herdr"], defaults: defaults)?.path,
+            "/from/herdr")
+        XCTAssertEqual(AgentLane.dispatchLedgerDirectory(
+            home: home, env: ["HERDR_PLUGIN_STATE_DIR": "/from/herdr", "TOWER_DISPATCH_LEDGER_DIR": "/from/tower"],
+            defaults: defaults)?.path, "/from/tower")
     }
 
     func testHerdrStateDirOverrideIsHonoured() throws {
@@ -487,7 +524,7 @@ final class AgentLaneTests: XCTestCase {
         let home = try makeHome()
         try write("#!/bin/sh\n", ".local/bin/muse", in: home, executable: true)
         try write("{not json", ".config/muse/settings.json", in: home)
-        XCTAssertEqual(AgentLane.read(.muse, home: home, env: [:]),
+        XCTAssertEqual(AgentLane.read(.muse, home: home, env: Self.ledgerEnv(home)),
                        .unavailable("could not read ~/.config/muse/settings.json"))
     }
 
@@ -539,7 +576,7 @@ final class AgentLaneTests: XCTestCase {
         try write(Self.devinLog, refused, in: home)
         try setMtime(now.addingTimeInterval(-6 * 60), ofRelative: refused, in: home)
 
-        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: [:]) else {
+        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("devin should read")
         }
         XCTAssertEqual(devin.lastLimitHit?.at, DateParse.parse("2026-09-15T18:19:43.627602Z"))
@@ -557,7 +594,7 @@ final class AgentLaneTests: XCTestCase {
         try write(Self.devinLog, refusedEarlier, in: home)
         try setMtime(now.addingTimeInterval(-2 * 86400), ofRelative: refusedEarlier, in: home)
 
-        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: [:]) else {
+        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("devin should read")
         }
         XCTAssertEqual(devin.lastLimitHit?.at, DateParse.parse("2026-09-15T18:19:43.627602Z"))
@@ -574,7 +611,7 @@ final class AgentLaneTests: XCTestCase {
         try write("2026-09-16T08:00:00.000000Z  INFO chisel: tick\n",
                   ".local/share/devin/cli/logs/devin_fresh.log", in: home)
 
-        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: [:]) else {
+        guard case .ok(let devin) = AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("devin should read")
         }
         XCTAssertNil(devin.lastLimitHit)

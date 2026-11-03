@@ -2,11 +2,11 @@ import XCTest
 @testable import Tower
 
 final class ProductIdentityTests: XCTestCase {
-    func testDisplayNameIsTowerAndInstallIdentityStaysUnchanged() {
+    func testDisplayNameAndInstallIdentityAreTower() {
         XCTAssertEqual(ProductIdentity.displayName, "Tower")
-        XCTAssertEqual(ProductIdentity.bundleIdentifier, "ai.yonatan-hq.claude-limits")
-        XCTAssertEqual(ProductIdentity.supportDirectoryName, "HQClaudeLimits")
-        XCTAssertEqual(ProductIdentity.processName, "HQClaudeLimits")
+        XCTAssertEqual(ProductIdentity.bundleIdentifier, "ai.yonyon.tower")
+        XCTAssertEqual(ProductIdentity.supportDirectoryName, "Tower")
+        XCTAssertEqual(ProductIdentity.processName, "Tower")
     }
 
     func testStatusHeaderUsesDisplayNameNotLimits() {

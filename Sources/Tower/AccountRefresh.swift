@@ -128,11 +128,11 @@ protocol ClaudeSeatKeychain {
 /// Counts the `SecItemCopyMatching` calls the seat adapter makes (#68), so the Keychain cost
 /// of a refresh cycle is measured rather than guessed. Every call logs one debug line and
 /// every refresh cycle logs one notice with its own count:
-/// `log show --debug --predicate 'subsystem == "ai.yonatan-hq.claude-limits" AND category == "keychain"'`.
+/// `log show --debug --predicate 'subsystem == "ai.yonyon.tower" AND category == "keychain"'`.
 /// Memory only; the count restarts with the process.
 final class KeychainCallCounter {
     static let shared = KeychainCallCounter()
-    static let logger = Logger(subsystem: "ai.yonatan-hq.claude-limits", category: "keychain")
+    static let logger = Logger(subsystem: ProductIdentity.bundleIdentifier, category: "keychain")
 
     private let lock = NSLock()
     private var copyMatchingCalls = 0
@@ -712,10 +712,10 @@ struct ClaudeSeatVault {
 
     /// Where the one-line-per-event record goes. The unified log is the countable sink: the
     /// GUI is launched by LaunchServices, so its stderr reaches nobody, while
-    /// `log show --predicate 'subsystem == "ai.yonatan-hq.claude-limits" AND category == "retention"'`
+    /// `log show --predicate 'subsystem == "ai.yonyon.tower" AND category == "retention"'`
     /// answers "how often did this fire" with the system's own retention caps. stderr stays
     /// for the CLI and for a Tower started from a terminal. Never a file Tower grows itself.
-    static let logger = Logger(subsystem: "ai.yonatan-hq.claude-limits", category: "retention")
+    static let logger = Logger(subsystem: ProductIdentity.bundleIdentifier, category: "retention")
 
     static func defaultLog(_ line: String) {
         logger.notice("\(line, privacy: .public)")

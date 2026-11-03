@@ -2,10 +2,8 @@
 import PackageDescription
 
 // Product name drives the built binary path (.build/release/Tower), which
-// build-app.sh copies into the bundle as CFBundleExecutable=HQClaudeLimits.
-// The EXECUTABLE name inside the bundle stays HQClaudeLimits on purpose: macOS
-// keys TCC grants and the login item off CFBundleIdentifier, and install.sh's
-// pkill matches the binary name.
+// build-app.sh copies into the bundle as CFBundleExecutable=Tower (it was
+// HQClaudeLimits before v0.1; install.sh still recognises an install that runs it).
 let package = Package(
     name: "Tower",
     platforms: [.macOS(.v14)],

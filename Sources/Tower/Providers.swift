@@ -1476,7 +1476,7 @@ enum CursorPool {
     /// Cursor answers a lane that asks for a metered model on a full pool with
     /// "switch to a different model to continue with Opus". That refusal is not written
     /// anywhere on disk (searched ~/.cursor including 931 chat stores touched 2026-09-22,
-    /// Cursor's logs and herdr state), so Tower flags it from the measured pool instead:
+    /// Cursor's logs or a dispatch ledger), so Tower flags it from the measured pool instead:
     /// the lane is told before it hits the wall, and told that Auto still runs.
     static func laneFlag(_ snap: AccountSnapshot?, laneModel: String?,
                          now: Date = Date()) -> String? {
@@ -1509,7 +1509,7 @@ enum CursorPool {
 ///                     "doRefreshQuota: starting reload", never a value.
 ///
 /// So these rows show what IS observable, under a header that says "usage not exposed": the
-/// model pin, the last herdr dispatch, and the last limit refusal where the tool records one.
+/// model pin, the last ledger dispatch (optional), and the last limit refusal where the tool records one.
 /// They never carry a percentage. They are also never written into the shared quota store: a
 /// row with no usage evidence in `quota-cache.json` would read as headroom to the dispatcher
 /// that routes on that file, which is the exact false signal this app exists to prevent.
@@ -1518,7 +1518,7 @@ enum CursorPool {
 /// network, so a refresh can neither disturb a running agent nor spend its quota.
 enum AgentLane {
     /// Display order in the panel. cursor is in here for its CLI lane (the agent the
-    /// herdr floor dispatches as kind "cursor"); the Cursor IDE's subscription spend is
+    /// dispatch ledgers record as kind "cursor"); the Cursor IDE's subscription spend is
     /// a separate provider row above, so the panel shows both sides of the same seat.
     static let lanes: [Provider] = [.muse, .devin, .cursor, .agy]
 
@@ -1629,7 +1629,7 @@ enum AgentLane {
         let provider: Provider
         /// The model the tool's own config selects, nil when the config names none.
         let configModel: String?
-        /// Newest herdr dispatch of this lane, nil when herdr never dispatched one.
+        /// Newest ledger dispatch of this lane, nil when no ledger recorded one.
         let lastDispatch: Dispatch?
         /// Newest limit refusal the tool recorded, nil when none was seen.
         let lastLimitHit: LimitHit?
@@ -1645,7 +1645,7 @@ enum AgentLane {
             self.usage = usage
         }
 
-        /// herdr's dispatch pin wins over the config default: it is the model a dispatched
+        /// The ledger's dispatch pin wins over the config default: it is the model a dispatched
         /// worker actually ran on, and dispatch is how these lanes get used here.
         var modelPin: String? { lastDispatch?.model ?? configModel }
     }
@@ -1679,17 +1679,32 @@ enum AgentLane {
         }
     }
 
-    /// The `kind` herdr's dispatcher records for each lane. agy dispatches as "gemini":
-    /// hq_dispatch.py's `gemini_executable()` prefers the agy binary over the OSS CLI.
+    /// The `kind` a dispatch ledger records for each lane. agy is recorded as "gemini":
+    /// dispatchers that launch it prefer the agy binary over the OSS Gemini CLI.
     static func ledgerKind(_ lane: Provider) -> String {
         lane == .agy ? "gemini" : lane.rawValue
     }
 
-    static func herdrStateDir(home: URL, env: [String: String]) -> URL {
-        if let dir = env["HERDR_PLUGIN_STATE_DIR"], !dir.isEmpty {
-            return URL(fileURLWithPath: dir)
+    /// Settings key for the optional dispatch ledger directory.
+    static let dispatchLedgerDirectoryKey = "dispatchLedgerDirectory"
+
+    /// Optional integration: a directory holding `dispatch-worktrees.jsonl` and
+    /// `lanes.jsonl`, the ledgers a dispatcher (for example a herdr plugin) writes when it
+    /// opens an agent lane. Tower only reads them. Named by `TOWER_DISPATCH_LEDGER_DIR`,
+    /// herdr's own `HERDR_PLUGIN_STATE_DIR`, or the `dispatchLedgerDirectory` setting, in
+    /// that order. With none set there is no ledger and the lane rows say so; Tower never
+    /// guesses a path.
+    static func dispatchLedgerDirectory(home: URL, env: [String: String],
+                                        defaults: UserDefaults = TowerPreferences.shared) -> URL? {
+        for key in ["TOWER_DISPATCH_LEDGER_DIR", "HERDR_PLUGIN_STATE_DIR"] {
+            if let dir = env[key], !dir.isEmpty {
+                return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
+            }
         }
-        return home.appendingPathComponent(".config/herdr/plugins/hq-crossrepo/.state")
+        if let dir = defaults.string(forKey: dispatchLedgerDirectoryKey), !dir.isEmpty {
+            return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
+        }
+        return nil
     }
 
     // MARK: Parsers (pure, fixture-tested)
@@ -1712,7 +1727,7 @@ enum AgentLane {
         return model
     }
 
-    /// Newest dispatch per `kind` from herdr's `dispatch-worktrees.jsonl`.
+    /// Newest dispatch per `kind` from a dispatcher's `dispatch-worktrees.jsonl`.
     ///
     /// Line by line and lenient: the ledger is append-only and best-effort on the writer's
     /// side, so one torn line must cost that line and not the lane.
@@ -1732,11 +1747,11 @@ enum AgentLane {
         return newest
     }
 
-    /// Newest lane entry per `kind` from herdr's `lanes.jsonl`.
+    /// Newest lane entry per `kind` from a dispatcher's `lanes.jsonl`.
     ///
     /// Not every dispatch lands in `dispatch-worktrees.jsonl`: lanes the conveyor opens
     /// for the devin harness are recorded here instead, which is exactly why the Devin
-    /// row used to read "no herdr dispatch recorded" on a day seven devin lanes ran.
+    /// row used to read "no dispatch recorded" on a day seven devin lanes ran.
     /// The shape differs (`lane` not `worktree`, ISO `opened_at` not epoch `created_at`),
     /// so it gets its own parse; a torn line costs that line, same as the other ledger.
     static func newestLaneEntries(ledger: String) -> [String: Dispatch] {
@@ -1940,7 +1955,7 @@ enum AgentLane {
     }
 
     static func dispatchLine(_ r: Reading, now: Date) -> String {
-        guard let d = r.lastDispatch else { return "no herdr dispatch recorded" }
+        guard let d = r.lastDispatch else { return "no dispatch recorded" }
         return "last dispatch \(CLI.age(d.at, now: now))"
     }
 
@@ -2229,16 +2244,16 @@ enum AgentLane {
             }
         }
 
-        let stateDir = herdrStateDir(home: home, env: env)
+        let ledgerDir = dispatchLedgerDirectory(home: home, env: env)
         // Two ledgers record a dispatch: worktree dispatches in dispatch-worktrees.jsonl
         // and conveyor-opened lanes in lanes.jsonl. Neither is complete alone (devin lanes
         // only ever reach the second), so the newest of both wins.
-        let worktreeDispatch = (try? String(
-            contentsOf: stateDir.appendingPathComponent("dispatch-worktrees.jsonl"),
-            encoding: .utf8)).flatMap { newestDispatches(ledger: $0)[ledgerKind(lane)] }
-        let laneDispatch = (try? String(
-            contentsOf: stateDir.appendingPathComponent("lanes.jsonl"),
-            encoding: .utf8)).flatMap { newestLaneEntries(ledger: $0)[ledgerKind(lane)] }
+        let worktreeDispatch = ledgerDir.flatMap { dir in (try? String(
+            contentsOf: dir.appendingPathComponent("dispatch-worktrees.jsonl"),
+            encoding: .utf8)).flatMap { newestDispatches(ledger: $0)[ledgerKind(lane)] } }
+        let laneDispatch = ledgerDir.flatMap { dir in (try? String(
+            contentsOf: dir.appendingPathComponent("lanes.jsonl"),
+            encoding: .utf8)).flatMap { newestLaneEntries(ledger: $0)[ledgerKind(lane)] } }
         let dispatch = [worktreeDispatch, laneDispatch].compactMap { $0 }.max { $0.at < $1.at }
 
         let usage: UsageRead

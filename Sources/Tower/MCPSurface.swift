@@ -489,7 +489,7 @@ struct TowerMCPService: MCPService {
             annotations: read("Seat retention")),
         MCPToolSpec(
             name: "tower_lanes", title: "Agent lanes",
-            description: "Muse, Devin, the Cursor CLI and Antigravity: installed or not, config model, last herdr dispatch, last limit refusal, and what the lane's own files say about its usage. File reads only.",
+            description: "Muse, Devin, the Cursor CLI and Antigravity: installed or not, config model, last dispatch from the optional dispatch ledger, last limit refusal, and what the lane's own files say about its usage. File reads only.",
             inputSchema: noArgs,
             outputSchema: [
                 "type": "object", "required": ["generatedAt", "lanes"],
@@ -754,7 +754,7 @@ struct TowerMCPService: MCPService {
             ]),
         MCPPromptSpec(
             name: "promote_room_check", title: "Is there room for a promote",
-            description: "Whether the active Claude seat and the fleet have room for a promote, under the rail rule the floor enforces.",
+            description: "Whether the active Claude seat and the fleet have room for a promote, under the quota rail rule (amber at 80 percent of 5h, red at 90 percent of 5h or 7d).",
             arguments: [
                 .init(name: "expected_prompts", description: "how many prompts the promote is expected to cost, default 30", required: false),
             ]),
@@ -808,7 +808,7 @@ struct TowerMCPService: MCPService {
 
             Judge the active Claude seat first, then the fleet:
             - The 5h meter is the binding one for a burst of prompts; the 7d meter says whether the week can absorb it.
-            - The floor's rail refuses a new station above amber (80 percent on 5h) and calls a rotation brief due at 90 on 5h or 7d. A standing crossing of amber or red on the active seat means no.
+            - The quota rail refuses a new agent lane above amber (80 percent on 5h) and calls a rotation brief due at 90 on 5h or 7d. A standing crossing of amber or red on the active seat means no.
             - A seat is usable only when every ranked window is live; a stale reading is unknown, not zero.
             - If the active seat cannot take it, name the roomiest live Claude seat and the /login profile to switch through, or the earliest reopening if all are resting.
 

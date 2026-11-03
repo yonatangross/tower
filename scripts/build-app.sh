@@ -22,17 +22,19 @@ cd "$ROOT"
 #
 # Why the old "HQ Claude Limits" was wrong: it named one provider out of three.
 #
-# BIN_NAME and CFBundleIdentifier deliberately UNCHANGED across all three
-# renames: macOS keys TCC grants off the bundle id, and install.sh's pkill
-# matches the binary name.
+# v0.1 changed BIN_NAME (HQClaudeLimits -> Tower) and CFBundleIdentifier
+# (ai.yonatan-hq.claude-limits -> ai.yonyon.tower). macOS keys privacy grants and
+# the login item off the bundle id, so the app migrates the old install on first
+# launch (LegacyInstallMigration) and install.sh stops, replaces and re-registers
+# an install that still runs the old executable.
 #
 # RENAMING THE APP MOVES THE BUNDLE PATH. LaunchAtLogin registers a bundle URL,
 # so a rename orphans the old bundle with the Login Item still pointing at it -
 # next reboot launches the STALE binary. install.sh now handles this; if you
 # rename again, keep that migration step.
 APP_NAME="Tower"
-BIN_NAME="HQClaudeLimits"
-BUNDLE_IDENTIFIER="ai.yonatan-hq.claude-limits"
+BIN_NAME="Tower"
+BUNDLE_IDENTIFIER="ai.yonyon.tower"
 OUT="${1:-$ROOT/dist}"
 APP="$OUT/$APP_NAME.app"
 
