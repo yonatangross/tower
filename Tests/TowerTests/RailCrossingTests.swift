@@ -4,7 +4,7 @@ import XCTest
 
 /// The quota rail: amber and red marks on the row's two meters, one toast per account
 /// crossing (never per tick), and the standing crossing written to the mirror as the
-/// account's `crossing` field so station.sh can refuse an open above amber. These tests
+/// account's `crossing` field so a lane launcher can refuse an open above amber. These tests
 /// drive the machine the way a poll cycle does: one account, one evaluate per capture.
 final class RailCrossingTests: XCTestCase {
     /// A live account: captured now, both windows reset far in the future, so every
