@@ -1279,14 +1279,14 @@ enum CursorUsage {
         "Cursor is installed and signed in, but Tower cannot build a session from its stored login: "
         + "the token is not a JWT and no membership auth id is stored. Usage is unreadable."
 
-    /// The reason text a refused read leaves on the row. An opaque token gets its own
-    /// wording: telling the operator to sign in again would send them after a fix that
-    /// cannot work, because the token is fresh and the route no longer accepts its shape.
+    /// The reason text a refused read leaves on the row. An opaque token is sent as a
+    /// bearer to the editor's own route (`fetchBearer`), which accepts that shape, so a
+    /// refusal there means the session itself was refused. The text still names the token
+    /// kind so a refusal is never mistaken for the old cookie-route format problem.
     static func refusedError(code: Int, opaqueToken: Bool) -> String {
         if opaqueToken {
-            return "Cursor session refused (HTTP \(code)): the stored token is not a JWT "
-                + "and the dashboard route no longer accepts it. Usage is unreadable; "
-                + "signing in again will not fix this."
+            return "Cursor session refused (HTTP \(code)) on the editor usage route; the stored "
+                + "token is not a JWT. Sign in again in Cursor to refresh it."
         }
         return "Cursor session refused (HTTP \(code)). "
             + "Sign in again in Cursor to refresh it."
@@ -1357,6 +1357,7 @@ enum CursorUsage {
             return loginPresent(home: home) ? .identityUnreadable(identityUnreadableReason)
                                             : .notConfigured
         }
+        if id.opaqueToken { return await fetchBearer(id, now: now) }
         let cookie = CursorAuth.sessionCookie(id)
 
         guard let usageReq = request("/api/usage-summary", cookie: cookie, body: nil)
@@ -1376,6 +1377,92 @@ enum CursorUsage {
         return .ok(Reading(email: id.email, plan: dashboardPlan,
                            cursorModelsPct: summary.individualUsage?.plan?.autoPercentUsed,
                            otherModelsPct: summary.individualUsage?.plan?.apiPercentUsed,
+                           periodResetsAt: reset))
+    }
+
+    // MARK: Bearer route (opaque token)
+
+    /// The route the Cursor editor itself calls for the current period. Since 2026-10-23
+    /// Cursor stores an opaque access token that the dashboard cookie route refuses; the
+    /// editor sends that same token as a bearer to this Connect RPC.
+    ///
+    /// ⚠️ UNDOCUMENTED, same risk class as the dashboard route. Measured 2026-11-03 with no
+    /// credentials: POST answers 401 `ERROR_NOT_LOGGED_IN` (the route exists; a missing one
+    /// answers 404). The authenticated reply shape is NOT yet verified, so `parseBearer`
+    /// reads the pool percentages from the top level or from `planUsage`, and an unknown
+    /// shape is logged (keys only) and reported as unavailable, never as zero.
+    static let bearerURL = URL(
+        string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage")!
+
+    static func bearerRequest(token: String) -> URLRequest {
+        var req = URLRequest(url: bearerURL)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        req.setValue(UsageAPI.userAgent, forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 15
+        req.httpBody = Data("{}".utf8)
+        return req
+    }
+
+    struct BearerReading: Equatable {
+        let plan: String?
+        let cursorModelsPct: Double?
+        let otherModelsPct: Double?
+        let periodResetsAt: Date?
+    }
+
+    /// Reads a GetCurrentPeriodUsage reply. Returns nil when neither pool percentage is
+    /// present anywhere it looks, so the caller can log the shape instead of rendering 0 %.
+    static func parseBearer(_ data: Data) -> BearerReading? {
+        guard let top = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+        let plan = top["planUsage"] as? [String: Any]
+        func number(_ key: String) -> Double? {
+            for source in [plan, top] {
+                if let n = source?[key] as? NSNumber { return n.doubleValue }
+                if let s = source?[key] as? String, let d = Double(s) { return d }
+            }
+            return nil
+        }
+        let auto = number("autoPercentUsed")
+        let api = number("apiPercentUsed")
+        guard auto != nil || api != nil else { return nil }
+        let membership = (top["membershipType"] as? String)
+            .flatMap { $0.isEmpty ? nil : $0 }
+        return BearerReading(plan: membership, cursorModelsPct: auto, otherModelsPct: api,
+                             periodResetsAt: cycleDate(top["billingCycleEnd"]))
+    }
+
+    /// Connect encodes int64 as a JSON string, so the cycle end can arrive as ISO text,
+    /// epoch milliseconds in a string, or a bare number.
+    static func cycleDate(_ value: Any?) -> Date? {
+        if let s = value as? String {
+            if let ms = Double(s) { return Date(timeIntervalSince1970: ms / 1000) }
+            return DateParse.parse(s)
+        }
+        if let n = value as? NSNumber { return Date(timeIntervalSince1970: n.doubleValue / 1000) }
+        return nil
+    }
+
+    static func fetchBearer(_ id: CursorAuth.Identity, now: Date) async -> Outcome {
+        let data: Data
+        switch await send(bearerRequest(token: id.accessToken)) {
+        case .failed(let outcome): return outcome
+        case .body(let d): data = d
+        }
+        guard let parsed = parseBearer(data) else {
+            if let shape = UsageShape.describe(data) {
+                UsageShape.logger.notice(
+                    "cursor bearer reply without pool percentages: \(shape, privacy: .public)")
+            }
+            return .unavailable
+        }
+        let reset = parsed.periodResetsAt.flatMap { $0 > now ? $0 : nil }
+        return .ok(Reading(email: id.email, plan: parsed.plan ?? id.plan,
+                           cursorModelsPct: parsed.cursorModelsPct,
+                           otherModelsPct: parsed.otherModelsPct,
                            periodResetsAt: reset))
     }
 
@@ -1476,7 +1563,7 @@ enum CursorPool {
     /// Cursor answers a lane that asks for a metered model on a full pool with
     /// "switch to a different model to continue with Opus". That refusal is not written
     /// anywhere on disk (searched ~/.cursor including 931 chat stores touched 2026-09-22,
-    /// Cursor's logs and herdr state), so Tower flags it from the measured pool instead:
+    /// Cursor's logs or a dispatch ledger), so Tower flags it from the measured pool instead:
     /// the lane is told before it hits the wall, and told that Auto still runs.
     static func laneFlag(_ snap: AccountSnapshot?, laneModel: String?,
                          now: Date = Date()) -> String? {
@@ -1509,7 +1596,7 @@ enum CursorPool {
 ///                     "doRefreshQuota: starting reload", never a value.
 ///
 /// So these rows show what IS observable, under a header that says "usage not exposed": the
-/// model pin, the last herdr dispatch, and the last limit refusal where the tool records one.
+/// model pin, the last ledger dispatch (optional), and the last limit refusal where the tool records one.
 /// They never carry a percentage. They are also never written into the shared quota store: a
 /// row with no usage evidence in `quota-cache.json` would read as headroom to the dispatcher
 /// that routes on that file, which is the exact false signal this app exists to prevent.
@@ -1518,7 +1605,7 @@ enum CursorPool {
 /// network, so a refresh can neither disturb a running agent nor spend its quota.
 enum AgentLane {
     /// Display order in the panel. cursor is in here for its CLI lane (the agent the
-    /// herdr floor dispatches as kind "cursor"); the Cursor IDE's subscription spend is
+    /// dispatch ledgers record as kind "cursor"); the Cursor IDE's subscription spend is
     /// a separate provider row above, so the panel shows both sides of the same seat.
     static let lanes: [Provider] = [.muse, .devin, .cursor, .agy]
 
@@ -1629,7 +1716,7 @@ enum AgentLane {
         let provider: Provider
         /// The model the tool's own config selects, nil when the config names none.
         let configModel: String?
-        /// Newest herdr dispatch of this lane, nil when herdr never dispatched one.
+        /// Newest ledger dispatch of this lane, nil when no ledger recorded one.
         let lastDispatch: Dispatch?
         /// Newest limit refusal the tool recorded, nil when none was seen.
         let lastLimitHit: LimitHit?
@@ -1645,7 +1732,7 @@ enum AgentLane {
             self.usage = usage
         }
 
-        /// herdr's dispatch pin wins over the config default: it is the model a dispatched
+        /// The ledger's dispatch pin wins over the config default: it is the model a dispatched
         /// worker actually ran on, and dispatch is how these lanes get used here.
         var modelPin: String? { lastDispatch?.model ?? configModel }
     }
@@ -1679,17 +1766,32 @@ enum AgentLane {
         }
     }
 
-    /// The `kind` herdr's dispatcher records for each lane. agy dispatches as "gemini":
-    /// hq_dispatch.py's `gemini_executable()` prefers the agy binary over the OSS CLI.
+    /// The `kind` a dispatch ledger records for each lane. agy is recorded as "gemini":
+    /// dispatchers that launch it prefer the agy binary over the OSS Gemini CLI.
     static func ledgerKind(_ lane: Provider) -> String {
         lane == .agy ? "gemini" : lane.rawValue
     }
 
-    static func herdrStateDir(home: URL, env: [String: String]) -> URL {
-        if let dir = env["HERDR_PLUGIN_STATE_DIR"], !dir.isEmpty {
-            return URL(fileURLWithPath: dir)
+    /// Settings key for the optional dispatch ledger directory.
+    static let dispatchLedgerDirectoryKey = "dispatchLedgerDirectory"
+
+    /// Optional integration: a directory holding `dispatch-worktrees.jsonl` and
+    /// `lanes.jsonl`, the ledgers a dispatcher (for example a herdr plugin) writes when it
+    /// opens an agent lane. Tower only reads them. Named by `TOWER_DISPATCH_LEDGER_DIR`,
+    /// herdr's own `HERDR_PLUGIN_STATE_DIR`, or the `dispatchLedgerDirectory` setting, in
+    /// that order. With none set there is no ledger and the lane rows say so; Tower never
+    /// guesses a path.
+    static func dispatchLedgerDirectory(home: URL, env: [String: String],
+                                        defaults: UserDefaults = TowerPreferences.shared) -> URL? {
+        for key in ["TOWER_DISPATCH_LEDGER_DIR", "HERDR_PLUGIN_STATE_DIR"] {
+            if let dir = env[key], !dir.isEmpty {
+                return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
+            }
         }
-        return home.appendingPathComponent(".config/herdr/plugins/hq-crossrepo/.state")
+        if let dir = defaults.string(forKey: dispatchLedgerDirectoryKey), !dir.isEmpty {
+            return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
+        }
+        return nil
     }
 
     // MARK: Parsers (pure, fixture-tested)
@@ -1712,7 +1814,7 @@ enum AgentLane {
         return model
     }
 
-    /// Newest dispatch per `kind` from herdr's `dispatch-worktrees.jsonl`.
+    /// Newest dispatch per `kind` from a dispatcher's `dispatch-worktrees.jsonl`.
     ///
     /// Line by line and lenient: the ledger is append-only and best-effort on the writer's
     /// side, so one torn line must cost that line and not the lane.
@@ -1732,11 +1834,11 @@ enum AgentLane {
         return newest
     }
 
-    /// Newest lane entry per `kind` from herdr's `lanes.jsonl`.
+    /// Newest lane entry per `kind` from a dispatcher's `lanes.jsonl`.
     ///
     /// Not every dispatch lands in `dispatch-worktrees.jsonl`: lanes the conveyor opens
     /// for the devin harness are recorded here instead, which is exactly why the Devin
-    /// row used to read "no herdr dispatch recorded" on a day seven devin lanes ran.
+    /// row used to read "no dispatch recorded" on a day seven devin lanes ran.
     /// The shape differs (`lane` not `worktree`, ISO `opened_at` not epoch `created_at`),
     /// so it gets its own parse; a torn line costs that line, same as the other ledger.
     static func newestLaneEntries(ledger: String) -> [String: Dispatch] {
@@ -1940,7 +2042,7 @@ enum AgentLane {
     }
 
     static func dispatchLine(_ r: Reading, now: Date) -> String {
-        guard let d = r.lastDispatch else { return "no herdr dispatch recorded" }
+        guard let d = r.lastDispatch else { return "no dispatch recorded" }
         return "last dispatch \(CLI.age(d.at, now: now))"
     }
 
@@ -2229,16 +2331,16 @@ enum AgentLane {
             }
         }
 
-        let stateDir = herdrStateDir(home: home, env: env)
+        let ledgerDir = dispatchLedgerDirectory(home: home, env: env)
         // Two ledgers record a dispatch: worktree dispatches in dispatch-worktrees.jsonl
         // and conveyor-opened lanes in lanes.jsonl. Neither is complete alone (devin lanes
         // only ever reach the second), so the newest of both wins.
-        let worktreeDispatch = (try? String(
-            contentsOf: stateDir.appendingPathComponent("dispatch-worktrees.jsonl"),
-            encoding: .utf8)).flatMap { newestDispatches(ledger: $0)[ledgerKind(lane)] }
-        let laneDispatch = (try? String(
-            contentsOf: stateDir.appendingPathComponent("lanes.jsonl"),
-            encoding: .utf8)).flatMap { newestLaneEntries(ledger: $0)[ledgerKind(lane)] }
+        let worktreeDispatch = ledgerDir.flatMap { dir in (try? String(
+            contentsOf: dir.appendingPathComponent("dispatch-worktrees.jsonl"),
+            encoding: .utf8)).flatMap { newestDispatches(ledger: $0)[ledgerKind(lane)] } }
+        let laneDispatch = ledgerDir.flatMap { dir in (try? String(
+            contentsOf: dir.appendingPathComponent("lanes.jsonl"),
+            encoding: .utf8)).flatMap { newestLaneEntries(ledger: $0)[ledgerKind(lane)] } }
         let dispatch = [worktreeDispatch, laneDispatch].compactMap { $0 }.max { $0.at < $1.at }
 
         let usage: UsageRead

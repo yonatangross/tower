@@ -7,8 +7,8 @@ import XCTest
 ///
 /// The rule these tests pin, from the old `AgentLane` warning: a lane row with no usage
 /// evidence must NEVER read as headroom. It is closed by the row's shape. An unreadable
-/// lane has no pct key and no capture time, so `hq_tower.room_pct` returns None and skips
-/// it, and quota-guard's fleet line drops it. Everything below reads the real mirror
+/// lane has no pct key and no capture time, so a mirror reader computing room returns nothing and skips
+/// it, and a fleet summary drops it. Everything below reads the real mirror
 /// BYTES, not the in-memory rows, because the bytes are what the consumers see.
 final class AgentLaneMirrorTests: XCTestCase {
     /// `muse usage --json` as printed on 2026-10-31 (Muse Code 1.4.14). Nothing in it

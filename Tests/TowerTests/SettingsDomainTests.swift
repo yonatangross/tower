@@ -28,26 +28,26 @@ final class SettingsDomainTests: XCTestCase {
         try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
         let plist: [String: Any] = [
             "CFBundleIdentifier": identifier,
-            "CFBundleExecutable": "HQClaudeLimits",
+            "CFBundleExecutable": "Tower",
             "CFBundlePackageType": "APPL",
             "CFBundleVersion": "abc1234",
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: app.appendingPathComponent("Contents/Info.plist"))
-        let executable = macOS.appendingPathComponent("HQClaudeLimits")
+        let executable = macOS.appendingPathComponent("Tower")
         try Data("binary".utf8).write(to: executable)
         return executable
     }
 
     func testSymlinkedExecutableResolvesItsEnclosingApp() throws {
-        let executable = try makeApp(identifier: "ai.yonatan-hq.claude-limits.test")
+        let executable = try makeApp(identifier: "ai.yonyon.tower.test")
         let bin = scratch.appendingPathComponent("bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let link = bin.appendingPathComponent("tower")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: executable)
 
         let bundle = ProductIdentity.enclosingAppBundle(executablePath: link.path)
-        XCTAssertEqual(bundle?.bundleIdentifier, "ai.yonatan-hq.claude-limits.test")
+        XCTAssertEqual(bundle?.bundleIdentifier, "ai.yonyon.tower.test")
         XCTAssertEqual(bundle?.object(forInfoDictionaryKey: "CFBundleVersion") as? String, "abc1234")
     }
 
@@ -62,11 +62,11 @@ final class SettingsDomainTests: XCTestCase {
     }
 
     func testDomainIsTheRunningBundleOrTheInstalledId() {
-        XCTAssertEqual(TowerPreferences.domain(runningBundleIdentifier: "ai.yonatan-hq.claude-limits"),
-                       "ai.yonatan-hq.claude-limits")
+        XCTAssertEqual(TowerPreferences.domain(runningBundleIdentifier: "ai.yonyon.tower"),
+                       "ai.yonyon.tower")
         // A dev copy keeps its own domain, so it cannot flip the installed Tower's settings.
-        XCTAssertEqual(TowerPreferences.domain(runningBundleIdentifier: "ai.yonatan-hq.claude-limits.dev"),
-                       "ai.yonatan-hq.claude-limits.dev")
+        XCTAssertEqual(TowerPreferences.domain(runningBundleIdentifier: "ai.yonyon.tower.dev"),
+                       "ai.yonyon.tower.dev")
         // A bare build product has no bundle: it reads the installed Tower's settings,
         // never a domain named after its own executable.
         XCTAssertEqual(TowerPreferences.domain(runningBundleIdentifier: nil), ProductIdentity.bundleIdentifier)

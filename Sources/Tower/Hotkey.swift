@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import os.log
 
-private let hotkeyLog = OSLog(subsystem: "ai.yonatan-hq.claude-limits", category: "hotkey")
+private let hotkeyLog = OSLog(subsystem: ProductIdentity.bundleIdentifier, category: "hotkey")
 
 /// Global hotkey that toggles the panel. Carbon RegisterEventHotKey rather
 /// than a CGEventTap or NSEvent monitor because it is the one mechanism that

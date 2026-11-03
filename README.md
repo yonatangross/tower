@@ -52,6 +52,35 @@ ditto -x -k Tower.app.zip ~/Applications
 
 Release builds are ad hoc signed, so macOS asks once before the first launch.
 
+### Upgrading from a build before v0.1
+
+Builds before v0.1 installed as `ai.yonatan-hq.claude-limits` with the executable
+`HQClaudeLimits`; v0.1 is `ai.yonyon.tower` with the executable `Tower`. On its
+first launch Tower moves `~/Library/Application Support/HQClaudeLimits/` into
+`~/Library/Application Support/Tower/` and copies your settings to the new id,
+never overwriting anything the new install already has. `scripts/install.sh`
+also stops the old process, moves start-at-login to the new id when it was on,
+and repoints a `~/.local/bin/tower` link that named the old executable.
+
+What macOS ties to the old id and asks for once more:
+
+- **Keychain.** Until you press **Re-trust** (beside **Forget** in the panel),
+  Tower reads only the seat you are signed into, through the Claude Code
+  credential; the other remembered seats stay unread. Nothing else ever shows the
+  Keychain dialog: launches, background refreshes, `tower status` and `tower mcp`
+  never do, and Tower never asks for your login password.
+
+  | Situation | Keychain prompts |
+  | --- | --- |
+  | Fresh install | 0 |
+  | First Re-trust after upgrading from a build before v0.1 | one **Always Allow** per remembered seat, once (macOS gives each old item its own access list) |
+  | Any later identity change (a new release, which is ad hoc signed) | 1, when you press Re-trust |
+  | Background refresh, CLI, MCP | 0, always |
+- **Privacy prompts.** Any permission macOS granted the old build (for example
+  access to another app's data) is asked for again the first time Tower needs it.
+- **Start at login**, if you installed by unzipping rather than with
+  `scripts/install.sh`: run `tower login-item on` once.
+
 ## Build from source
 
 Requirements: Xcode 16 or later, or the Command Line Tools with a macOS SDK
@@ -62,7 +91,7 @@ git clone https://github.com/yonatangross/tower.git
 cd tower
 scripts/build-app.sh          # builds dist/Tower.app
 scripts/install.sh            # copies it to ~/Applications and starts it
-ln -sf ~/Applications/Tower.app/Contents/MacOS/HQClaudeLimits ~/.local/bin/tower
+ln -sf ~/Applications/Tower.app/Contents/MacOS/Tower ~/.local/bin/tower
 tower selftest
 ```
 
@@ -144,20 +173,21 @@ into Claude Code at least once.
 
 | What | How |
 | --- | --- |
-| Accounts to show before first sign-in | `~/Library/Application Support/HQClaudeLimits/known-accounts.json`, a JSON array of emails |
+| Accounts to show before first sign-in | `~/Library/Application Support/Tower/known-accounts.json`, a JSON array of emails |
 | Short names | `nicknames.json` in the same directory: `{"work@example.com": "work"}`. Default: first 6 characters of the email |
 | OpenRouter balance | `OPENROUTER_API_KEY` in the environment, or a key command (below) |
 | Text size | the panel's **Text size** picker, or `TOWER_TEXT_SIZE=s\|m\|l\|xl` |
 | Start at login | the panel checkbox, or `tower login-item on` |
+| Agent lane dispatches (optional) | a directory holding the `dispatch-worktrees.jsonl` and `lanes.jsonl` ledgers a dispatcher writes (for example a herdr plugin): `TOWER_DISPATCH_LEDGER_DIR`, herdr's `HERDR_PLUGIN_STATE_DIR`, or `defaults write ai.yonyon.tower dispatchLedgerDirectory <dir>`. Without one the lane rows show no dispatch |
 
 OpenRouter key from a password manager, run without a shell, never stored by
 Tower:
 
 ```bash
-defaults write ai.yonatan-hq.claude-limits openRouterKeyCommand -array \
+defaults write ai.yonyon.tower openRouterKeyCommand -array \
   /opt/homebrew/bin/op read op://<vault>/<item>/credential
 # Optional: a cache file your command writes; Tower deletes it once on a 401.
-defaults write ai.yonatan-hq.claude-limits openRouterKeyCacheFile ~/path/to/cache
+defaults write ai.yonyon.tower openRouterKeyCacheFile ~/path/to/cache
 ```
 
 The full manual, including how freshness, retention and signing work, is

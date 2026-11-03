@@ -448,6 +448,18 @@ final class LimitsModel: ObservableObject {
         DispatchQueue.main.async { AppDelegate.shared?.fitPanel() }
     }
 
+    /// The one place the Keychain dialog may appear: after an identity change the operator
+    /// approves remembered seats once, here, instead of every poll prompting per seat.
+    func retrustRetainedClaudeSeats() {
+        seatRetentionError = nil
+        switch ClaudeSeatVault.shared.retrust() {
+        case .failure(let error): seatRetentionError = error.message
+        case .success(let counts) where counts.unreadable > 0:
+            seatRetentionError = "\(counts.unreadable) remembered seat(s) still not readable"
+        case .success: Task { await refresh() }
+        }
+    }
+
     func forgetRetainedClaudeSeats() {
         seatRetentionError = nil
         loginRetentionEpoch += 1
@@ -666,7 +678,7 @@ enum PanelShotHydration {
     }
 
     /// Lanes are hydrated too: `AgentLane.readAll` is bounded file reads of each CLI's
-    /// config, logs and herdr's ledgers, no credential and no network, so the LANES
+    /// config, logs and the optional dispatch ledgers, no credential and no network, so the LANES
     /// section renders offscreen instead of coming out empty.
     static func load(
         store: Store,
@@ -1684,7 +1696,7 @@ private struct BalanceLine: View {
 /// A provider row that is BROKEN rather than absent.
 ///
 /// Exists because hiding on failure is indistinguishable from hiding on "not configured",
-/// and the operator lost a rotated key that way: the section simply vanished and he found
+/// and an operator lost a rotated key that way: the section simply vanished and they found
 /// out by opening the OpenRouter dashboard himself. A refusal gets a row, a colour, and the
 /// exact command that fixes it.
 struct OpenRouterProblem: View {
@@ -1981,6 +1993,9 @@ struct MenuContent: View {
                 .toggleStyle(.checkbox)
                 .font(TowerType.font(.body))
                 Spacer()
+                Button("Re-trust") { model.retrustRetainedClaudeSeats() }
+                    .font(TowerType.font(.body))
+                    .help("Approve remembered seats once after Tower's signature or bundle id changed")
                 Button("Forget") { model.forgetRetainedClaudeSeats() }
                     .font(TowerType.font(.body))
             }

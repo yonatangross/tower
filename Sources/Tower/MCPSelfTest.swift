@@ -1,6 +1,6 @@
 import Foundation
 
-/// `tower mcp --self-test`: the floor's MCP preflight for this server. It drives the
+/// `tower mcp --self-test`: an MCP preflight for this server. It drives the
 /// same handler the stdio loop uses (initialize, tools/list, one account read, one
 /// resource read) in process and prints one line per step, so a station can tell a
 /// broken server from a broken lane before the brief goes out. No Keychain, no

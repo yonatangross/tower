@@ -16,7 +16,7 @@ Tower handles credentials, so it helps to know exactly what it reads and writes:
 | Tower seat items in the login Keychain | read and write, only while **Remember Claude seats** is on; **Forget** deletes them |
 | `~/.claude.json`, Claude Code settings and transcripts | read |
 | Codex and Cursor local auth state | read |
-| `~/Library/Application Support/HQClaudeLimits/` | read and write (usage store, settings) |
+| `~/Library/Application Support/Tower/` | read and write (usage store, settings) |
 | `$CLAUDE_CONFIG_DIR/quota-cache.json` (default `~/.claude`) | write (a copy of the usage store) |
 | Network | the providers' own APIs only: Anthropic, OpenAI, Cursor, OpenRouter |
 

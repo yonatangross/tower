@@ -173,12 +173,13 @@ final class KeychainReadCacheTests: XCTestCase {
 
     private func vault(_ fake: FakeSecItemStore, counter: KeychainCallCounter,
                        log: @escaping (String) -> Void = { _ in },
-                       now: (() -> Date)? = nil) -> ClaudeSeatVault {
+                       now: (() -> Date)? = nil,
+                       mayPrompt: Bool = true) -> ClaudeSeatVault {
         ClaudeSeatVault(keychain: fake.keychain(counter: counter),
                         lockURL: dir.appendingPathComponent("seat.lock"),
                         stateURL: dir.appendingPathComponent("seat-state.plist"),
                         retentionEnabled: { true }, setRetentionEnabled: { _ in }, log: log,
-                        now: now ?? { self.now })
+                        now: now ?? { self.now }, mayPrompt: { mayPrompt })
     }
 
     private func usage() -> UsageResponse {
@@ -295,10 +296,10 @@ final class KeychainReadCacheTests: XCTestCase {
                       "the retry never shows a dialog")
     }
 
-    /// The storm this prevents: the first read of a launch may prompt, but the first denial
-    /// suppresses every remaining item in that read, and every later attempt runs
-    /// suppressed. One denied dialog is the last the operator sees.
-    func testFirstDenialSuppressesTheRestOfTheReadAndEveryRetry() async throws {
+    /// The 2026-11-03 storm: every new process (app launch, `tower status`, a bare build)
+    /// used to get one read with the dialog allowed, so an identity change prompted per seat
+    /// in every process. A launch and every refresh after it now read suppressed.
+    func testRefreshLoopNeverAllowsTheDialog() async throws {
         let fake = previousLaunch()
         var current = now
         let counter = KeychainCallCounter()
@@ -307,13 +308,43 @@ final class KeychainReadCacheTests: XCTestCase {
                                 active: credential("fresh-one", email: "one@example.test"))
         XCTAssertEqual(fake.itemReads.map(\.account),
                        ["one@example.test", "two@example.test", "three@example.test"])
-        XCTAssertEqual(fake.itemReads.map(\.suppressed), [false, true, true],
-                       "the -25293 denial on the first item suppresses the rest of the read")
+        XCTAssertTrue(fake.itemReads.allSatisfy(\.suppressed),
+                      "the first read of a launch is suppressed too")
 
         current = now.addingTimeInterval(ClaudeSeatVault.readRetryBackoff + 1)
         _ = await refreshCycles(1, vault: launch, counter: counter, active: credential("fresh-one", email: "one@example.test"))
+        XCTAssertTrue(fake.itemReads.allSatisfy(\.suppressed),
+                      "no background attempt may raise the Keychain dialog")
+    }
+
+    /// The explicit re-trust is the one read that may prompt, and the first denial inside it
+    /// still suppresses the rest. Afterwards the refresh loop is suppressed again.
+    func testRetrustAllowsTheDialogOnceThenSuppressesAgain() async throws {
+        let fake = previousLaunch()
+        var current = now
+        let counter = KeychainCallCounter()
+        let launch = vault(fake, counter: counter, now: { current })
+        let counts = try launch.retrust().get()
+        XCTAssertEqual(counts.readable, 1, "only the seat this build wrote is readable")
+        XCTAssertEqual(counts.unreadable, 2)
+        XCTAssertEqual(fake.itemReads.map(\.suppressed), [false, true, true],
+                       "the -25293 denial on the first item suppresses the rest of the re-trust")
+
+        current = now.addingTimeInterval(ClaudeSeatVault.readRetryBackoff + 1)
+        _ = await refreshCycles(1, vault: launch, counter: counter,
+                                active: credential("fresh-one", email: "one@example.test"))
         XCTAssertTrue(fake.itemReads.dropFirst(3).allSatisfy(\.suppressed),
-                      "no attempt after the first may raise the Keychain dialog")
+                      "after a re-trust the refresh loop never prompts")
+    }
+
+    /// A bare build matches no item's access list, so a dialog it raised could never be
+    /// approved into trust. It is refused before any Keychain call.
+    func testRetrustIsRefusedForABareBuild() throws {
+        let fake = previousLaunch()
+        let readsBefore = fake.itemReads.count
+        let launch = vault(fake, counter: KeychainCallCounter(), mayPrompt: false)
+        XCTAssertThrowsError(try launch.retrust().get())
+        XCTAssertEqual(fake.itemReads.count, readsBefore, "no item read at all")
     }
 
     /// A read whose items all answered still retries nothing: one real read per launch is

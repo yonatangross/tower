@@ -37,7 +37,7 @@ final class SessionLabelTests: XCTestCase {
     }
 
     func testPlainLaneNamesAreUnchanged() {
-        for lane in ["hq-cli-2", "e2e-tests", "floor-board", "conductor64", "content-2-desk"] {
+        for lane in ["api-cli-2", "e2e-tests", "floor-board", "conductor64", "content-2-desk"] {
             XCTAssertEqual(SessionLabel.derive(name: lane, cwd: "\(platform)/\(lane)"), lane)
         }
     }
@@ -66,7 +66,7 @@ final class SessionLabelTests: XCTestCase {
             ["kind": "interactive", "status": "idle", "sessionId": "c",
              "name": "feat/tower-dev · wt", "cwd": "/Users/op/coding/acme/tower/.worktrees/tower-dev"],
             ["kind": "interactive", "status": "idle", "sessionId": "d",
-             "name": "hq-cli-2", "cwd": "\(platform)/hq-cli-2"],
+             "name": "api-cli-2", "cwd": "\(platform)/api-cli-2"],
         ]
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("tower-session-label-\(UUID().uuidString)")
@@ -77,7 +77,7 @@ final class SessionLabelTests: XCTestCase {
         XCTAssertEqual(byName["feat/tower-dev · wt"]?.label, "tower-dev")
         XCTAssertEqual(byName["feat/tower-dev · wt"]?.rawName, "feat/tower-dev · wt")
         XCTAssertEqual(byName["reviewer-infra-35-desk · docs/2026-09-27-infra35"]?.label, "reviewer-infra-35-desk")
-        XCTAssertEqual(byName["hq-cli-2"]?.label, "hq-cli-2")
+        XCTAssertEqual(byName["api-cli-2"]?.label, "api-cli-2")
         XCTAssertEqual(summary.groups.first?.label, "merge-desk-10 resume and coordinate", "busy first")
         XCTAssertFalse(summary.groups.contains { $0.label.contains("·") || $0.label.contains("/") })
         XCTAssertEqual(summary.interactive.first { $0.sessionId == "c" }?.displayName, "tower-dev")

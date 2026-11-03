@@ -116,7 +116,7 @@ struct AgentSummary: Equatable {
 
     /// One line for the whole list when no session could be attributed, instead of an
     /// "account unknown" cell on every row (bug a, 2026-09-30: 13 of 13 rows said it while
-    /// the floor ran on known seats). It names why, and the fix when there is one.
+    /// the fleet ran on known seats). It names why, and the fix when there is one.
     var unattributedReason: String? {
         guard !interactive.isEmpty, interactive.allSatisfy({ $0.accountEmail == nil }) else { return nil }
         if anchorsPublished == false {
@@ -196,8 +196,8 @@ struct SessionGroup: Identifiable, Equatable {
     var rawName: String { sessionName ?? cwd ?? label }
 }
 
-/// House convention (hq-ext floor, session-identity.md section 3): a session is named by
-/// its lane slug, with no prefix, no emoji and no branch. Raw names on the floor mix
+/// Naming convention for agent lanes: a session is named by
+/// its lane slug, with no prefix, no emoji and no branch. Raw names in practice mix
 /// that with two hook titles, `<repo> · <branch>` and `<branch> · wt`, plus summaries
 /// that carry a leading emoji and a trailing ` · <branch> ·`. This keeps the head, and
 /// when the head is itself a branch it names the lane by the worktree directory instead.

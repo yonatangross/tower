@@ -12,8 +12,8 @@ func enforceSingleInstance() {
     exit(0)
 }
 
-// `claude-limits status`    -> one-shot text table, no GUI.
-// `claude-limits selftest`  -> pure-logic checks, no network, no GUI.
+// `tower status`            -> one-shot text table, no GUI.
+// `tower selftest`          -> pure-logic checks, no network, no GUI.
 // `tower mcp`               -> stdio MCP server, no GUI (docs/mcp-surface.md).
 // `tower mcp --self-test`   -> list the tools and read one account, then exit.
 // no args                   -> menubar app.
@@ -22,6 +22,10 @@ let args = Set(CommandLine.arguments.dropFirst())
 if args.contains("selftest") {
     exit(CLI.selftest())
 }
+
+// Every mode below reads the store or the settings, so a pre-v0.1 install is carried
+// over first. A no-op once done.
+LegacyInstallMigration.runAtLaunch()
 
 if args.contains("mcp") {
     // A first Keychain read can raise the dialog, exactly as `tower status` can, so the
