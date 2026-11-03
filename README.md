@@ -39,7 +39,8 @@ It reads the same numbers Claude Code's `/usage` screen shows, through an
 
 ## Install
 
-Requirements: macOS 14 or later.
+Requirements: macOS 14 or later on Apple silicon. The release zip is an arm64
+build; on an Intel Mac, build from source.
 
 From a release (no build tools needed):
 
