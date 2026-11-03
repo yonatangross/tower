@@ -202,6 +202,7 @@ into Claude Code at least once.
 | Accounts to show before first sign-in | `~/Library/Application Support/Tower/known-accounts.json`, a JSON array of emails |
 | Short names | `nicknames.json` in the same directory: `{"work@example.com": "work"}`. Default: first 6 characters of the email |
 | OpenRouter balance | `OPENROUTER_API_KEY` in the environment, or a key command (below) |
+| TypeSafe credits (Jev, Clef) | entered by hand, TypeSafe has no billing API: the MCP tool `tower_config_set` with `typesafe.balanceUSD` (Jev) or `typesafe.clef.balanceUSD` (Clef), `null` to clear |
 | Text size | the panel's **Text size** picker, or `TOWER_TEXT_SIZE=s\|m\|l\|xl` |
 | Start at login | the panel checkbox, or `tower login-item on` |
 | Agent lane dispatches (optional) | a directory holding the `dispatch-worktrees.jsonl` and `lanes.jsonl` ledgers a dispatcher writes (for example a herdr plugin): `TOWER_DISPATCH_LEDGER_DIR`, herdr's `HERDR_PLUGIN_STATE_DIR`, or `defaults write ai.yonyon.tower dispatchLedgerDirectory <dir>`. Without one the lane rows show no dispatch |

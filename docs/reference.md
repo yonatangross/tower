@@ -326,11 +326,15 @@ its row and quota mirror. If usage cannot be read, its percentages remain unknow
 retirement written while profile verification is in flight takes precedence; Tower asks
 for `/login` and another refresh instead of silently undoing that change.
 
-The Jev credit row (TypeSafe) cannot be read live: TypeSafe's API publishes no balance
-or billing endpoint. The figure is entered by hand and greys out after three days. Read the
-balance off the TypeSafe console's Billing page, then set it with the MCP tool
-`tower_config_set` (`key` `typesafe.balanceUSD`, `value` the dollars left). Tower dates the
-entry today; `null` clears it. With no entry the row is hidden.
+TypeSafe sells prepaid credits per decision model, so the money section shows a TypeSafe
+group beside OpenRouter: one header, then a Jev credit row and a Clef credit row. Neither
+can be read live: TypeSafe's API publishes no balance or billing endpoint. Each figure is
+entered by hand, carries its own as-of day, turns amber under USD 10 and red under USD 5,
+and greys out after three days. Read the balances off the TypeSafe console's Billing page,
+then set each with the MCP tool `tower_config_set`: `key` `typesafe.balanceUSD` for Jev or
+`typesafe.clef.balanceUSD` for Clef, `value` the dollars left. Tower dates the entry today;
+`null` clears it. A model with no entry has no row, and with neither entered the group is
+hidden. `tower status` prints both under its `typesafe` heading.
 
 Nicknames default to the first six characters of the email's local part. To pick
 your own, write `nicknames.json` in the same directory, for example

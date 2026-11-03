@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import Tower
 
-/// The TypeSafe (Jev) lane shows ONE fact: a credit balance the user entered, labelled as
-/// entered, with the amber and red thresholds applied. TypeSafe publishes no billing or
+/// The TypeSafe lane shows ONE fact per decision model (Jev, Clef): a credit balance the
+/// user entered, labelled as entered, with the amber and red thresholds applied. TypeSafe publishes no billing or
 /// usage endpoint, so there is nothing to fetch and no capture time anywhere. Nothing ships
 /// by default: with no entry there is no row. Every figure here is invented.
 final class TypeSafeBalanceTests: XCTestCase {
@@ -83,7 +83,7 @@ final class TypeSafeBalanceTests: XCTestCase {
         let lines = CLI.typeSafeStatusRowLines(now: Self.day("2026-09-20"), defaults: defaults)
         XCTAssertEqual(lines, [
             "  typesafe    BALANCE",
-            "      balance $12.00 (entered 09-18 · 2d ago), not live",
+            "      jev   balance $12.00 (entered 09-18 · 2d ago), not live",
         ])
         XCTAssertFalse(lines.joined(separator: "\n").contains("7d"))
     }
@@ -101,8 +101,8 @@ final class TypeSafeBalanceTests: XCTestCase {
             CLI.typeSafeStatusRowLines(now: Self.day("2026-09-27"), defaults: defaults),
             [
                 "  typesafe    BALANCE",
-                "      balance $12.00 (entered 09-18 · 9d ago), stale, not live",
-                "      read TypeSafe console Billing, then tower_config_set typesafe.balanceUSD <usd>",
+                "      jev   balance $12.00 (entered 09-18 · 9d ago), stale, not live",
+                "            read TypeSafe console Billing, then tower_config_set typesafe.balanceUSD <usd>",
             ])
         let json = TowerMCPService.typesafeJSON(now: Self.day("2026-09-27"), defaults: defaults)
         XCTAssertEqual(json["entered"], .bool(true))
@@ -141,6 +141,80 @@ final class TypeSafeBalanceTests: XCTestCase {
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
         defaults.set(3.0, forKey: TypeSafe.balanceKey)
         XCTAssertNil(TypeSafe.entry(defaults: defaults))
+    }
+
+    /// Jev keeps the keys it had before Clef existed, so an entry made then still shows as
+    /// the Jev credit; Clef lives under its own pair and never reads Jev's.
+    func testJevKeepsItsOriginalKeysAndClefHasItsOwn() {
+        XCTAssertEqual(TypeSafe.Model.jev.balanceKey, "typesafe.balanceUSD")
+        XCTAssertEqual(TypeSafe.Model.jev.balanceAsOfKey, "typesafe.balanceAsOf")
+        XCTAssertEqual(TypeSafe.Model.clef.balanceKey, "typesafe.clef.balanceUSD")
+        XCTAssertEqual(TypeSafe.Model.clef.balanceAsOfKey, "typesafe.clef.balanceAsOf")
+        XCTAssertEqual(TypeSafe.balanceKey, TypeSafe.Model.jev.balanceKey)
+        let (defaults, suite) = Self.suite()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        defaults.set(12.0, forKey: "typesafe.balanceUSD")
+        defaults.set("2026-09-18", forKey: "typesafe.balanceAsOf")
+        XCTAssertEqual(TypeSafe.entry(model: .jev, defaults: defaults), TypeSafe.Entry(usd: 12, asOf: "2026-09-18"))
+        XCTAssertNil(TypeSafe.entry(model: .clef, defaults: defaults))
+        XCTAssertEqual(TypeSafe.enteredModels(defaults: defaults), [.jev])
+    }
+
+    /// Clef works exactly like Jev: the same thresholds, the same stale rule, a re-enter
+    /// hint naming its own key, and it is independent of the Jev figure.
+    func testClefRowAgesAndNamesItsOwnKey() {
+        let (defaults, suite) = Self.suite()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        TypeSafe.enter(4.2, model: .clef, now: Self.day("2026-09-18"), defaults: defaults)
+        XCTAssertNil(TypeSafe.entry(defaults: defaults), "entering Clef leaves Jev empty")
+        XCTAssertEqual(TypeSafe.enteredModels(defaults: defaults), [.clef])
+        XCTAssertFalse(TypeSafe.balanceIsStale(model: .clef, now: Self.day("2026-09-21"), defaults: defaults))
+        XCTAssertTrue(TypeSafe.balanceIsStale(model: .clef, now: Self.day("2026-09-22"), defaults: defaults))
+        XCTAssertNil(TypeSafe.reenterHint(model: .clef, now: Self.day("2026-09-20"), defaults: defaults))
+        XCTAssertEqual(
+            TypeSafe.reenterHint(model: .clef, now: Self.day("2026-09-27"), defaults: defaults),
+            "read TypeSafe console Billing, then tower_config_set typesafe.clef.balanceUSD <usd>")
+        XCTAssertEqual(
+            CLI.typeSafeStatusRowLines(now: Self.day("2026-09-20"), defaults: defaults),
+            [
+                "  typesafe    BALANCE",
+                "      clef  balance $4.20 (entered 09-18 · 2d ago), not live",
+            ])
+        let json = TowerMCPService.typesafeJSON(now: Self.day("2026-09-20"), defaults: defaults)
+        XCTAssertEqual(json["entered"], .bool(false), "the top-level figures stay Jev's")
+        XCTAssertEqual(json["models"]["clef"]["entered"], .bool(true))
+        XCTAssertEqual(json["models"]["clef"]["balanceUSD"], .number(4.2))
+        XCTAssertEqual(json["models"]["clef"]["level"], .string("red"))
+        XCTAssertEqual(json["models"]["clef"]["live"], .bool(false))
+        XCTAssertEqual(json["models"]["clef"]["name"], .string("Clef"))
+        XCTAssertEqual(json["models"]["jev"]["entered"], .bool(false))
+        TypeSafe.clearEntry(model: .clef, defaults: defaults)
+        XCTAssertEqual(CLI.typeSafeStatusRowLines(now: Self.day("2026-09-20"), defaults: defaults), [])
+    }
+
+    /// Both models entered: one heading, a line per model in panel order, and the stale
+    /// hint sits under the model it belongs to.
+    func testBothModelsShareOneHeading() {
+        let (defaults, suite) = Self.entered(18.40, on: "2026-09-27")
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        TypeSafe.enter(7.5, model: .clef, now: Self.day("2026-09-20"), defaults: defaults)
+        XCTAssertEqual(TypeSafe.enteredModels(defaults: defaults), [.jev, .clef])
+        XCTAssertEqual(
+            CLI.typeSafeStatusRowLines(now: Self.day("2026-09-27"), defaults: defaults),
+            [
+                "  typesafe    BALANCE",
+                "      jev   balance $18.40 (entered 09-27 · 0d ago), not live",
+                "      clef  balance $7.50 (entered 09-20 · 7d ago), stale, not live",
+                "            read TypeSafe console Billing, then tower_config_set typesafe.clef.balanceUSD <usd>",
+            ])
+        XCTAssertEqual(
+            TypeSafeCreditRow.foldedLine(model: .clef, now: Self.day("2026-09-27"), open: false, defaults: defaults),
+            "+ clef credits $7.50 stale")
+        XCTAssertEqual(
+            TypeSafeCreditRow.foldedLine(model: .jev, now: Self.day("2026-09-27"), open: true, defaults: defaults),
+            "- jev credits $18.40 ok")
+        XCTAssertEqual(MoneyBoard.disclosureID(.jev), "money.jev", "an open Jev fold survives the upgrade")
+        XCTAssertEqual(MoneyBoard.disclosureID(.clef), "money.clef")
     }
 
     private static func suite() -> (UserDefaults, String) {
