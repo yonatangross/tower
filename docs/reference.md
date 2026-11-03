@@ -1,9 +1,10 @@
 # Tower reference
 
-The detailed manual. Start with the [README](../README.md).
+The detailed manual. Start with the [README](../README.md); task-shaped guides
+are in [playbooks/](playbooks/).
 
 > Ships as `Tower.app`. It covers Claude Code accounts, Codex, Cursor, and the
-> OpenRouter balance, so it is not Claude-specific despite the repo name.
+> OpenRouter balance, so it is not Claude-specific.
 
 macOS menubar app that answers one question before you start work: **which account can
 take this, and what is already running?**
@@ -20,62 +21,61 @@ screen renders.
 ```
 📊 TOWER                                               21:32
 ──────────────────────────────────────────────────────────────
-▶ dee  max     🟢
+▶ side max     🟢
     5h   ██░░░░░░░░░░ 14%  resets Jul 25 02:10
     7d   ░░░░░░░░░░░░ 3%   resets Jul 29 21:00
     Fable░░░░░░░░░░░░ 2%   resets Jul 29 20:59
-  ben    max     🟠
+  work   max     🟠
     5h   ░░░░░░░░░░░░ 0%   reset ✓
     7d   ████████░░░░ 68%  resets Jul 27 09:00
     snapshot 4h ago
 ──────────────────────────────────────────────────────────────
-✅ Most headroom: dee at 14% used
+✅ Most headroom: side at 14% used
 ```
 
 Other providers get their own section, with only the windows they actually publish:
 
 ```
 CURSOR  (1 available)
-  ben    pro     🟢
+  work   pro     🟢
     month ░░░░░░░░░░░░ 4%    resets Sep 1 03:00
     credits $0.76 of $20 used
 ```
 
 ## Install
 
-Tower ships as a workflow artifact on every push to `main`. There are no GitHub
-releases (a release is only cut on a `v*` tag, and none has been tagged yet), so
-install from the latest artifact:
+Tagged releases (`v*`) are the supported install. The README's quick start and
+the [setup playbook](playbooks/setup.md) cover the plain zip. From a clone,
+`install.sh` does the same download, checksum check and install, and also
+handles start at login and an upgrade from a build before v0.1:
 
 ```bash
-./scripts/install.sh --from-artifact
+./scripts/install.sh --from-release v0.1.0
 ln -sf ~/Applications/Tower.app/Contents/MacOS/Tower ~/.local/bin/tower
 tower login-item on
 ```
 
 Prerequisites: the `gh` CLI, authenticated (`gh auth status`).
 
-The script finds the newest successful `Release Tower app` run on `main`, downloads
-its `tower-app-<sha>` artifact, then verifies the archive's SHA-256 against the
-checksum shipped alongside it before unpacking. A checksum mismatch or a malformed
-manifest fails the install rather than installing an unverified bundle.
+Every push to `main` also builds a `tower-app-<sha>` workflow artifact, for
+testing an unreleased change: `./scripts/install.sh --from-artifact` takes the
+newest successful `Release Tower app` run on `main`. Both options verify the
+archive's SHA-256 against the checksum shipped alongside it before unpacking; a
+checksum mismatch or a malformed manifest fails the install rather than
+installing an unverified bundle.
 
 Installing to `~/Applications` (the default) rather than running from `dist/`
 matters: the login item registers against the bundle's path, and `build-app.sh`
 starts with `rm -rf dist/`.
 
-There is no rollback path today. The from-artifact option always takes the newest
-successful run on `main`, and no tags or GitHub releases exist to pin to. To go
-back to an older build, download that run's `tower-app-<sha>` artifact by hand and
-apply the same checksum check before unpacking:
+Rollback: install an older tag with `--from-release <tag>`. For an untagged
+build, download that run's `tower-app-<sha>` artifact by hand and apply the same
+checksum check before unpacking:
 
 ```bash
 gh run download <run-id> --repo yonatangross/tower --name tower-app-<sha> --dir /tmp/tower-old
 cd /tmp/tower-old && shasum -a 256 -c Tower.app.zip.sha256
 ```
-
-Once a `v*` tag exists, the from-release option of `install.sh` installs that
-tagged release directly.
 
 If you already have a local build, `./scripts/build-app.sh` followed by a bare
 `./scripts/install.sh` (no flags) installs `dist/Tower.app` directly.
