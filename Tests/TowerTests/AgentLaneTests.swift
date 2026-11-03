@@ -434,7 +434,8 @@ final class AgentLaneTests: XCTestCase {
     func testUninstalledLaneHides() throws {
         let home = try makeHome()
         XCTAssertEqual(AgentLane.read(.devin, home: home, env: Self.ledgerEnv(home)), .notConfigured)
-        XCTAssertEqual(AgentLane.readAll(home: home, env: [:]).count, 4)
+        XCTAssertEqual(AgentLane.readAll(home: home, env: [:]).count, 5)
+        XCTAssertEqual(AgentLane.readAll(home: home, env: [:])[.pi], .notConfigured)
     }
 
     func testFullHomeReadsEveryObservableSignal() throws {

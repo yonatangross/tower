@@ -16,6 +16,7 @@ extension Provider {
         case .muse: return "mu"
         case .devin: return "dv"
         case .agy: return "ag"
+        case .pi: return "pi"
         }
     }
 
@@ -31,6 +32,7 @@ extension Provider {
         case .muse: return .purple
         case .devin: return .mint
         case .agy: return .indigo
+        case .pi: return .brown
         }
     }
 
@@ -995,6 +997,8 @@ struct LaneBoard: View {
     let now: Date
     /// The Cursor seat row, for the Opus flag and the pool line on the Cursor CLI lane.
     var cursorSeat: AccountSnapshot? = nil
+    /// The MONEY band's OpenRouter outcome, so Pi's month reads against the same balance.
+    var openRouter: OpenRouter.Outcome = .notConfigured
 
     /// The width the usage line gets in the 430 pt panel: 10 pt panel padding each side,
     /// the 24 pt icon and the 6 pt gap. The line may wrap to `usageLines`; tests measure
@@ -1046,6 +1050,9 @@ struct LaneBoard: View {
                                     .foregroundStyle(TowerType.secondary)
                                     .fixedSize()
                             }
+                            if case .spend(let spend) = reading.usage {
+                                piShare(spend)
+                            }
                             let meters = AgentLane.meters(reading, cursorSeat: cursorSeat, now: now)
                             if !meters.isEmpty {
                                 HStack(spacing: TowerTextSize.pt(10)) {
@@ -1078,6 +1085,30 @@ struct LaneBoard: View {
                     .help("\(provider.label), \(provider.vendorName) account")
                 }
             }
+        }
+    }
+
+    /// Pi's month as a share of the OpenRouter balance: a meter of the share, then the
+    /// dollars left on the key. Without a share the reason prints instead of a bar, so a
+    /// missing balance never reads as zero spend.
+    @ViewBuilder
+    private func piShare(_ spend: PiLane.Spend) -> some View {
+        let share = PiLane.share(spend, openRouter: openRouter)
+        switch share {
+        case .openRouter(let pct, _, _):
+            HStack(spacing: TowerTextSize.pt(4)) {
+                Text("or").foregroundStyle(TowerType.secondary)
+                BrailleMeter(percent: min(pct, 100), cells: SegmentedMeter.cells)
+                Text(PiLane.shareLine(share))
+                    .foregroundStyle(SegmentedMeter.levelColor(pct))
+                    .lineLimit(1)
+            }
+            .font(TowerType.font(.small, design: .monospaced))
+        case .spendOnly:
+            Text(PiLane.shareLine(share))
+                .font(TowerType.font(.small))
+                .foregroundStyle(TowerType.secondary)
+                .lineLimit(Self.usageLines)
         }
     }
 

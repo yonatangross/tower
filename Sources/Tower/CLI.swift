@@ -2017,6 +2017,59 @@ enum CLI {
               allResting.code == 1
                   && allResting.lines.contains { $0.contains("Every Claude seat") && $0.contains("resting") })
 
+        // Pi: an invented session log in a temp root (never the real ~/.pi), summed for a
+        // fixed "now" in UTC so the month and day edges do not depend on this machine.
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let piNow = DateParse.parse("2026-11-04T12:00:00Z")!
+        func piTurn(_ id: String, _ at: String, _ usd: Double) -> String {
+            #"{"type":"message","id":"\#(id)","timestamp":"\#(at)","message":{"role":"assistant","provider":"openrouter","model":"m","usage":{"cost":{"total":\#(usd)}}}}"#
+        }
+        var piTally = PiLane.Tally(now: piNow, calendar: utc)
+        piTally.add(text: [
+            piTurn("a", "2026-11-04T09:00:00Z", 1.25),
+            piTurn("b", "2026-11-02T09:00:00Z", 2.00),
+            piTurn("c", "2026-10-31T23:00:00Z", 9.00),
+            piTurn("a", "2026-11-04T09:00:00Z", 1.25),
+            "{not json \"assistant\" \"cost\"",
+        ].joined(separator: "\n"))
+        check("pi sums this month and today, once per entry",
+              abs(piTally.spend.monthUSD - 3.25) < 1e-9 && abs(piTally.spend.todayUSD - 1.25) < 1e-9
+                  && piTally.spend.messages == 2,
+              "month \(piTally.spend.monthUSD) today \(piTally.spend.todayUSD)")
+        check("pi skips a malformed line instead of failing", piTally.spend.skippedLines == 1)
+        var piSpend = piTally.spend
+        piSpend.provider = "openrouter"
+        let piShare = PiLane.share(piSpend, openRouter: .ok(OpenRouter.Budget(spent: 40, limit: 50)))
+        check("pi share is month spend over the OpenRouter limit, left is limit minus spent",
+              piShare == .openRouter(pct: 6.5, leftUSD: 10, limitUSD: 50), "\(piShare)")
+        check("pi without an OpenRouter balance shows spend only and says why",
+              PiLane.share(piSpend, openRouter: .notConfigured) == .spendOnly("no OpenRouter key in Tower"))
+        let piHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-pi-\(UUID().uuidString)")
+        check("pi row is hidden when the Pi directory does not exist",
+              PiLane.read(home: piHome, env: [PiLane.rootEnvKey: piHome.appendingPathComponent("absent").path])
+                  == .notConfigured)
+        // The disk path end to end: settings, one session this month, auth.json beside them.
+        let piRoot = piHome.appendingPathComponent("agent")
+        let piSession = piRoot.appendingPathComponent("sessions/--demo--/s.jsonl")
+        try? FileManager.default.createDirectory(at: piSession.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? Data(#"{"defaultProvider":"openrouter","defaultModel":"demo/model"}"#.utf8)
+            .write(to: piRoot.appendingPathComponent("settings.json"))
+        try? Data((piTurn("d1", "2026-11-03T10:00:00.000Z", 0.75) + "\n").utf8).write(to: piSession)
+        try? FileManager.default.setAttributes([.modificationDate: piNow], ofItemAtPath: piSession.path)
+        let piRead = PiLane.read(home: piHome, env: [PiLane.rootEnvKey: piRoot.path],
+                                 now: piNow, calendar: utc)
+        if case .ok(let r) = piRead, case .spend(let s) = r.usage {
+            check("pi reads settings and a session file from its root",
+                  s.provider == "openrouter" && s.model == "demo/model"
+                      && abs(s.monthUSD - 0.75) < 1e-9 && s.files == 1, "\(s)")
+        } else {
+            check("pi reads settings and a session file from its root", false, "\(piRead)")
+        }
+        try? FileManager.default.removeItem(at: piHome)
+
         print("  " + String(repeating: "─", count: 56))
         print(failures == 0 ? "  ✅ all passed\n" : "  ❌ \(failures) failed\n")
         return failures == 0 ? 0 : 1
@@ -2295,6 +2348,11 @@ enum CLI {
         // TypeSafe publishes no billing or usage endpoint, so its section prints as the
         // static label it is, beside the provider sections above.
         typeSafeStatusRowLines().forEach { print($0) }
+
+        // Pi has no store row either: its spend is summed from its own session logs on
+        // every cycle and set against the OpenRouter balance this same refresh read.
+        PiLane.statusLines(result.lanes[.pi], openRouter: result.openRouterOutcome)
+            .forEach { print($0) }
 
         if !split.resting.isEmpty {
             // Time-gated rows only: a stale row is not waiting on a clock.

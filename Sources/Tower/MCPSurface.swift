@@ -489,7 +489,7 @@ struct TowerMCPService: MCPService {
             annotations: read("Seat retention")),
         MCPToolSpec(
             name: "tower_lanes", title: "Agent lanes",
-            description: "Muse, Devin, the Cursor CLI and Antigravity: installed or not, config model, last dispatch from the optional dispatch ledger, last limit refusal, and what the lane's own files say about its usage. File reads only.",
+            description: "Muse, Devin, the Cursor CLI, Antigravity and Pi: installed or not, config model, last dispatch from the optional dispatch ledger, last limit refusal, and what the lane's own files say about its usage. Pi's usage is its spend this month and today from its session logs, with its share of the OpenRouter budget and the dollars left, or the reason there is no share. File reads only.",
             inputSchema: noArgs,
             outputSchema: [
                 "type": "object", "required": ["generatedAt", "lanes"],
@@ -1475,6 +1475,29 @@ struct TowerMCPService: MCPService {
                         "dailyResetsAt": .date(q.dailyResetsAt), "weeklyResetsAt": .date(q.weeklyResetsAt),
                         "fetchedAt": .date(q.fetchedAt), "bindingRemainingPct": .number(q.bindingRemainingPct),
                     ]
+                case .spend(let s):
+                    // The share uses the persisted OpenRouter row, the same one the panel's
+                    // MONEY band shows, so this tool never polls OpenRouter itself.
+                    let share = PiLane.share(s, openRouter: OpenRouter.persistedOutcome(
+                        from: Array(env.store.load().values), lastSuccessAt: nil))
+                    var usage: [String: JSON] = [
+                        "kind": "spend", "provider": .string(s.provider), "model": .string(s.model),
+                        "monthUSD": .number(s.monthUSD), "todayUSD": .number(s.todayUSD),
+                        "messages": .int(s.messages), "files": .int(s.files),
+                        "skippedLines": .int(s.skippedLines), "partialFiles": .int(s.partialFiles),
+                        "newestAt": .date(s.newest),
+                        "openRouterPct": .null, "openRouterLeftUSD": .null, "openRouterLimitUSD": .null,
+                        "shareReason": .null,
+                    ]
+                    switch share {
+                    case .openRouter(let pct, let left, let limit):
+                        usage["openRouterPct"] = .number(pct)
+                        usage["openRouterLeftUSD"] = .number(left)
+                        usage["openRouterLimitUSD"] = .number(limit)
+                    case .spendOnly(let why):
+                        usage["shareReason"] = .string(why)
+                    }
+                    row["usage"] = .object(usage)
                 }
             }
             return .object(row)

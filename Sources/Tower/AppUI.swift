@@ -946,6 +946,7 @@ struct ProviderHeader: View {
         case .muse:       return Color(red: 0.00, green: 0.51, blue: 0.98)
         case .devin:      return Color(red: 0.36, green: 0.73, blue: 0.62)
         case .agy:        return Color(red: 0.26, green: 0.52, blue: 0.96)
+        case .pi:         return Color(red: 0.64, green: 0.47, blue: 0.33)
         }
     }
 
@@ -1960,9 +1961,11 @@ struct MenuContent: View {
                                    now: t,
                                    jevOpen: model.disclosure("money.jev"))
 
-                        // Agent lanes whose usage their CLIs do not expose.
+                        // Agent lanes: quotas where a CLI exposes them, Pi's spend against the
+                        // OpenRouter balance above.
                         LaneBoard(outcomes: model.laneOutcomes, now: t,
-                                  cursorSeat: model.accounts.first { $0.kind == .cursor })
+                                  cursorSeat: model.accounts.first { $0.kind == .cursor },
+                                  openRouter: model.orOutcome)
 
                         // Load, as one more section in the same list.
                         SessionsBoard(agents: model.agents, probed: model.probed,

@@ -17,8 +17,9 @@ you which one to switch to before you get stuck.
 - **MCP server.** `tower mcp` answers the same questions over the Model Context
   Protocol, so any agent (Claude Code, Codex, Cursor and others) can ask which
   account has room. See [docs/mcp-surface.md](docs/mcp-surface.md).
-- **Extras.** OpenRouter balance, agent lanes and live Claude Code sessions,
-  when those tools are present.
+- **Extras.** OpenRouter balance, agent lanes (Muse, Devin, the Cursor CLI,
+  Antigravity, and Pi with its spend this month and today as a share of the
+  OpenRouter budget) and live Claude Code sessions, when those tools are present.
 - **CLI.** `tower status`, `tower rotate`, `tower panelshot`, `tower selftest`.
 
 It reads the same numbers Claude Code's `/usage` screen shows, through an
