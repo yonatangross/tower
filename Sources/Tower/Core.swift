@@ -1373,6 +1373,35 @@ enum DemoMode {
         env["TOWER_DEMO"] == "1" && supportDirectory(env: env) == nil
     }
 
+    /// The one mode main.swift runs for a set of arguments. Both the dispatch and the demo
+    /// gate read this, in this order, so the gate always judges the verb that will run:
+    /// a gate that only asked "is panelshot present" let `panelshot status` run status live.
+    enum Verb: Equatable {
+        case selftest, mcp, rotate, loginItem, status, panelshot, app
+    }
+
+    static func dispatched(args: Set<String>) -> Verb {
+        if args.contains("selftest") { return .selftest }
+        if args.contains("mcp") { return .mcp }
+        if args.contains("rotate") { return .rotate }
+        if args.contains("login-item") { return .loginItem }
+        if args.contains("status") { return .status }
+        if args.contains("panelshot") { return .panelshot }
+        return .app
+    }
+
+    /// Why a demo run must refuse these arguments, or nil when it may proceed. Only the
+    /// MCP server and panelshot are wired for demo data (selftest is pure logic and
+    /// returns before the gate); every other verb reads the Keychain, the login item or
+    /// the network directly.
+    static func refusal(args: Set<String>) -> String? {
+        switch dispatched(args: args) {
+        case .mcp, .panelshot, .selftest: return nil
+        case .rotate, .loginItem, .status, .app:
+            return "TOWER_DEMO=1 runs only `tower mcp` and `tower panelshot`"
+        }
+    }
+
     /// The invented active login. nil when the file is absent or unreadable, which reads
     /// as an unverified seat, exactly like a real Mac with no login.
     static func credential(in dir: URL) -> ClaudeCredential? {

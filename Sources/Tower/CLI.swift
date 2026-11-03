@@ -2071,6 +2071,20 @@ enum CLI {
             check("TOWER_DEMO alone is not demo mode",
                   DemoMode.supportDirectory(env: ["TOWER_DEMO": "1"]) == nil
                       && DemoMode.supportDirectory(env: ["TOWER_SUPPORT_DIR": demoDir.path]) == nil)
+            // The gate must judge the verb that will run, not any verb present: main.swift
+            // dispatches rotate, login-item and status before panelshot, so these three
+            // would run live against the real Keychain, login and login item.
+            check("demo refuses `panelshot status` (status runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "status"]) != nil)
+            check("demo refuses `panelshot rotate` (rotate runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "rotate"]) != nil)
+            check("demo refuses `panelshot login-item on` (login-item runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "login-item", "on"]) != nil)
+            check("demo still runs `mcp`, `mcp --self-test` and `panelshot out.png`",
+                  DemoMode.refusal(args: ["mcp"]) == nil && DemoMode.refusal(args: ["mcp", "--self-test"]) == nil
+                      && DemoMode.refusal(args: ["panelshot", "out.png"]) == nil)
+            check("demo refuses the app and plain status", DemoMode.refusal(args: []) != nil
+                      && DemoMode.refusal(args: ["status"]) != nil)
         }
 
         print("  " + String(repeating: "─", count: 56))
