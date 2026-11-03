@@ -78,11 +78,11 @@ final class PopoverTypeScaleTests: XCTestCase {
     }
 
     func testJevFoldsToOneLineThatStillSaysLowOrStale() {
-        XCTAssertEqual(JevRow.stateWord(level: .green, stale: false), "ok")
-        XCTAssertEqual(JevRow.stateWord(level: .amber, stale: false), "watch")
-        XCTAssertEqual(JevRow.stateWord(level: .red, stale: false), "low")
+        XCTAssertEqual(TypeSafeCreditRow.stateWord(level: .green, stale: false), "ok")
+        XCTAssertEqual(TypeSafeCreditRow.stateWord(level: .amber, stale: false), "watch")
+        XCTAssertEqual(TypeSafeCreditRow.stateWord(level: .red, stale: false), "low")
         // An old figure is not trusted with a colour, whatever it says.
-        XCTAssertEqual(JevRow.stateWord(level: .red, stale: true), "stale")
+        XCTAssertEqual(TypeSafeCreditRow.stateWord(level: .red, stale: true), "stale")
     }
 
     func testSessionsHeadingCountsBusyAndIdle() {

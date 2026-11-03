@@ -1722,19 +1722,21 @@ struct OpenRouterProblem: View {
     }
 }
 
-/// The TypeSafe (Jev) section beside the OpenRouter balance.
+/// The TypeSafe group beside the OpenRouter balance: one header, then a row per decision
+/// model (Jev, Clef) that has an entered balance.
 ///
-/// There is no fetch behind this row: TypeSafe publishes no billing or usage endpoint, so
-/// the only fact is the OPERATOR-ENTERED credit balance, tinted by the traffic light the
-/// issue pins (amber under USD 10, red under USD 5) and labelled with its as-of date. It
-/// carries no capture time and no refresh outcome, because nothing is observed and nothing
-/// can fail; the label is what keeps an entered figure from masquerading as a live one.
+/// There is no fetch behind these rows: TypeSafe publishes no billing or usage endpoint, so
+/// the only fact per model is the OPERATOR-ENTERED credit balance, tinted by the traffic
+/// light the issue pins (amber under USD 10, red under USD 5) and labelled with its as-of
+/// date. It carries no capture time and no refresh outcome, because nothing is observed and
+/// nothing can fail; the label is what keeps an entered figure from masquerading as a live
+/// one. Each row greys out on its own, because the two figures are entered on different days.
 struct TypeSafeSection: View {
-    private var stale: Bool { TypeSafe.balanceIsStale() }
+    private func stale(_ model: TypeSafe.Model) -> Bool { TypeSafe.balanceIsStale(model: model) }
 
-    private var balanceTint: Color {
-        guard !stale else { return TowerType.dim }
-        switch TypeSafe.balanceLevel(TypeSafe.entry()?.usd ?? 0) {
+    private func balanceTint(_ model: TypeSafe.Model) -> Color {
+        guard !stale(model) else { return TowerType.dim }
+        switch TypeSafe.balanceLevel(TypeSafe.entry(model: model)?.usd ?? 0) {
         case .green: return .green
         case .amber: return .orange
         case .red:   return .red
@@ -1743,19 +1745,23 @@ struct TypeSafeSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            ProviderHeader(provider: .typesafe, detail: "prepaid credits")
-            HStack(spacing: 6) {
-                Text(TypeSafe.money(TypeSafe.entry()?.usd ?? 0))
-                    .font(TowerType.font(.body, weight: .bold, design: .monospaced))
-                    .foregroundStyle(balanceTint)
-                Text("\(TypeSafe.enteredLabel()), not live")
-                    .font(TowerType.font(.small))
-                    .foregroundStyle(TowerType.secondary)
+            ProviderHeader(provider: .typesafe, detail: TypeSafeCreditRow.groupDetail)
+            ForEach(TypeSafe.enteredModels(), id: \.self) { model in
+                HStack(spacing: 6) {
+                    Text(model.name)
+                        .font(TowerType.font(.small, weight: .semibold))
+                    Text(TypeSafe.money(TypeSafe.entry(model: model)?.usd ?? 0))
+                        .font(TowerType.font(.body, weight: .bold, design: .monospaced))
+                        .foregroundStyle(balanceTint(model))
+                    Text("\(TypeSafe.enteredLabel(model: model)), not live")
+                        .font(TowerType.font(.small))
+                        .foregroundStyle(TowerType.secondary)
+                }
+                .padding(.leading, 12)
+                .opacity(stale(model) ? 0.55 : 1)
             }
-            .padding(.leading, 12)
         }
         .padding(.top, 3)
-        .opacity(stale ? 0.55 : 1)
     }
 }
 
@@ -1958,7 +1964,7 @@ struct MenuContent: View {
                         MoneyBoard(orOutcome: model.orOutcome,
                                    orHistory: model.orHistory,
                                    now: t,
-                                   jevOpen: model.disclosure("money.jev"))
+                                   creditOpen: { model.disclosure(MoneyBoard.disclosureID($0)) })
 
                         // Agent lanes whose usage their CLIs do not expose.
                         LaneBoard(outcomes: model.laneOutcomes, now: t,

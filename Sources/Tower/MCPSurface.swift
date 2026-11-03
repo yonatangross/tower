@@ -227,6 +227,45 @@ struct TowerMCPService: MCPService {
         return a
     }
 
+    /// One TypeSafe decision model's entered credit (Jev or Clef). No live field is ever
+    /// true: TypeSafe publishes no billing endpoint, so every figure was typed in.
+    static func typesafeModelProperties(reenterKey: String) -> JSON {
+        [
+            "entered": ["type": "boolean", "description": "false until a balance was entered; the other figures are then null"],
+            "balanceUSD": ["type": ["number", "null"]], "asOf": ["type": ["string", "null"]],
+            "level": ["type": ["string", "null"], "description": "green, amber or red; null until entered"],
+            "text": ["type": "string"], "live": ["type": "boolean"],
+            "ageDays": ["type": ["number", "null"], "description": "days since the entered figure was read"],
+            "stale": ["type": "boolean", "description": "true once the entered figure is over 3 days old or cannot be dated"],
+            "reenter": ["type": ["string", "null"], "description": .string("how to re-enter a stale figure (tower_config_set \(reenterKey)); null while fresh")],
+        ]
+    }
+
+    static let typesafeModelRequired: JSON = ["entered", "balanceUSD", "asOf", "level", "text", "live", "ageDays", "stale"]
+
+    /// The TypeSafe group: the top-level fields stay the Jev credit they always were, so a
+    /// client written before Clef existed reads the same figure, and `models` carries every
+    /// decision model (Jev and Clef) under its own name.
+    static let typesafeGroupSchema: JSON = {
+        var properties = typesafeModelProperties(reenterKey: TypeSafe.Model.jev.balanceKey).objectValue ?? [:]
+        var models: [String: JSON] = [:]
+        for model in TypeSafe.Model.allCases {
+            var p = typesafeModelProperties(reenterKey: model.balanceKey).objectValue ?? [:]
+            p["model"] = ["type": "string"]
+            p["name"] = ["type": "string"]
+            models[model.rawValue] = ["type": "object", "required": typesafeModelRequired, "properties": .object(p)]
+        }
+        properties["models"] = [
+            "type": "object",
+            "description": "every TypeSafe decision model by name (jev, clef), each with the same fields as the Jev figures above",
+            "required": .array(TypeSafe.Model.allCases.map { .string($0.rawValue) }),
+            "properties": .object(models),
+        ]
+        var required = typesafeModelRequired.arrayValue ?? []
+        required.append("models")
+        return ["type": "object", "required": .array(required), "properties": .object(properties)]
+    }()
+
     static let tools: [MCPToolSpec] = [
         MCPToolSpec(
             name: "tower_status", title: "Tower status",
@@ -266,18 +305,7 @@ struct TowerMCPService: MCPService {
                         "properties": ["nickname": ["type": "string"], "error": ["type": ["string", "null"]]],
                     ]],
                     "notYetCaptured": ["type": "array", "items": ["type": "string"]],
-                    "typesafe": [
-                        "type": "object", "required": ["entered", "balanceUSD", "asOf", "level", "text", "live", "ageDays", "stale"],
-                        "properties": [
-                            "entered": ["type": "boolean", "description": "false until a balance was entered; the other figures are then null"],
-                            "balanceUSD": ["type": ["number", "null"]], "asOf": ["type": ["string", "null"]],
-                            "level": ["type": ["string", "null"], "description": "green, amber or red; null until entered"],
-                            "text": ["type": "string"], "live": ["type": "boolean"],
-                            "ageDays": ["type": ["number", "null"], "description": "days since the entered figure was read"],
-                            "stale": ["type": "boolean", "description": "true once the entered figure is over 3 days old or cannot be dated"],
-                            "reenter": ["type": ["string", "null"], "description": "how to re-enter a stale figure (tower_config_set typesafe.balanceUSD); null while fresh"],
-                        ],
-                    ],
+                    "typesafe": Self.typesafeGroupSchema,
                 ],
             ],
             annotations: read("Tower status")),
@@ -561,7 +589,7 @@ struct TowerMCPService: MCPService {
                     "constants": ["type": "object"],
                     "identity": ["type": "object", "required": ["displayName", "bundleIdentifier", "supportDirectoryName", "processName", "buildVersion", "settingsDomain"],
                                  "properties": ["displayName": ["type": "string"], "bundleIdentifier": ["type": "string"], "supportDirectoryName": ["type": "string"], "processName": ["type": "string"], "buildVersion": ["type": ["string", "null"]], "settingsDomain": ["type": "string"]]],
-                    "typesafe": ["type": "object"],
+                    "typesafe": Self.typesafeGroupSchema,
                     "openrouter": ["type": "object", "required": ["keyConfigured", "keyFingerprint", "monthlyBudgetUSD", "lastSuccessAt"],
                                    "properties": ["keyConfigured": ["type": "boolean"], "keyFingerprint": ["type": ["string", "null"]], "monthlyBudgetUSD": ["type": ["number", "null"]], "lastSuccessAt": ["type": ["string", "null"]]]],
                 ],
@@ -619,11 +647,11 @@ struct TowerMCPService: MCPService {
             annotations: write("Forget retained seats", destructive: true, idempotent: true, openWorld: false)),
         MCPToolSpec(
             name: "tower_config_set", title: "Set configuration",
-            description: "Sets one configuration key: retainClaudeSeats (false deletes every owned seat first), launchAtLogin, openrouter.monthlyBudgetUSD (null clears), typesafe.balanceUSD (the Jev credit balance read off the TypeSafe console, dated today; null clears it and hides the row), knownAccounts, retiredAccounts. Refused with UnknownKey, BadValue, KeychainRefused or the underlying error.",
+            description: "Sets one configuration key: retainClaudeSeats (false deletes every owned seat first), launchAtLogin, openrouter.monthlyBudgetUSD (null clears), typesafe.balanceUSD (the Jev credit balance read off the TypeSafe console, dated today; null clears it and hides the row), typesafe.clef.balanceUSD (the same for the Clef decision model), knownAccounts, retiredAccounts. Refused with UnknownKey, BadValue, KeychainRefused or the underlying error.",
             inputSchema: [
                 "type": "object", "required": ["key", "value"],
                 "properties": [
-                    "key": ["type": "string", "enum": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "knownAccounts", "retiredAccounts"]],
+                    "key": ["type": "string", "enum": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "typesafe.clef.balanceUSD", "knownAccounts", "retiredAccounts"]],
                     "value": ["description": "boolean, number or null, or an array of emails, depending on the key"],
                 ],
                 "additionalProperties": false,
@@ -1072,12 +1100,14 @@ struct TowerMCPService: MCPService {
         return "\(glyph)\(a.nickname) \(Int(pct.rounded()))%"
     }
 
-    static func typesafeJSON(now: Date = Date(), defaults: UserDefaults = TowerPreferences.shared) -> JSON {
-        guard let entry = TypeSafe.entry(defaults: defaults) else {
+    /// One decision model's entered credit, the shape `typesafeModelProperties` declares.
+    static func typesafeModelJSON(_ model: TypeSafe.Model, now: Date = Date(),
+                                  defaults: UserDefaults = TowerPreferences.shared) -> JSON {
+        let text = JSON.string(TypeSafe.statusRowText(model: model, now: now, defaults: defaults))
+        guard let entry = TypeSafe.entry(model: model, defaults: defaults) else {
             return [
                 "entered": false, "balanceUSD": .null, "asOf": .null, "level": .null,
-                "text": .string(TypeSafe.statusRowText(now: now, defaults: defaults)),
-                "live": false, "ageDays": .null, "stale": false, "reenter": .null,
+                "text": text, "live": false, "ageDays": .null, "stale": false, "reenter": .null,
             ]
         }
         let level: String
@@ -1091,12 +1121,27 @@ struct TowerMCPService: MCPService {
             "balanceUSD": .number(entry.usd),
             "asOf": .string(entry.asOf),
             "level": .string(level),
-            "text": .string(TypeSafe.statusRowText(now: now, defaults: defaults)),
+            "text": text,
             "live": false,
-            "ageDays": .number(TypeSafe.balanceAgeDays(now: now, defaults: defaults).map { Double($0) }),
-            "stale": .bool(TypeSafe.balanceIsStale(now: now, defaults: defaults)),
-            "reenter": .string(TypeSafe.reenterHint(now: now, defaults: defaults)),
+            "ageDays": .number(TypeSafe.balanceAgeDays(model: model, now: now, defaults: defaults).map { Double($0) }),
+            "stale": .bool(TypeSafe.balanceIsStale(model: model, now: now, defaults: defaults)),
+            "reenter": .string(TypeSafe.reenterHint(model: model, now: now, defaults: defaults)),
         ]
+    }
+
+    /// The TypeSafe group for `tower_status` and `tower_config_get`: the Jev figures at the
+    /// top level, where they have always been, plus every model under `models`.
+    static func typesafeJSON(now: Date = Date(), defaults: UserDefaults = TowerPreferences.shared) -> JSON {
+        var group = typesafeModelJSON(.jev, now: now, defaults: defaults).objectValue ?? [:]
+        var models: [String: JSON] = [:]
+        for model in TypeSafe.Model.allCases {
+            var m = typesafeModelJSON(model, now: now, defaults: defaults).objectValue ?? [:]
+            m["model"] = .string(model.rawValue)
+            m["name"] = .string(model.name)
+            models[model.rawValue] = .object(m)
+        }
+        group["models"] = .object(models)
+        return .object(group)
     }
 
     // MARK: Read tools
@@ -1792,21 +1837,22 @@ struct TowerMCPService: MCPService {
             guard let usd = value.doubleValue, usd > 0 else { return .refused("BadValue", "openrouter.monthlyBudgetUSD takes a positive number or null") }
             env.defaults.set(usd, forKey: OpenRouter.budgetKey)
             return .ok("openrouter.monthlyBudgetUSD \(usd)", ["key": .string(key), "value": .number(usd), "previous": previous > 0 ? .number(previous) : .null])
-        case "typesafe.balanceUSD":
-            // No endpoint publishes the Jev balance, so a re-entry is the only way the row
-            // stops being stale. The as-of day is the day of entry, stamped here.
-            let previous: JSON = TypeSafe.entry(defaults: env.defaults).map { .number($0.usd) } ?? .null
+        case TypeSafe.Model.jev.balanceKey, TypeSafe.Model.clef.balanceKey:
+            // No endpoint publishes a decision model's balance, so a re-entry is the only
+            // way its row stops being stale. The as-of day is the day of entry, stamped here.
+            let model: TypeSafe.Model = key == TypeSafe.Model.clef.balanceKey ? .clef : .jev
+            let previous: JSON = TypeSafe.entry(model: model, defaults: env.defaults).map { .number($0.usd) } ?? .null
             if value.isNull {
-                TypeSafe.clearEntry(defaults: env.defaults)
-                return .ok("typesafe.balanceUSD cleared; the row is hidden until a new entry", [
+                TypeSafe.clearEntry(model: model, defaults: env.defaults)
+                return .ok("\(key) cleared; the \(model.name) row is hidden until a new entry", [
                     "key": .string(key), "value": .null, "asOf": .null, "previous": previous,
                 ])
             }
             guard let usd = value.doubleValue, usd >= 0, usd.isFinite else {
-                return .refused("BadValue", "typesafe.balanceUSD takes a non negative number or null")
+                return .refused("BadValue", "\(key) takes a non negative number or null")
             }
-            let entry = TypeSafe.enter(usd, now: env.now(), defaults: env.defaults)
-            return .ok("typesafe.balanceUSD \(TypeSafe.money(entry.usd)) as of \(entry.asOf)", [
+            let entry = TypeSafe.enter(usd, model: model, now: env.now(), defaults: env.defaults)
+            return .ok("\(key) \(TypeSafe.money(entry.usd)) as of \(entry.asOf)", [
                 "key": .string(key), "value": .number(entry.usd), "asOf": .string(entry.asOf), "previous": previous,
             ])
         case "knownAccounts":
@@ -1840,7 +1886,7 @@ struct TowerMCPService: MCPService {
             ])
         default:
             return .refused("UnknownKey", "no configuration key \(key)",
-                            extra: ["known": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "knownAccounts", "retiredAccounts"]])
+                            extra: ["known": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "typesafe.clef.balanceUSD", "knownAccounts", "retiredAccounts"]])
         }
     }
 

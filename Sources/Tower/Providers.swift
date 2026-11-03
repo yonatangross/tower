@@ -68,7 +68,7 @@ enum Provider: String, Codable, CaseIterable {
         case .codex:      return "Codex"
         case .cursor:     return "Cursor"
         case .openrouter: return "OpenRouter"
-        case .typesafe:   return "TypeSafe (Jev)"
+        case .typesafe:   return "TypeSafe"
         case .muse:       return "Muse"
         case .devin:      return "Devin"
         case .agy:        return "Antigravity"
@@ -941,14 +941,19 @@ enum OpenRouter {
 
 // MARK: - TypeSafe balance
 
-/// TypeSafe (Jev) prepaid credit balance, entered by hand.
+/// TypeSafe decision-model prepaid credit balances (Jev and Clef), entered by hand.
 ///
 /// There is nothing to fetch here. TypeSafe's public API exposes no billing or usage
 /// endpoint (api.typesafe.ai/openapi.json v0.2.0 declares exactly POST /v1/systemone and
 /// GET /v1/models), and the console's own usage and balance reads answer only a browser
-/// session, which Tower deliberately does not hold. So the row ships ONE fact: the
+/// session, which Tower deliberately does not hold. So each model row ships ONE fact: the
 /// operator-entered balance, labelled as entered every time it renders. It has no capture
 /// time anywhere on purpose, because nothing was observed, and it is never ranked.
+///
+/// TypeSafe ships two decision models, so the money section shows them as one group: a
+/// row per model, each with its own entered figure and as-of day. Every function takes a
+/// `model` that defaults to `.jev`, so the callers written when Jev was the only row keep
+/// their meaning unchanged.
 enum TypeSafe {
     /// Stable local identity for the row, exactly like `OpenRouter.storeEmail`: not an
     /// account email, a schema key that names this lane without colliding with an
@@ -960,11 +965,40 @@ enum TypeSafe {
     /// default: with no entry the row is hidden. The traffic light below (amber under
     /// USD 10, red under USD 5) is applied to the entered figure.
 
-    /// Where a re-entered figure lives, so topping up does not mean editing source and
+    /// The decision models TypeSafe sells credits for. Order is the panel order.
+    enum Model: String, CaseIterable, Sendable {
+        case jev, clef
+
+        /// The product name, for labels a person reads ("Jev credits").
+        var name: String {
+            switch self {
+            case .jev: return "Jev"
+            case .clef: return "Clef"
+            }
+        }
+
+        /// Where the entered figure lives. Jev keeps the keys it had before Clef existed,
+        /// so an entry made then still shows; Clef gets its own namespaced pair.
+        var balanceKey: String {
+            switch self {
+            case .jev: return "typesafe.balanceUSD"
+            case .clef: return "typesafe.clef.balanceUSD"
+            }
+        }
+
+        var balanceAsOfKey: String {
+            switch self {
+            case .jev: return "typesafe.balanceAsOf"
+            case .clef: return "typesafe.clef.balanceAsOf"
+            }
+        }
+    }
+
+    /// Where a re-entered Jev figure lives, so topping up does not mean editing source and
     /// reinstalling. `tower_config_set typesafe.balanceUSD` writes both keys together;
-    /// the as-of day is the day of entry, never a guess.
-    static let balanceKey = "typesafe.balanceUSD"
-    static let balanceAsOfKey = "typesafe.balanceAsOf"
+    /// the as-of day is the day of entry, never a guess. Clef's pair is on `Model`.
+    static let balanceKey = Model.jev.balanceKey
+    static let balanceAsOfKey = Model.jev.balanceAsOfKey
 
     /// One entered figure and the day it was read off the console.
     struct Entry: Equatable {
@@ -975,41 +1009,49 @@ enum TypeSafe {
     /// The figure every surface renders, or nil when none was entered. A half-written pair
     /// (a balance without its day) counts as no entry, because a figure with no as-of date
     /// cannot say how old it is.
-    static func entry(defaults: UserDefaults = TowerPreferences.shared) -> Entry? {
-        guard defaults.object(forKey: balanceKey) != nil,
-              let asOf = defaults.string(forKey: balanceAsOfKey) else { return nil }
-        return Entry(usd: defaults.double(forKey: balanceKey), asOf: asOf)
+    static func entry(model: Model = .jev, defaults: UserDefaults = TowerPreferences.shared) -> Entry? {
+        guard defaults.object(forKey: model.balanceKey) != nil,
+              let asOf = defaults.string(forKey: model.balanceAsOfKey) else { return nil }
+        return Entry(usd: defaults.double(forKey: model.balanceKey), asOf: asOf)
     }
 
-    /// Whether the TypeSafe row exists at all: only after a balance was entered.
-    static func isEntered(defaults: UserDefaults = TowerPreferences.shared) -> Bool {
-        entry(defaults: defaults) != nil
+    /// Whether a model's row exists at all: only after a balance was entered.
+    static func isEntered(model: Model = .jev, defaults: UserDefaults = TowerPreferences.shared) -> Bool {
+        entry(model: model, defaults: defaults) != nil
+    }
+
+    /// The models with an entered figure, in panel order. Empty means the whole TypeSafe
+    /// group is hidden, exactly as the single Jev row was before.
+    static func enteredModels(defaults: UserDefaults = TowerPreferences.shared) -> [Model] {
+        Model.allCases.filter { isEntered(model: $0, defaults: defaults) }
     }
 
     /// Records a figure read off the console now, dated today in local time.
     @discardableResult
-    static func enter(_ usd: Double, now: Date = Date(),
+    static func enter(_ usd: Double, model: Model = .jev, now: Date = Date(),
                       defaults: UserDefaults = TowerPreferences.shared) -> Entry {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
         let entry = Entry(usd: usd, asOf: f.string(from: now))
-        defaults.set(entry.usd, forKey: balanceKey)
-        defaults.set(entry.asOf, forKey: balanceAsOfKey)
+        defaults.set(entry.usd, forKey: model.balanceKey)
+        defaults.set(entry.asOf, forKey: model.balanceAsOfKey)
         return entry
     }
 
     /// Drops the operator entry; the row hides again.
-    static func clearEntry(defaults: UserDefaults = TowerPreferences.shared) {
-        defaults.removeObject(forKey: balanceKey)
-        defaults.removeObject(forKey: balanceAsOfKey)
+    static func clearEntry(model: Model = .jev, defaults: UserDefaults = TowerPreferences.shared) {
+        defaults.removeObject(forKey: model.balanceKey)
+        defaults.removeObject(forKey: model.balanceAsOfKey)
     }
 
     /// What to do about a stale figure, or nil while it is fresh. Nothing can fetch the
     /// balance, so the only fix is a new entry, and the row names exactly how to make one.
-    static func reenterHint(now: Date = Date(), defaults: UserDefaults = TowerPreferences.shared) -> String? {
-        guard isEntered(defaults: defaults), balanceIsStale(now: now, defaults: defaults) else { return nil }
-        return "read TypeSafe console Billing, then tower_config_set typesafe.balanceUSD <usd>"
+    static func reenterHint(model: Model = .jev, now: Date = Date(),
+                            defaults: UserDefaults = TowerPreferences.shared) -> String? {
+        guard isEntered(model: model, defaults: defaults),
+              balanceIsStale(model: model, now: now, defaults: defaults) else { return nil }
+        return "read TypeSafe console Billing, then tower_config_set \(model.balanceKey) <usd>"
     }
 
     /// Traffic-light vocabulary on the entered balance. Strictly UNDER the lines: exactly
@@ -1030,7 +1072,7 @@ enum TypeSafe {
         String(format: "$%.2f", usd)
     }
 
-    /// The entered balance as one labelled string: the figure and the as-of date. No
+    /// The entered Jev balance as one labelled string: the figure and the as-of date. No
     /// capture time is attached anywhere, on purpose: there is no observation behind it.
     static var balanceText: String {
         guard let e = entry() else { return "not entered" }
@@ -1040,21 +1082,24 @@ enum TypeSafe {
     /// The full row fact for `tower status`: the balance text with the as-of date AND
     /// its age plus the not-live qualifier; a stale figure says so rather than borrowing
     /// the confidence of a fresh entry.
-    static func statusRowText(now: Date = Date(), defaults: UserDefaults = TowerPreferences.shared) -> String {
-        guard let usd = entry(defaults: defaults)?.usd else {
-            return "no balance entered (tower_config_set typesafe.balanceUSD <usd>)"
+    static func statusRowText(model: Model = .jev, now: Date = Date(),
+                              defaults: UserDefaults = TowerPreferences.shared) -> String {
+        guard let usd = entry(model: model, defaults: defaults)?.usd else {
+            return "no balance entered (tower_config_set \(model.balanceKey) <usd>)"
         }
-        let staleMark = balanceIsStale(now: now, defaults: defaults) ? ", stale" : ""
-        return "balance \(money(usd)) (\(enteredLabel(now: now, defaults: defaults)))\(staleMark), not live"
+        let staleMark = balanceIsStale(model: model, now: now, defaults: defaults) ? ", stale" : ""
+        return "balance \(money(usd)) (\(enteredLabel(model: model, now: now, defaults: defaults)))\(staleMark), not live"
     }
 
     /// Days since the entered figure was read off the console. nil when the
     /// as-of string cannot be parsed, which the row treats as stale too.
-    static func balanceAgeDays(now: Date = Date(), defaults: UserDefaults = TowerPreferences.shared) -> Int? {
+    static func balanceAgeDays(model: Model = .jev, now: Date = Date(),
+                               defaults: UserDefaults = TowerPreferences.shared) -> Int? {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
-        guard let asOf = entry(defaults: defaults)?.asOf, let entered = f.date(from: asOf) else { return nil }
+        guard let asOf = entry(model: model, defaults: defaults)?.asOf,
+              let entered = f.date(from: asOf) else { return nil }
         // Calendar days, not 86,400 s spans: a DST transition makes a day 23 or
         // 25 hours and an absolute-time division under-counts by one.
         let cal = Calendar.current
@@ -1065,25 +1110,29 @@ enum TypeSafe {
 
     /// An entered figure decays: past three days it is too old to plan against
     /// and the row greys out. An unparseable as-of date is stale by definition.
-    static func balanceIsStale(now: Date = Date(), defaults: UserDefaults = TowerPreferences.shared) -> Bool {
-        balanceAgeDays(now: now, defaults: defaults).map { $0 > 3 } ?? true
+    static func balanceIsStale(model: Model = .jev, now: Date = Date(),
+                               defaults: UserDefaults = TowerPreferences.shared) -> Bool {
+        balanceAgeDays(model: model, now: now, defaults: defaults).map { $0 > 3 } ?? true
     }
 
-    /// "entered 09-18 · 5d ago": the as-of date plus its age, every render.
     /// The panel's words for a stale entry. The exact command (`reenterHint`) is for the CLI,
-    /// MCP and the row's tooltip; the panel text names the action only.
+    /// MCP and the row's tooltip; the panel text names the action only. Both models are
+    /// topped up on the same Billing page, so the words are shared.
     static let panelReenterAction = "re-enter from\nTypeSafe Billing"
 
     /// "entered 12d ago", the panel's short form of `enteredLabel`.
-    static func enteredAgeLabel(now: Date = Date(), defaults: UserDefaults = TowerPreferences.shared) -> String {
-        guard let days = balanceAgeDays(now: now, defaults: defaults) else { return "entered, undated" }
+    static func enteredAgeLabel(model: Model = .jev, now: Date = Date(),
+                                defaults: UserDefaults = TowerPreferences.shared) -> String {
+        guard let days = balanceAgeDays(model: model, now: now, defaults: defaults) else { return "entered, undated" }
         return days == 0 ? "entered today" : "entered \(days)d ago"
     }
 
-    static func enteredLabel(now: Date = Date(), defaults: UserDefaults = TowerPreferences.shared) -> String {
-        guard let raw = entry(defaults: defaults)?.asOf else { return "not entered" }
+    /// "entered 09-18 · 5d ago": the as-of date plus its age, every render.
+    static func enteredLabel(model: Model = .jev, now: Date = Date(),
+                             defaults: UserDefaults = TowerPreferences.shared) -> String {
+        guard let raw = entry(model: model, defaults: defaults)?.asOf else { return "not entered" }
         let short = raw.count >= 10 ? String(raw.dropFirst(5)) : raw
-        guard let days = balanceAgeDays(now: now, defaults: defaults) else { return "entered \(short) · undated" }
+        guard let days = balanceAgeDays(model: model, now: now, defaults: defaults) else { return "entered \(short) · undated" }
         return "entered \(short) · \(days)d ago"
     }
 }
