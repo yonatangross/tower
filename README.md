@@ -18,7 +18,9 @@ shasum -a 256 -c Tower.app.zip.sha256 && ditto -x -k Tower.app.zip ~/Application
 open ~/Applications/Tower.app
 ```
 
-Then sign into each Claude Code account once with `/login`. Blocked on first
+Then sign into each Claude Code account once with `/login`. For Cursor, click
+**Connect Cursor** on its row once; Tower keeps its own Cursor sign-in and never
+touches the Cursor app's. Blocked on first
 launch? See [troubleshooting](docs/playbooks/troubleshooting.md#macos-blocks-the-first-launch).
 
 ## Playbooks
