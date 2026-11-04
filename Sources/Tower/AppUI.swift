@@ -40,6 +40,7 @@ enum Notifier {
     }
 
     static func post(_ a: Alert) {
+        guard AlertSettings.current().notify else { return }
         let c = UNMutableNotificationContent()
         let window = a.window == "5h" ? "5-hour" : "weekly"
         if a.pct >= 100 {
@@ -74,6 +75,7 @@ enum Notifier {
     /// pinned shape across the two notification lines; read together they are one
     /// sentence: "account A at 83 %: no new stations on A, rotation brief due at 90 %".
     static func post(_ crossing: RailCrossing) {
+        guard AlertSettings.current().notify else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(crossing.level == .red ? "🔴" : "🟠") \(crossing.toastTitle)"
         content.body = crossing.toastBody
@@ -92,6 +94,7 @@ enum Notifier {
     /// The blast radius toast: the active login is near the mark that stops every
     /// session riding it. Stable identifier, so a later level replaces an earlier banner.
     static func post(_ blast: BlastRadius) {
+        guard AlertSettings.current().notify else { return }
         let content = UNMutableNotificationContent()
         content.title = blast.level == .stopped
             ? "⛔ \(blast.nickname) is full" : "⚠️ \(blast.nickname) at \(blast.percentUsed.map { "\(Int($0.rounded()))" } ?? "?") %"
@@ -132,7 +135,14 @@ enum Notifier {
 final class LimitsModel: ObservableObject {
     static let shared = LimitsModel()
 
-    @Published var accounts: [AccountSnapshot] = []
+    /// Only rows of providers the user watches (Settings ▸ Providers). An OFF provider's
+    /// rows leave the panel at once, not at the next refresh.
+    @Published var accounts: [AccountSnapshot] = [] {
+        didSet {
+            let shown = ProviderToggles.visible(accounts)
+            if shown.count != accounts.count { accounts = shown }
+        }
+    }
     /// Chrome display profiles (and optional account-chooser rows), keyed by account email.
     @Published var switchProfiles: [String: ChromeProfileHint] = [:]
     @Published var activeEmail: String?
@@ -297,7 +307,7 @@ final class LimitsModel: ObservableObject {
             openRouterLastSuccess: { DemoMode.openRouterLastSuccess() },
             // A demo shot shows the invented store only, not this Mac's agent CLIs. The one
             // exception is an invented Pi directory the demo names with TOWER_PI_DIR.
-            lanes: DemoMode.supportDirectory() == nil ? { AgentLane.readAll() } : { DemoMode.lanes() })
+            lanes: DemoMode.supportDirectory() == nil ? { PanelShotHydration.liveLanes() } : { DemoMode.lanes() })
         accounts = state.accounts
         switchProfiles = state.switchProfiles
         activeEmail = state.activeEmail
@@ -316,7 +326,15 @@ final class LimitsModel: ObservableObject {
             from: accounts, lastSuccessAt: OpenRouter.lastSuccessTime())
     }
 
+    /// Re-applies the provider toggles to what is on screen; the next refresh reads only
+    /// what is on.
+    func applyProviderToggles() {
+        accounts = ProviderToggles.visible(SeatCacheHydration.rows(from: Store.shared))
+    }
+
     private func pollForLoginChange() {
+        // Claude Code OFF: no Keychain read, no login watch.
+        guard ProviderToggles.isEnabled(.claude) else { return }
         guard !loginPollInFlight else { return }
         loginPollInFlight = true
         let epoch = loginRetentionEpoch
@@ -568,6 +586,7 @@ final class LimitsModel: ObservableObject {
         var railToasts: [RailCrossing] = []
         var railClears: [(nickname: String, standing: Rail.Level)] = []
         if !keys.isEmpty {
+            let alertSettings = AlertSettings.current()
             let (after, saveError) = Store.shared.mutate { accounts in
                 // The rail machine runs for EVERY row: the railed windows of an inactive
                 // account can still end while it rests, and a standing flag must clear
@@ -577,7 +596,7 @@ final class LimitsModel: ObservableObject {
                 // the flag and the numbers it was derived from never disagree on disk.
                 for key in Array(accounts.keys) {
                     guard var snap = accounts[key] else { continue }
-                    if keys.contains(key) { alerts += Thresholds.evaluate(&snap) }
+                    if keys.contains(key) { alerts += Thresholds.evaluate(&snap, settings: alertSettings) }
                     Self.railStep(&snap, toasts: &railToasts, clears: &railClears)
                     accounts[key] = snap
                 }
@@ -703,6 +722,16 @@ final class LimitsModel: ObservableObject {
 /// The panelshot data boundary. Its callers supply only local, synchronous reads;
 /// no refresh closure can enter this path.
 enum PanelShotHydration {
+    /// The lanes a live render reads: only the ones the operator turned ON (b87 on #26),
+    /// so `tower panelshot` and `tower_panelshot` never read an OFF lane.
+    static func liveLanes(
+        gate: () -> ProviderGate = { ProviderGate.current() },
+        read: (Set<Provider>) -> [Provider: AgentLane.Outcome] = { AgentLane.readAll(only: $0) }
+    ) -> [Provider: AgentLane.Outcome] {
+        let allowed = gate().lanes
+        return allowed.isEmpty ? [:] : read(allowed)
+    }
+
     struct State {
         let accounts: [AccountSnapshot]
         let switchProfiles: [String: ChromeProfileHint]
@@ -2092,6 +2121,8 @@ struct MenuContent: View {
             HStack(spacing: 6) {
                 Button("Refresh") { Task { await model.refresh() } }
                     .font(TowerType.font(.body))
+                Button("Settings…") { SetupWindows.shared.openSettings(model: model) }
+                    .font(TowerType.font(.body))
                 Spacer()
                 // The two panel-level bindings, next to the panel's own
                 // controls: one opens and closes it from anywhere, the other
@@ -2182,7 +2213,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
-        Notifier.requestAuthorization()
+        // A fresh install answers the first run before anything is read: until then every
+        // unset toggle reads OFF, so the first refresh below reads nothing.
+        SetupWindows.shared.openFirstRunIfNeeded(model: LimitsModel.shared)
+        if AlertSettings.current().notify { Notifier.requestAuthorization() }
         LimitsModel.shared.start()
         setupStatusItem()
         setupPanel()
