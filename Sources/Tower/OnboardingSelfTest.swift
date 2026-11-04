@@ -370,6 +370,55 @@ enum OnboardingSelfTest {
                   + "claude mcp add --scope user tower -- ~/.local/bin/tower mcp", "")
 
         visibilitySweep(check)
+        panelVisibility(check)
+    }
+
+    /// b90 HOLD on #41: what the PANEL draws (the panelshot image, the money band, the
+    /// credits group) obeys the toggles too; the MCP sweep cannot see a child's image.
+    static func panelVisibility(_ check: (String, Bool, String) -> Void) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-panel-off-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var claude = AccountSnapshot(email: "p-claude@marker.test", nickname: "pclaude", plan: "max")
+        claude.weeklyPct = 10
+        var router = AccountSnapshot(email: "p-or@marker.test", nickname: "por", plan: "credits")
+        router.provider = .openrouter
+        router.balanceUSD = 42.5
+        router.availablePct = 85
+        router.capturedAt = Date().addingTimeInterval(-60)
+        let store = Store(dir: dir)
+        _ = store.save(["p-claude@marker.test": claude, "openrouter:p-or@marker.test": router])
+
+        func defaults(off: Set<WatchedProvider>) -> (UserDefaults, String) {
+            let (d, id) = suite("panel-off")
+            d.set(false, forKey: ProviderToggles.setupPendingKey)
+            for p in WatchedProvider.allCases { ProviderToggles.set(p, !off.contains(p), defaults: d) }
+            return (d, id)
+        }
+        let (orOff, orID) = defaults(off: [.openrouter, .claude])
+        defer { UserDefaults.standard.removePersistentDomain(forName: orID) }
+        let state = PanelShotHydration.load(
+            store: store, switchProfiles: { [:] }, diskIdentityHint: { nil },
+            openRouterLastSuccess: { Date() }, lanes: { [:] }, defaults: orOff)
+        check("panelshot hydration draws no OFF provider: no OpenRouter money, no OFF rows",
+              state.openRouter == .notConfigured
+                  && !state.accounts.contains { $0.provider == .openrouter || $0.kind == .claude },
+              "openRouter \(state.openRouter), rows \(state.accounts.map(\.email))")
+
+        let sample = OpenRouter.History.Sample(capturedAt: Date(), available: 42.5, spent: 7.5, totalCredits: 50)
+        let (money, history) = ProviderToggles.money(
+            orOutcome: .ok(OpenRouter.Budget(spent: 7.5, limit: 50)), orHistory: [sample], defaults: orOff)
+        check("turning OpenRouter OFF clears the balance and history already on the panel",
+              money == .notConfigured && history.isEmpty, "\(money), \(history.count) samples")
+
+        let (jevOff, jevID) = defaults(off: [.jev])
+        defer { UserDefaults.standard.removePersistentDomain(forName: jevID) }
+        for model in TypeSafe.Model.allCases {
+            jevOff.set(12.0, forKey: model.balanceKey)
+            jevOff.set("2026-11-04", forKey: model.balanceAsOfKey)
+        }
+        check("the credits group draws no model that is OFF (Jev OFF leaves Clef)",
+              TypeSafe.enteredModels(defaults: jevOff) == [.clef], "\(TypeSafe.enteredModels(defaults: jevOff))")
     }
 }
 

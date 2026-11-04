@@ -1195,8 +1195,7 @@ struct TowerMCPService: MCPService {
     static func typesafeModelJSON(_ model: TypeSafe.Model, now: Date = Date(),
                                   defaults: UserDefaults = TowerPreferences.shared) -> JSON {
         // A model the operator turned OFF in Settings shows no figure to an agent.
-        let watched: WatchedProvider = model == .jev ? .jev : .clef
-        guard ProviderToggles.isEnabled(watched, defaults: defaults) else {
+        guard ProviderToggles.isEnabled(model.watched, defaults: defaults) else {
             return [
                 "entered": false, "balanceUSD": .null, "asOf": .null, "level": .null,
                 "text": .string("\(model.name) is off in Tower Settings"), "live": false, "ageDays": .null,
