@@ -213,12 +213,52 @@ fi
 # rename happened: on the Limits -> Tower move it would have cleaned up a bundle
 # that was already gone and left the actual stale one, Limits.app, registered at
 # login. Matching on the executable needs no list and cannot go stale.
+#
+# #14: a sibling is never deleted. A copy under one of the names Tower shipped as
+# (Limits, HQ Claude Limits) is a leftover of a rename: it moves aside to
+# $DEST_DIR/.tower-replaced/<name>-<stamp>.app. Any other name was chosen by the
+# user (a rollback copy such as Tower-c73b9ed.app), so it stays where it is and is
+# only reported. Either way its login item is turned off first, so the next login
+# cannot start the old binary.
+REPLACED_DIR="$DEST_DIR/.tower-replaced"
+SHIPPED_NAMES=("Limits.app" "HQ Claude Limits.app")
+
+is_shipped_name() {
+  local name="$1" shipped
+  for shipped in "${SHIPPED_NAMES[@]}"; do
+    [ "$name" = "$shipped" ] && return 0
+  done
+  return 1
+}
+
+# Prints a path under REPLACED_DIR that does not exist yet.
+replaced_path() {
+  local base="$1" stamp candidate n=1
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  candidate="$REPLACED_DIR/${base%.app}-$stamp.app"
+  while [ -e "$candidate" ]; do
+    n=$((n + 1))
+    candidate="$REPLACED_DIR/${base%.app}-$stamp-$n.app"
+  done
+  printf '%s\n' "$candidate"
+}
+
 migrated=0
 while IFS= read -r stale; do
   [ "$stale" = "$DEST" ] && continue
-  echo "==> removing stale bundle: $stale"
-  rm -rf "$stale"
   migrated=1
+  name="$(basename "$stale")"
+  if ! "$stale/Contents/MacOS/HQClaudeLimits" login-item off; then
+    echo "   WARNING: could not turn off the login item of $stale" >&2
+  fi
+  if is_shipped_name "$name"; then
+    mkdir -p "$REPLACED_DIR"
+    target="$(replaced_path "$name")"
+    mv "$stale" "$target"
+    echo "==> moved stale bundle aside: $stale -> $target"
+  else
+    echo "==> kept $stale (a name you chose); its login item is off. Delete it yourself when you no longer need it."
+  fi
 done < <(find "$DEST_DIR" -maxdepth 1 -name '*.app' \
            -exec test -f '{}/Contents/MacOS/HQClaudeLimits' \; -print)
 

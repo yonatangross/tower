@@ -71,6 +71,7 @@ write_mock_dry mkdir 'echo "mkdir $*" >> "$TOWER_TEST_LOG"'
 write_mock_dry rm 'echo "rm $*" >> "$TOWER_TEST_LOG"'
 write_mock_dry cp 'echo "cp $*" >> "$TOWER_TEST_LOG"'
 write_mock_dry find 'echo "find $*" >> "$TOWER_TEST_LOG"'
+write_mock_dry mv 'echo "mv $*" >> "$TOWER_TEST_LOG"'
 
 # mkdir and cp pass through to the real binaries: every argument install.sh can
 # hand them resolves inside TEST_ROOT (DEST_DIR comes from TOWER_TEST_INSTALLED,
@@ -84,7 +85,14 @@ write_mock mkdir \
   'echo "mkdir $*" >> "$TOWER_TEST_LOG"' \
   '/bin/mkdir "$@"'
 write_mock rm 'echo "rm $*" >> "$TOWER_TEST_LOG"' 'if [ "${TOWER_TEST_REAL_RM:-0}" = 1 ]; then /bin/rm "$@"; fi'
-write_mock find 'echo "find $*" >> "$TOWER_TEST_LOG"'
+# find and mv pass through like mkdir and cp: DEST_DIR is inside TEST_ROOT, and
+# the sibling-bundle tests (#14) need the real search and the real move.
+write_mock find \
+  'echo "find $*" >> "$TOWER_TEST_LOG"' \
+  '/usr/bin/find "$@"'
+write_mock mv \
+  'echo "mv $*" >> "$TOWER_TEST_LOG"' \
+  '/bin/mv "$@"'
 write_mock cp \
   'echo "cp $*" >> "$TOWER_TEST_LOG"' \
   '/bin/cp "$@"'
@@ -138,7 +146,7 @@ run_install() {
   TOWER_TEST_NO_RUN="$TOWER_TEST_NO_RUN" \
   TOWER_INSTALL_FROM="${TOWER_INSTALL_FROM:-}" \
   TOWER_TEST_IDENTITY="${TOWER_TEST_IDENTITY:-0}" \
-  "$PROJECT_ROOT/scripts/install.sh" "$@"
+  "$PROJECT_ROOT/scripts/install.sh" "$@" | tee "$LOG.out"
 }
 
 # Mirrors run_install so future dry tests can forward flags; the current dry
@@ -339,7 +347,48 @@ test_legacy_cli_link_is_repointed() {
   rm -rf "$PROJECT_ROOT/dist" "$INSTALLED" "$TEST_ROOT/link"
 }
 
+# A sibling bundle from before v0.1 (executable HQClaudeLimits) whose binary is a
+# logger: running it records the arguments, so a test sees "login-item off".
+make_sibling() {
+  local bundle="$INSTALLED/$1"
+  /bin/mkdir -p "$bundle/Contents/MacOS"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "echo \"sibling $1 \$*\" >> \"\$TOWER_TEST_LOG\"" > "$bundle/Contents/MacOS/HQClaudeLimits"
+  chmod +x "$bundle/Contents/MacOS/HQClaudeLimits"
+  printf 'kept\n' > "$bundle/Contents/marker"
+}
+
+# #14: a rollback copy the user kept under a name of their own is never deleted.
+# It stays where it is, and its login item is turned off.
+test_user_named_backup_is_kept_and_unregistered() {
+  prepare_local_bundle
+  make_sibling "Tower-c73b9ed.app"
+  run_install
+  assert_file "$INSTALLED/Tower-c73b9ed.app/Contents/marker"
+  assert_contains "sibling Tower-c73b9ed.app login-item off" "$LOG"
+  assert_not_contains "rm -rf $INSTALLED/Tower-c73b9ed.app" "$LOG"
+  assert_contains "kept $INSTALLED/Tower-c73b9ed.app" "$LOG.out"
+  assert_contains "==> re-registering login item at $INSTALLED/Tower.app" "$LOG.out"
+  rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
+}
+
+# #14: a copy under a name Tower shipped as is moved aside, not deleted.
+test_renamed_leftover_moves_aside() {
+  prepare_local_bundle
+  make_sibling "Limits.app"
+  run_install
+  assert_not_file "$INSTALLED/Limits.app"
+  moved="$(/usr/bin/find "$INSTALLED/.tower-replaced" -maxdepth 1 -name 'Limits-*.app' -print)"
+  [ -n "$moved" ] || fail "expected Limits.app under $INSTALLED/.tower-replaced"
+  assert_file "$moved/Contents/marker"
+  assert_contains "sibling Limits.app login-item off" "$LOG"
+  assert_contains "moved stale bundle aside: $INSTALLED/Limits.app -> $moved" "$LOG.out"
+  rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
+}
+
 test_default_uses_local_bundle
+test_user_named_backup_is_kept_and_unregistered
+test_renamed_leftover_moves_aside
 test_legacy_login_item_moves_to_the_new_id
 test_legacy_login_item_left_off_stays_off
 test_foreign_tower_app_is_never_replaced
