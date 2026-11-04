@@ -140,6 +140,16 @@ enum OnboardingSelfTest {
         fable.scoped = [ScopedLimit(label: "Fable", percent: 92, resetsAt: Date().addingTimeInterval(3_600))]
         check("alerts: Fable warns at its own level", Thresholds.evaluate(&fable, settings: .defaults).map(\.window) == ["Fable"], "")
 
+        // 5a. While the first run is still pending nothing is watched, so MCP is off too,
+        // even with mcp.enabled never written (unset otherwise reads ON for upgrades).
+        let (pendingDefaults, pendingID) = suite("mcp-pending")
+        defer { UserDefaults.standard.removePersistentDomain(forName: pendingID) }
+        pendingDefaults.set(true, forKey: ProviderToggles.setupPendingKey)
+        let pendingOff = !MCPAccess.isEnabled(defaults: pendingDefaults)
+        pendingDefaults.set(false, forKey: ProviderToggles.setupPendingKey)
+        check("mcp: OFF while the first run is pending, ON after it with mcp.enabled unset",
+              pendingOff && MCPAccess.isEnabled(defaults: pendingDefaults), "")
+
         // 5. MCP off: every tool refuses with one structured error, no crash.
         let mcpDir = FileManager.default.temporaryDirectory.appendingPathComponent("tower-selftest-mcp-off-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: mcpDir) }

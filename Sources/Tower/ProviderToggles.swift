@@ -209,8 +209,11 @@ enum MCPAccess {
     static let refusalCode = "MCPDisabled"
     static let refusalMessage = "MCP is off in Settings: turn it on in Tower, menu ▸ Settings… ▸ Agents"
 
+    /// Off while the first run is still pending (nothing is watched yet, so agents get
+    /// nothing either). After it, an unset key reads ON, so an upgrade keeps MCP working.
     static func isEnabled(defaults: UserDefaults = TowerPreferences.shared) -> Bool {
-        (defaults.object(forKey: enabledKey) as? Bool) ?? true
+        if defaults.bool(forKey: ProviderToggles.setupPendingKey) { return false }
+        return (defaults.object(forKey: enabledKey) as? Bool) ?? true
     }
 }
 
