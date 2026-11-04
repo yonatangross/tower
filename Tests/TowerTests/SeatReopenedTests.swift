@@ -45,7 +45,7 @@ final class SeatReopenedTests: XCTestCase {
 
         let display = SeatUsagePresentation(account: gone, now: now)
         XCTAssertEqual(display.roomText, "100%", "Both windows reopened: the old 80 / 90 no longer apply")
-        XCTAssertEqual(display.stateText, "stale cache 2d 0h", "The capture is still old and says so")
+        XCTAssertEqual(display.stateText, "read 2d 0h ago", "The capture is still old and says so")
         XCTAssertFalse(display.isLive)
         XCTAssertEqual(display.reopened,
                        SeatUsagePresentation.Reopened(windows: "5h+7d", at: now.addingTimeInterval(-3_600)))
@@ -77,7 +77,7 @@ final class SeatReopenedTests: XCTestCase {
 
         let display = SeatUsagePresentation(account: mixed, now: now)
         XCTAssertEqual(display.roomText, "15%", "The 7d window has not reset, so its cached 85 still binds")
-        XCTAssertEqual(display.stateText, "stale cache 22h 0m")
+        XCTAssertEqual(display.stateText, "read 22h 0m ago")
         XCTAssertEqual(display.reopened,
                        SeatUsagePresentation.Reopened(windows: "5h", at: now.addingTimeInterval(-3 * 3_600)))
         XCTAssertEqual(SeatUsagePresentation.resetCell(mixed, rest: .stale(22 * 3_600), now: now),
