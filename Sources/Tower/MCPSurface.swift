@@ -145,6 +145,7 @@ struct TowerMCPService: MCPService {
         "selftest": "tower_selftest",
         "rotate": "tower_rotate",
         "login-item": "tower_config_get",
+        "retrust": "tower_retrust",
         "panelshot": "tower_panelshot",
         "mcp": "tower_config_get",
     ]
@@ -691,6 +692,15 @@ struct TowerMCPService: MCPService {
             ],
             annotations: write("Refresh", destructive: false, idempotent: false, openWorld: true)),
         MCPToolSpec(
+            name: "tower_retrust", title: "Re-trust remembered seats",
+            description: "The panel's Re-trust: one Keychain read of the remembered Claude seats with the system dialog allowed. macOS then asks the USER to click Always Allow once per seat; this tool only opens those dialogs and never answers them. Use it after an upgrade or a new signing identity, when seats read needs login. Returns how many seats are readable and how many are still unreadable. Refused with RetrustRefused for an unsigned build or a demo store, which never show the dialog. The running app re-reads an unreadable seat by itself within a minute.",
+            inputSchema: noArgs,
+            outputSchema: [
+                "type": "object", "required": ["readable", "unreadable"],
+                "properties": ["readable": ["type": "integer"], "unreadable": ["type": "integer"]],
+            ],
+            annotations: write("Re-trust remembered seats", destructive: false, idempotent: false, openWorld: false)),
+        MCPToolSpec(
             name: "tower_forget_seats", title: "Forget retained seats",
             description: "Deletes every Tower owned seat item and advances the observation fence so an in flight login cannot recreate one. Retention stays on. The panel's Forget button.",
             inputSchema: noArgs,
@@ -951,6 +961,7 @@ struct TowerMCPService: MCPService {
             return await panelshot(light: arguments["light"].boolValue ?? false, expand: arguments["expand"].boolValue ?? false)
         case "tower_refresh": return await refresh(account: arguments["account"].stringValue)
         case "tower_forget_seats": return forgetSeats()
+        case "tower_retrust": return retrust()
         case "tower_config_set":
             guard let key = arguments["key"].stringValue else { return .refused("InvalidArguments", "key is required") }
             return configSet(key: key, value: arguments["value"])
@@ -1865,6 +1876,21 @@ struct TowerMCPService: MCPService {
             ? "refreshed; active \(active ?? "?"), \(rows.count) row(s)"
             : "refresh \(outcome): \(result.outcome.errorText ?? "")"
         return MCPToolResult(content: [.text(summary)], structuredContent: payload, isError: false)
+    }
+
+    /// The panel's Re-trust, started by an agent: one Keychain read with the system dialog
+    /// allowed, so macOS asks the USER to Always Allow once per remembered seat. The tool
+    /// only opens those dialogs; it never answers them. Refused when the vault may not
+    /// prompt (an unsigned build, or a demo, whose vault has no real Keychain).
+    func retrust() -> MCPToolResult {
+        switch env.vault.retrust() {
+        case .failure(let error):
+            return .refused("RetrustRefused", error.message)
+        case .success(let counts):
+            return .ok(
+                "re-trust: \(counts.readable) readable, \(counts.unreadable) still unreadable; macOS asks Always Allow once per seat",
+                ["readable": .number(Double(counts.readable)), "unreadable": .number(Double(counts.unreadable))])
+        }
     }
 
     func forgetSeats() -> MCPToolResult {

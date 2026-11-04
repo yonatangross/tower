@@ -218,7 +218,7 @@ final class MCPSurfaceTests: XCTestCase {
         }
         XCTAssertEqual(DemoMode.dispatched(args: []), .app)
         let realVerbs = Set(cliVerbs.map(\.rawValue))
-        XCTAssertEqual(realVerbs, ["status", "selftest", "rotate", "login-item", "panelshot", "mcp"])
+        XCTAssertEqual(realVerbs, ["status", "selftest", "rotate", "login-item", "retrust", "panelshot", "mcp"])
         let toolNames = Set(TowerMCPService.tools.map(\.name))
         for verb in realVerbs {
             let tool = try XCTUnwrap(TowerMCPService.verbToTool[verb], "verb \(verb) has no tool")
@@ -270,7 +270,7 @@ final class MCPSurfaceTests: XCTestCase {
     /// The reads say so and the writes say so: annotations are the contract a client
     /// uses to decide whether to ask before calling.
     func testAnnotationsSeparateReadsFromWrites() {
-        let writes: Set<String> = ["tower_refresh", "tower_forget_seats", "tower_config_set", "tower_alert_ack"]
+        let writes: Set<String> = ["tower_refresh", "tower_retrust", "tower_forget_seats", "tower_config_set", "tower_alert_ack"]
         for tool in TowerMCPService.tools {
             if writes.contains(tool.name) {
                 XCTAssertFalse(tool.annotations.readOnlyHint, tool.name)
@@ -281,6 +281,9 @@ final class MCPSurfaceTests: XCTestCase {
             }
         }
         XCTAssertTrue(spec("tower_forget_seats").annotations.destructiveHint)
+        // Re-trust opens a Keychain dialog for the user each call: not idempotent, deletes nothing.
+        XCTAssertFalse(spec("tower_retrust").annotations.idempotentHint)
+        XCTAssertFalse(spec("tower_retrust").annotations.destructiveHint)
         XCTAssertTrue(spec("tower_refresh").annotations.openWorldHint)
         XCTAssertFalse(spec("tower_refresh").annotations.idempotentHint)
         XCTAssertFalse(spec("tower_alert_ack").annotations.destructiveHint)
