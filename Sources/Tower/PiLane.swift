@@ -217,25 +217,37 @@ enum PiLane {
     // MARK: Reading from disk
 
     /// Session files under `sessions/<project>/`, modified at or after `since`, newest first.
-    static func sessionFiles(root: URL, since: Date) -> [URL] {
+    /// `confined` (a demo) skips any project or file whose real path leaves the root, so
+    /// a symlink below the root cannot pull in files from elsewhere.
+    static func sessionFiles(root: URL, since: Date, confined: Bool = false) -> [URL] {
         let fm = FileManager.default
+        let inside = insideCheck(root: root, confined: confined)
         let keys: [URLResourceKey] = [.contentModificationDateKey, .isDirectoryKey]
         guard let projects = try? fm.contentsOfDirectory(
             at: root.appendingPathComponent("sessions"), includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles]) else { return [] }
         var found: [(URL, Date)] = []
         for project in projects {
-            guard (try? project.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
+            guard inside(project), (try? project.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
                   let files = try? fm.contentsOfDirectory(
                       at: project, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
             else { continue }
-            for file in files where file.pathExtension == "jsonl" {
+            for file in files where file.pathExtension == "jsonl" && inside(file) {
                 let m = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
                     .contentModificationDate ?? .distantPast
                 if m >= since { found.append((file, m)) }
             }
         }
         return found.sorted { $0.1 > $1.1 }.map(\.0)
+    }
+
+    /// Always true unless confined; then true only for paths whose real path is under the
+    /// root's real path.
+    static func insideCheck(root: URL, confined: Bool) -> (URL) -> Bool {
+        guard confined else { return { _ in true } }
+        guard let realRoot = DemoMode.realPath(root.path) else { return { _ in false } }
+        let prefix = realRoot.hasSuffix("/") ? realRoot : realRoot + "/"
+        return { url in DemoMode.realPath(url.path).map { $0.hasPrefix(prefix) } ?? false }
     }
 
     /// Streams one file's lines into the tally, reading at most the last `maxBytes`.
@@ -275,8 +287,10 @@ enum PiLane {
     static func read(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                      env: [String: String] = ProcessInfo.processInfo.environment,
                      now: Date = Date(),
-                     calendar: Calendar = .current) -> AgentLane.Outcome {
+                     calendar: Calendar = .current,
+                     confineToRoot: Bool = false) -> AgentLane.Outcome {
         let root = root(home: home, env: env)
+        let inside = insideCheck(root: root, confined: confineToRoot)
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue
         else { return .notConfigured }
@@ -284,7 +298,7 @@ enum PiLane {
         var provider: String?
         var model: String?
         let settingsURL = root.appendingPathComponent("settings.json")
-        if FileManager.default.fileExists(atPath: settingsURL.path) {
+        if FileManager.default.fileExists(atPath: settingsURL.path), inside(settingsURL) {
             do {
                 (provider, model) = try settings(data: try Data(contentsOf: settingsURL))
             } catch {
@@ -293,7 +307,7 @@ enum PiLane {
         }
 
         var tally = Tally(now: now, calendar: calendar)
-        let files = sessionFiles(root: root, since: tally.monthStart)
+        let files = sessionFiles(root: root, since: tally.monthStart, confined: confineToRoot)
         for url in files.prefix(maxFiles) { stream(url, into: &tally) }
         tally.markUnread(max(files.count - maxFiles, 0))
         var spend = tally.spend

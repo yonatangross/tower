@@ -2191,6 +2191,39 @@ enum CLI {
             // `panelshot sessions` runs `claude agents --json`: a demo shot must not list real sessions.
             check("demo panelshot never runs the live session probe",
                   !DemoMode.runsLiveSessionProbe(env: demoEnv) && DemoMode.runsLiveSessionProbe(env: [:]))
+            // Inside a confined Pi root, a session link that points out is not read: a demo
+            // Pi directory cannot pull real spend in through a symlink below its root.
+            let outsideSessions = outside.appendingPathComponent("sessions/--real--")
+            try? FileManager.default.createDirectory(at: outsideSessions, withIntermediateDirectories: true)
+            let outsideLog = outsideSessions.appendingPathComponent("real.jsonl")
+            let realTurn = #"{"type":"message","id":"r1","timestamp":"\#(ISO8601DateFormatter().string(from: demoNow))","message":{"role":"assistant","provider":"openrouter","model":"m","usage":{"cost":{"total":7.5}}}}"#
+            try? Data((realTurn + "\n").utf8).write(to: outsideLog)
+            let linkedPi = demoDir.appendingPathComponent("pi-linked")
+            try? FileManager.default.createDirectory(at: linkedPi.appendingPathComponent("sessions/--demo--"),
+                                                     withIntermediateDirectories: true)
+            try? FileManager.default.createSymbolicLink(
+                at: linkedPi.appendingPathComponent("sessions/--demo--/link.jsonl"), withDestinationURL: outsideLog)
+            try? FileManager.default.createSymbolicLink(
+                at: linkedPi.appendingPathComponent("sessions/--out--"), withDestinationURL: outsideSessions)
+            let linkedLanes = DemoMode.lanes(env: demoEnv.merging([PiLane.rootEnvKey: linkedPi.path]) { $1 })
+            if case .ok(let r)? = linkedLanes[.pi], case .spend(let s) = r.usage {
+                check("demo Pi lane reads no session file linked from outside its root",
+                      s.monthUSD == 0 && s.files == 0, "\(s)")
+            } else {
+                check("demo Pi lane reads no session file linked from outside its root", false, "\(linkedLanes)")
+            }
+            // A demo store of "/" would make every path "inside" it.
+            check("a demo store of / is no demo store",
+                  DemoMode.supportDirectory(env: ["TOWER_DEMO": "1", "TOWER_SUPPORT_DIR": "/"]) == nil
+                      && DemoMode.supportDirectory(env: ["TOWER_DEMO": "1", "TOWER_SUPPORT_DIR": "/./"]) == nil)
+            // Panelshot hydration reads no timestamp from this Mac's real settings in a demo.
+            let demoPrefsSuite = "tower-selftest-demo-prefs-\(UUID().uuidString)"
+            let demoPrefs = UserDefaults(suiteName: demoPrefsSuite)!
+            defer { demoPrefs.removePersistentDomain(forName: demoPrefsSuite) }
+            OpenRouter.recordSuccess(now: demoNow, defaults: demoPrefs)
+            check("demo panelshot reads no OpenRouter success time from the real settings",
+                  DemoMode.openRouterLastSuccess(env: demoEnv, defaults: demoPrefs) == nil
+                      && DemoMode.openRouterLastSuccess(env: [:], defaults: demoPrefs) != nil)
             // Same contract as MCPSurfaceTests.testEveryCLIVerbHasATool, runnable without XCTest.
             let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
             let toolNames = Set(TowerMCPService.tools.map(\.name))
