@@ -1364,14 +1364,17 @@ enum DemoMode {
     /// count: a demo with no store to point at would read the real one.
     static func supportDirectory(env: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
         guard env["TOWER_DEMO"] == "1", let dir = env["TOWER_SUPPORT_DIR"], !dir.isEmpty else { return nil }
-        return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
+        let url = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
+        // "/" (however it is spelled) holds every path, so it cannot fence anything in.
+        if url.standardizedFileURL.path == "/" || realPath(url.path) == "/" { return nil }
+        return url
     }
 
     /// The agent lanes a demo panel shows: none of this Mac's CLIs, only an invented Pi
     /// directory the demo names with TOWER_PI_DIR (never the real ~/.pi).
     static func lanes(env: [String: String] = ProcessInfo.processInfo.environment) -> [Provider: AgentLane.Outcome] {
         guard let dir = piDirectory(env: env) else { return [:] }
-        return [.pi: PiLane.read(env: [PiLane.rootEnvKey: dir])]
+        return [.pi: PiLane.read(env: [PiLane.rootEnvKey: dir], confineToRoot: true)]
     }
 
     /// TOWER_PI_DIR, only when it resolves (symlinks followed) to a directory inside the
@@ -1384,10 +1387,17 @@ enum DemoMode {
         return realDir.hasPrefix(realStore.hasSuffix("/") ? realStore : realStore + "/") ? realDir : nil
     }
 
-    private static func realPath(_ path: String) -> String? {
+    static func realPath(_ path: String) -> String? {
         guard let resolved = realpath(path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
+    }
+
+    /// The OpenRouter last-success time panelshot hydration shows: none in a demo, so a
+    /// demo shot reads nothing from this Mac's real settings domain.
+    static func openRouterLastSuccess(env: [String: String] = ProcessInfo.processInfo.environment,
+                                      defaults: UserDefaults = TowerPreferences.shared) -> Date? {
+        supportDirectory(env: env) == nil ? OpenRouter.lastSuccessTime(defaults: defaults) : nil
     }
 
     /// `panelshot sessions` runs `claude agents --json`, which lists this Mac's real

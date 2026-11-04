@@ -292,6 +292,7 @@ final class LimitsModel: ObservableObject {
             store: Store.shared,
             switchProfiles: { Store.shared.switchProfilesByEmail() },
             diskIdentityHint: { Store.shared.verifiedActiveSeat()?.email },
+            openRouterLastSuccess: { DemoMode.openRouterLastSuccess() },
             // A demo shot shows the invented store only, not this Mac's agent CLIs. The one
             // exception is an invented Pi directory the demo names with TOWER_PI_DIR.
             lanes: DemoMode.supportDirectory() == nil ? { AgentLane.readAll() } : { DemoMode.lanes() })
