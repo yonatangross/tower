@@ -15,6 +15,7 @@ macOS 14 or later, Apple silicon:
 ```bash
 gh release download --repo yonatangross/tower --pattern 'Tower.app.zip*'
 shasum -a 256 -c Tower.app.zip.sha256 && ditto -x -k Tower.app.zip ~/Applications
+mkdir -p ~/.local/bin && ln -sf ~/Applications/Tower.app/Contents/MacOS/Tower ~/.local/bin/tower
 open ~/Applications/Tower.app
 ```
 
@@ -22,6 +23,36 @@ Then sign into each Claude Code account once with `/login`. For Cursor, click
 **Connect Cursor** on its row once; Tower keeps its own Cursor sign-in and never
 touches the Cursor app's. Blocked on first
 launch? See [troubleshooting](docs/playbooks/troubleshooting.md#macos-blocks-the-first-launch).
+
+## Install with your agent
+
+Paste this into Claude Code, Codex or Cursor. The agent runs the steps in
+[AGENTS.md](AGENTS.md#install-tower-for-the-user) without asking you anything, and
+stops if a check fails:
+
+```text
+Install Tower from github.com/yonatangross/tower: follow AGENTS.md, section
+"Install Tower for the user". Verify the checksum, link ~/.local/bin/tower,
+register the MCP server for this agent, run `tower mcp --self-test`, and tell me
+what you did. Do not open System Settings for me; tell me if macOS blocks the
+first launch.
+```
+
+The agent downloads the release with `gh`, checks its SHA-256, installs to
+`~/Applications`, links `~/.local/bin/tower`, registers the MCP server and runs
+its self-test. If macOS blocks the first launch, it stops and asks you to press
+**Open Anyway** ([First launch](#first-launch-open-anyway)); it never changes
+Gatekeeper itself.
+
+Register the MCP server by hand, if you prefer:
+
+| Agent | How |
+| --- | --- |
+| Claude Code | `claude mcp add --scope user tower -- ~/.local/bin/tower mcp` |
+| Codex | `~/.codex/config.toml`: `[mcp_servers.tower]`, `command = "/Users/<you>/.local/bin/tower"`, `args = ["mcp"]` |
+| Cursor | `~/.cursor/mcp.json`: `{"mcpServers": {"tower": {"command": "/Users/<you>/.local/bin/tower", "args": ["mcp"]}}}` |
+
+Then `tower mcp --self-test` (a non zero exit means the server is broken).
 
 ## Playbooks
 
@@ -241,7 +272,14 @@ The full manual, including how freshness, retention and signing work, is
 
 ## Contributing and security
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+- Start with an issue labelled
+  [good first issue](https://github.com/yonatangross/tower/labels/good%20first%20issue).
+- Build and check: `swift build && .build/debug/Tower selftest`. Use the invented
+  demo store (`scripts/demo-store.py`, `TOWER_DEMO=1 TOWER_SUPPORT_DIR=<dir>`),
+  never your real accounts, for tests and screenshots.
+- Rules and review: [CONTRIBUTING.md](CONTRIBUTING.md). Security reports:
+  [SECURITY.md](SECURITY.md). Agents: [AGENTS.md](AGENTS.md).
+- Platforms beyond Apple silicon: [roadmap #34](https://github.com/yonatangross/tower/issues/34).
 
 ## License
 

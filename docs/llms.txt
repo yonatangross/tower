@@ -1,0 +1,26 @@
+# Tower
+
+> Tower is a free, open-source macOS menu bar app (Apple silicon) that shows the usage limits of your Claude Code, Codex, Cursor and OpenRouter accounts and tells you which one to switch to. The same binary is a CLI and a local stdio MCP server; it runs on your Mac and sends nothing to its authors.
+
+## Install
+
+- [Install Tower for the user (agent steps)](https://github.com/yonatangross/tower/blob/main/AGENTS.md#install-tower-for-the-user): download the release with gh, verify the SHA-256, install to ~/Applications, link ~/.local/bin/tower, register the MCP server, run tower mcp --self-test.
+- [README install section](https://github.com/yonatangross/tower/blob/main/README.md#install): the same steps for people, and the one-time Gatekeeper "Open Anyway".
+- [Releases](https://github.com/yonatangross/tower/releases): Tower.app.zip and its .sha256.
+
+## MCP
+
+- [MCP playbook](https://github.com/yonatangross/tower/blob/main/docs/playbooks/mcp.md): register for Claude Code, Codex and Cursor; prompts that land on each tool.
+- [MCP surface](https://github.com/yonatangross/tower/blob/main/docs/mcp-surface.md): every tool, resource and prompt, with its fields.
+
+## Docs
+
+- [README](https://github.com/yonatangross/tower/blob/main/README.md): what Tower does, configuration, keychain prompts.
+- [Reference manual](https://github.com/yonatangross/tower/blob/main/docs/reference.md): freshness, retention, signing, CLI verbs, storage.
+- [Playbooks](https://github.com/yonatangross/tower/tree/main/docs/playbooks): setup, multi-account, troubleshooting, uninstall.
+- [AGENTS.md](https://github.com/yonatangross/tower/blob/main/AGENTS.md): how agents install Tower and work in the repo.
+
+## Optional
+
+- [Contributing](https://github.com/yonatangross/tower/blob/main/CONTRIBUTING.md) and [good first issues](https://github.com/yonatangross/tower/labels/good%20first%20issue)
+- [Platforms roadmap](https://github.com/yonatangross/tower/issues/34): Intel Macs, then Linux and Windows.
