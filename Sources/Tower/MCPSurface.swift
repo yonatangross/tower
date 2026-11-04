@@ -53,7 +53,11 @@ struct TowerMCPService: MCPService {
                 now: { Date() },
                 verifiedActiveEmail: { Store.shared.verifiedActiveSeat()?.email },
                 switchProfiles: { Store.shared.switchProfilesByEmail() },
-                lanes: { AgentLane.readAll(museRunner: AgentLane.runMuseUsage) },
+                // Only the lanes the operator turned ON are read; an OFF Muse never spawns.
+                lanes: {
+                    AgentLane.readAll(museRunner: AgentLane.runMuseUsage,
+                                      only: ProviderGate.current(defaults: TowerPreferences.shared).lanes)
+                },
                 sessions: { await AgentProbe.fetch() },
                 refresh: { await Refresher.refreshActive() },
                 activeCredential: keychainCredential,
@@ -639,6 +643,7 @@ struct TowerMCPService: MCPService {
                                     "expandedSections": ["type": "array", "items": ["type": "string"]],
                                     "knownAccounts": ["type": "array", "items": ["type": "string"]],
                                     "retiredAccounts": ["type": "array", "items": ["type": "string"]],
+                                    "watch": SettingsConfig.schema,
                                  ]],
                     "paths": ["type": "object"],
                     "constants": ["type": "object"],
@@ -715,7 +720,7 @@ struct TowerMCPService: MCPService {
             inputSchema: [
                 "type": "object", "required": ["key", "value"],
                 "properties": [
-                    "key": ["type": "string", "enum": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "cloudflare.clef.balanceUSD", "typesafe.clef.balanceUSD", "knownAccounts", "retiredAccounts"]],
+                    "key": ["type": "string", "enum": .array(SettingsConfig.allConfigKeys)],
                     "value": ["description": "boolean, number or null, or an array of emails, depending on the key"],
                 ],
                 "additionalProperties": false,
@@ -941,7 +946,13 @@ struct TowerMCPService: MCPService {
 
     // MARK: Tool dispatch
 
+    var accessEnabled: Bool { MCPAccess.isEnabled(defaults: env.defaults) }
+
     func callTool(_ name: String, arguments: JSON) async throws -> MCPToolResult {
+        // Settings ▸ Agents: MCP off refuses every tool with one clear, structured error.
+        guard MCPAccess.isEnabled(defaults: env.defaults) else {
+            return .refused(MCPAccess.refusalCode, MCPAccess.refusalMessage)
+        }
         switch name {
         case "tower_status": return status()
         case "tower_accounts": return accounts(provider: arguments["provider"].stringValue)
@@ -1445,7 +1456,7 @@ struct TowerMCPService: MCPService {
         var pendingTotal = 0
         let accounts: [JSON] = rows.map { a in
             var copy = a
-            let pending = Thresholds.evaluate(&copy, now: now)
+            let pending = Thresholds.evaluate(&copy, now: now, settings: AlertSettings.current(defaults: env.defaults))
             pendingTotal += pending.count
             var marks: [String: JSON] = [:]
             if a.kind.hasFiveHourWindow { marks["5h"] = .array(Rail.marks(fiveHour: true).compactMap { $0.level.label.map { .string($0) } }) }
@@ -1542,7 +1553,9 @@ struct TowerMCPService: MCPService {
     func lanes() -> MCPToolResult {
         let now = env.now()
         let outcomes = env.lanes()
-        let lanes: [JSON] = AgentLane.lanes.map { provider in
+        // An agent sees only the lanes the operator turned ON, whatever the reader returned.
+        let on = ProviderGate.current(defaults: env.defaults).lanes
+        let lanes: [JSON] = AgentLane.lanes.filter { on.contains($0) }.map { provider in
             let outcome = outcomes[provider] ?? .notConfigured
             var row: [String: JSON] = [
                 "provider": .string(provider.rawValue), "label": .string(provider.label),
@@ -1691,6 +1704,7 @@ struct TowerMCPService: MCPService {
                 "expandedSections": .array((env.defaults.stringArray(forKey: "expandedSections") ?? []).map { .string($0) }),
                 "knownAccounts": .array(knownAccounts().map { .string($0) }),
                 "retiredAccounts": .array(env.store.retiredEmails.sorted().map { .string($0) }),
+                "watch": SettingsConfig.json(defaults: env.defaults),
             ],
             "paths": [
                 "supportDirectory": .string(env.supportDirectory.path),
@@ -1865,7 +1879,7 @@ struct TowerMCPService: MCPService {
         var pending: [JSON] = []
         for a in rows {
             var copy = a
-            for alert in Thresholds.evaluate(&copy, now: now) {
+            for alert in Thresholds.evaluate(&copy, now: now, settings: AlertSettings.current(defaults: env.defaults)) {
                 pending.append(["nickname": .string(alert.nickname), "window": .string(alert.window),
                                 "percentUsed": .number(alert.pct), "resetsAt": .date(alert.resetsAt)])
             }
@@ -1938,6 +1952,7 @@ struct TowerMCPService: MCPService {
     }
 
     func configSet(key: String, value: JSON) -> MCPToolResult {
+        if let result = SettingsConfig.set(key: key, value: value, defaults: env.defaults) { return result }
         switch key {
         case "retainClaudeSeats":
             guard let on = value.boolValue else { return .refused("BadValue", "retainClaudeSeats takes a boolean") }
@@ -2015,7 +2030,7 @@ struct TowerMCPService: MCPService {
             ])
         default:
             return .refused("UnknownKey", "no configuration key \(key)",
-                            extra: ["known": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "cloudflare.clef.balanceUSD", "typesafe.clef.balanceUSD", "knownAccounts", "retiredAccounts"]])
+                            extra: ["known": .array(SettingsConfig.allConfigKeys)])
         }
     }
 
@@ -2023,7 +2038,8 @@ struct TowerMCPService: MCPService {
         let now = env.now()
         let map = env.store.load()
         guard let a = Self.resolve(ref, in: map) else { return .refused("UnknownAccount", "no account matches \(ref)") }
-        guard Thresholds.levels.contains(level) else {
+        guard Thresholds.levels.contains(level)
+                || AlertSettings.current(defaults: env.defaults).levels(forWindow: window).contains(level) else {
             return .refused("BadLevel", "level must be one of \(Thresholds.levels.map { Int($0) })")
         }
         let resetsAt: Date?

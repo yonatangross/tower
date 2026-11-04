@@ -2698,6 +2698,9 @@ enum CLI {
                       && Set(TowerMCPService.verbToTool.keys) == Set(cliVerbs.map(\.rawValue)))
         }
 
+        // First run and Settings (approved-design/onboarding-mockup.txt).
+        OnboardingSelfTest.run(check)
+
         // Tower's own app icon and menu-bar glyph (the Beacon). The bundle half (Info.plist
         // keys, AppIcon.icns) is checked on a built bundle by scripts/test-bundle-icon.sh;
         // the glyph half is checked here against the repo's art.
