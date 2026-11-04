@@ -146,7 +146,8 @@ run_install() {
   TOWER_TEST_NO_RUN="$TOWER_TEST_NO_RUN" \
   TOWER_INSTALL_FROM="${TOWER_INSTALL_FROM:-}" \
   TOWER_TEST_IDENTITY="${TOWER_TEST_IDENTITY:-0}" \
-  "$PROJECT_ROOT/scripts/install.sh" "$@" | tee "$LOG.out"
+  TOWER_SIBLING_TIMEOUT="${TOWER_SIBLING_TIMEOUT:-10}" \
+  "$PROJECT_ROOT/scripts/install.sh" "$@" 2>&1 | tee "$LOG.out"
 }
 
 # Mirrors run_install so future dry tests can forward flags; the current dry
@@ -386,7 +387,22 @@ test_renamed_leftover_moves_aside() {
   rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
 }
 
+# #14 (b88): the first pre-v0.1 build has no login-item verb and would start the
+# old app and never exit. The install must not hang on it.
+test_sibling_that_never_answers_does_not_hang_the_install() {
+  prepare_local_bundle
+  make_sibling "Limits.app"
+  printf '%s\n' '#!/usr/bin/env bash' 'exec /bin/sleep 30' > "$INSTALLED/Limits.app/Contents/MacOS/HQClaudeLimits"
+  started=$SECONDS
+  TOWER_SIBLING_TIMEOUT=1 run_install
+  [ $((SECONDS - started)) -lt 15 ] || fail "install waited on a sibling that never answers"
+  assert_not_file "$INSTALLED/Limits.app"
+  assert_contains "could not turn off the login item of $INSTALLED/Limits.app" "$LOG.out"
+  rm -rf "$PROJECT_ROOT/dist" "$INSTALLED"
+}
+
 test_default_uses_local_bundle
+test_sibling_that_never_answers_does_not_hang_the_install
 test_user_named_backup_is_kept_and_unregistered
 test_renamed_leftover_moves_aside
 test_legacy_login_item_moves_to_the_new_id

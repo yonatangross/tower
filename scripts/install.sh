@@ -248,8 +248,11 @@ while IFS= read -r stale; do
   [ "$stale" = "$DEST" ] && continue
   migrated=1
   name="$(basename "$stale")"
-  if ! "$stale/Contents/MacOS/HQClaudeLimits" login-item off; then
-    echo "   WARNING: could not turn off the login item of $stale" >&2
+  # Bounded: the first pre-v0.1 builds have no login-item verb, so the binary would
+  # start the old menubar app instead and never return. perl's alarm ends it.
+  if ! perl -e 'alarm shift; exec @ARGV or exit 127' "${TOWER_SIBLING_TIMEOUT:-10}" \
+       "$stale/Contents/MacOS/HQClaudeLimits" login-item off; then
+    echo "   WARNING: could not turn off the login item of $stale (no answer or no login-item verb)" >&2
   fi
   if is_shipped_name "$name"; then
     mkdir -p "$REPLACED_DIR"
