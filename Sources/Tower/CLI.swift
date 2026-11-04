@@ -2704,10 +2704,25 @@ enum CLI {
         // Tower's own app icon and menu-bar glyph (the Beacon). The bundle half (Info.plist
         // keys, AppIcon.icns) is checked on a built bundle by scripts/test-bundle-icon.sh;
         // the glyph half is checked here against the repo's art.
-        let glyphDir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Resources/StatusGlyph")
+        // A release build was compiled on CI, so #filePath names a path on that machine;
+        // a bundle that ships the glyph is checked in its own Resources instead.
+        let glyphDir = StatusGlyph.selftestDirectory(
+            bundleResources: ProductIdentity.runningBundle()?.resourceURL, sourceFile: #filePath)
         let glyph = StatusGlyph.image(in: glyphDir)
+        let fakeBundle = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-glyph-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: fakeBundle, withIntermediateDirectories: true)
+        for file in ["\(StatusGlyph.name).png", "\(StatusGlyph.name)@2x.png"] {
+            FileManager.default.createFile(atPath: fakeBundle.appendingPathComponent(file).path, contents: Data([0x89]))
+        }
+        let ciSource = "/Users/runner/work/tower/tower/Sources/Tower/CLI.swift"
+        check("a bundle that ships the glyph is checked in its own Resources, not the build machine's path",
+              StatusGlyph.selftestDirectory(bundleResources: fakeBundle, sourceFile: ciSource).standardizedFileURL
+                  == fakeBundle.standardizedFileURL)
+        check("a checkout build without bundle art still checks Resources/StatusGlyph",
+              StatusGlyph.selftestDirectory(bundleResources: nil, sourceFile: "/r/Sources/Tower/CLI.swift").path
+                  == "/r/Resources/StatusGlyph")
+        try? FileManager.default.removeItem(at: fakeBundle)
         check("the menu-bar glyph TowerGlyph loads as an 18 pt template image",
               StatusGlyph.name == "TowerGlyph" && glyph?.isTemplate == true
                   && glyph?.size == StatusGlyph.pointSize,
