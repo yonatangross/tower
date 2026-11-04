@@ -2046,6 +2046,83 @@ enum CLI {
               allResting.code == 1
                   && allResting.lines.contains { $0.contains("Every Claude seat") && $0.contains("resting") })
 
+        // --- Demo mode (TOWER_DEMO=1) -----------------------------------------------
+        // A demo store must show a verified active seat from its own invented credential,
+        // and must never fall through to the real login Keychain to get one.
+        do {
+            let demoDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tower-selftest-demo-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: demoDir) }
+            let demoNow = Date()
+            func demoSeat(_ nick: String, five: Double, week: Double) -> AccountSnapshot {
+                var seat = AccountSnapshot(email: "\(nick)@example.com", nickname: nick, plan: "max")
+                seat.fiveHourPct = five
+                seat.weeklyPct = week
+                seat.fiveHourResetsAt = demoNow.addingTimeInterval(3 * 3600)
+                seat.weeklyResetsAt = demoNow.addingTimeInterval(3 * 86_400)
+                seat.capturedAt = demoNow.addingTimeInterval(-60)
+                return seat
+            }
+            let demoSeats = [demoSeat("work", five: 22, week: 41), demoSeat("side", five: 0, week: 12),
+                             demoSeat("lab", five: 81, week: 88)]
+            let demoStore = Store(dir: demoDir)
+            _ = demoStore.save(Dictionary(uniqueKeysWithValues: demoSeats.map { ($0.email, $0) }))
+            let demoEnv = ["TOWER_DEMO": "1", "TOWER_SUPPORT_DIR": demoDir.path]
+            final class KeychainSpy: @unchecked Sendable { var reads = 0 }
+
+            // No demo-credential.json: honestly unverified, worded as a recommendation.
+            let blindSpy = KeychainSpy()
+            let blind = TowerMCPService(env: .live(processEnvironment: demoEnv, keychainCredential: {
+                blindSpy.reads += 1
+                return nil
+            })).advice()
+            check("demo without a credential file reads no Keychain", blindSpy.reads == 0,
+                  "Keychain reads: \(blindSpy.reads)")
+            check("unverified active seat names the roomiest seat and its room",
+                  blind.structuredContent?["kind"] == "activeUnknown"
+                      && blind.content == [.text("no verified active seat; most room: side (88%)")],
+                  "got \(blind.content)")
+
+            // The invented credential whose digest active-seat.json carries binds the seat.
+            try? Data(#"{"accessToken":"demo-token-work","emailHint":"work@example.com"}"#.utf8)
+                .write(to: demoDir.appendingPathComponent("demo-credential.json"))
+            demoStore.recordVerifiedActiveSeatUnlocked("work@example.com", token: "demo-token-work", now: demoNow)
+            let boundSpy = KeychainSpy()
+            let bound = TowerMCPService(env: .live(processEnvironment: demoEnv, keychainCredential: {
+                boundSpy.reads += 1
+                return nil
+            })).advice()
+            let boundKind = bound.structuredContent?["kind"].stringValue
+            check("demo credential binds the demo active seat (stay or switch)",
+                  boundKind == "stay" || boundKind == "switch", "kind \(boundKind ?? "nil")")
+            check("demo with a credential file reads no Keychain", boundSpy.reads == 0,
+                  "Keychain reads: \(boundSpy.reads)")
+            check("TOWER_DEMO alone is not demo mode",
+                  DemoMode.supportDirectory(env: ["TOWER_DEMO": "1"]) == nil
+                      && DemoMode.supportDirectory(env: ["TOWER_SUPPORT_DIR": demoDir.path]) == nil)
+            // The gate must judge the verb that will run, not any verb present: main.swift
+            // dispatches rotate, login-item and status before panelshot, so these three
+            // would run live against the real Keychain, login and login item.
+            check("demo refuses `panelshot status` (status runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "status"]) != nil)
+            check("demo refuses `panelshot rotate` (rotate runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "rotate"]) != nil)
+            check("demo refuses `panelshot login-item on` (login-item runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "login-item", "on"]) != nil)
+            check("demo still runs `mcp`, `mcp --self-test` and `panelshot out.png`",
+                  DemoMode.refusal(args: ["mcp"]) == nil && DemoMode.refusal(args: ["mcp", "--self-test"]) == nil
+                      && DemoMode.refusal(args: ["panelshot", "out.png"]) == nil)
+            check("demo refuses the app and plain status", DemoMode.refusal(args: []) != nil
+                      && DemoMode.refusal(args: ["status"]) != nil)
+            // Same contract as MCPSurfaceTests.testEveryCLIVerbHasATool, runnable without XCTest.
+            let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
+            let toolNames = Set(TowerMCPService.tools.map(\.name))
+            check("every CLI verb dispatches to itself and maps to a listed MCP tool",
+                  cliVerbs.allSatisfy { DemoMode.dispatched(args: [$0.rawValue]) == $0 }
+                      && cliVerbs.allSatisfy { TowerMCPService.verbToTool[$0.rawValue].map(toolNames.contains) == true }
+                      && Set(TowerMCPService.verbToTool.keys) == Set(cliVerbs.map(\.rawValue)))
+        }
+
         print("  " + String(repeating: "─", count: 56))
         print(failures == 0 ? "  ✅ all passed\n" : "  ❌ \(failures) failed\n")
         return failures == 0 ? 0 : 1

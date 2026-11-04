@@ -37,7 +37,15 @@ struct TowerMCPService: MCPService {
         /// tests inject a fixed reading.
         var machine: () -> MachineLoad? = { MachineLoad.sample() }
 
-        static func live() -> Environment {
+        /// `keychainCredential` is the one Keychain reader of the active login; it is a
+        /// parameter so the selftest can prove a demo run never calls it.
+        static func live(
+            processEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+            keychainCredential: @escaping () -> ClaudeCredential? = { Keychain.activeOAuth() }
+        ) -> Environment {
+            if let demo = DemoMode.supportDirectory(env: processEnvironment) {
+                return .demo(supportDirectory: demo)
+            }
             let vault = ClaudeSeatVault.shared
             return Environment(
                 store: Store.shared,
@@ -47,7 +55,7 @@ struct TowerMCPService: MCPService {
                 lanes: { AgentLane.readAll(museRunner: AgentLane.runMuseUsage) },
                 sessions: { await AgentProbe.fetch() },
                 refresh: { await Refresher.refreshActive() },
-                activeCredential: { Keychain.activeOAuth() },
+                activeCredential: keychainCredential,
                 vault: vault,
                 defaults: TowerPreferences.shared,
                 launchAtLogin: { LaunchAtLogin.isEnabled },
@@ -58,6 +66,48 @@ struct TowerMCPService: MCPService {
                 executable: ProductIdentity.runningBundle()?.executableURL ?? Bundle.main.executableURL,
                 mirrorPath: Store.defaultMirrorPath(),
                 supportDirectory: Store.defaultSupportDirectory(),
+                buildVersion: ProductIdentity.runningBundle()?
+                    .object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+        }
+
+        /// `TOWER_DEMO=1`: everything comes from the demo store. The active credential is
+        /// the store's invented one, the seat vault holds nothing, refresh never reaches
+        /// the network, and the readers of this Mac's own state (lanes, sessions, Chrome
+        /// profiles, the OpenRouter key, the login item, the settings domain) answer as
+        /// an empty machine, so a demo can neither read nor change the real one.
+        static func demo(supportDirectory dir: URL) -> Environment {
+            let store = Store(dir: dir, mirror: dir.appendingPathComponent("quota-cache.json"))
+            let vault = ClaudeSeatVault(
+                keychain: DemoSeatKeychain(),
+                lockURL: dir.appendingPathComponent(".seat-keychain.lock"),
+                stateURL: dir.appendingPathComponent("seat-retention-state.plist"),
+                retentionEnabled: { false },
+                setRetentionEnabled: { _ in },
+                mayPrompt: { false })
+            return Environment(
+                store: store,
+                now: { Date() },
+                verifiedActiveEmail: { store.verifiedActiveSeat()?.email },
+                switchProfiles: { [:] },
+                lanes: { [:] },
+                sessions: { AgentSummary() },
+                refresh: {
+                    RefreshResult(
+                        accounts: store.load(), activeEmail: nil,
+                        outcome: .failed("demo mode: no network refresh"),
+                        openRouterOutcome: .notConfigured, openRouterFoldCommitted: false)
+                },
+                activeCredential: { DemoMode.credential(in: dir) },
+                vault: vault,
+                // Its own suite, never the real settings domain: a demo config_set must not
+                // change the operator's Tower. The name is not the bundle id, so it exists.
+                defaults: UserDefaults(suiteName: ProductIdentity.bundleIdentifier + ".demo")!,
+                launchAtLogin: { false },
+                setLaunchAtLogin: { _ in "demo mode does not change the login item" },
+                openRouterKeyFingerprint: { nil },
+                executable: ProductIdentity.runningBundle()?.executableURL ?? Bundle.main.executableURL,
+                mirrorPath: dir.appendingPathComponent("quota-cache.json"),
+                supportDirectory: dir,
                 buildVersion: ProductIdentity.runningBundle()?
                     .object(forInfoDictionaryKey: "CFBundleVersion") as? String)
         }
@@ -1312,7 +1362,9 @@ struct TowerMCPService: MCPService {
         case .activeUnknown(let nick, let room, let via):
             payload = ["kind": "activeUnknown", "nickname": .string(nick), "percentUsed": .null, "roomPct": .number(room), "next": .null,
                        "command": .string(advice.command), "chromeProfile": Self.profileJSON(via), "earliestReset": .null]
-            summary = "active seat unknown; most room \(nick)" + (via.map { " (Chrome \($0.label))" } ?? "")
+            // Same words as the panel banner; the kind stays activeUnknown for the schema.
+            summary = RecommendBanner.unverifiedActiveLine(nick: nick, roomPct: room)
+                + (via.map { ", /login as Chrome \($0.label)" } ?? "")
         case .activeFiveHourUnknown(let nick, let room, let next):
             payload = ["kind": "activeFiveHourUnknown", "nickname": .string(nick), "percentUsed": .null, "roomPct": .number(room),
                        "next": .string(next), "command": .null, "chromeProfile": .null, "earliestReset": .null]

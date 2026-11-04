@@ -291,7 +291,9 @@ final class LimitsModel: ObservableObject {
         let state = PanelShotHydration.load(
             store: Store.shared,
             switchProfiles: { Store.shared.switchProfilesByEmail() },
-            diskIdentityHint: { Store.shared.verifiedActiveSeat()?.email })
+            diskIdentityHint: { Store.shared.verifiedActiveSeat()?.email },
+            // A demo shot shows the invented store only, not this Mac's agent CLIs.
+            lanes: DemoMode.supportDirectory() == nil ? { AgentLane.readAll() } : { [:] })
         accounts = state.accounts
         switchProfiles = state.switchProfiles
         activeEmail = state.activeEmail
@@ -977,6 +979,13 @@ struct RecommendBanner: View {
     static func fiveHourUnknownLine(nick: String, weekRoom: Double?) -> String {
         "\(nick): 5h unknown, week " + (weekRoom.map { "\(Int($0.rounded()))% room" } ?? "? room")
     }
+
+    /// The answer line when Tower cannot verify which seat the CLI holds. It reads as a
+    /// recommendation with its basis, not an error: "active seat unknown" sounded broken
+    /// on every fresh Mac and every demo, where an unverified seat is the normal state.
+    static func unverifiedActiveLine(nick: String, roomPct: Double?) -> String {
+        "no verified active seat; most room: \(nick)" + (roomPct.map { " (\(Int($0.rounded()))%)" } ?? "")
+    }
     let advice: AccountSnapshot.Advice
     /// Set briefly after a click so the banner can confirm what it put on the clipboard.
     @Binding var copied: Bool
@@ -998,7 +1007,9 @@ struct RecommendBanner: View {
         switch advice {
         case .stay: return .green
         case .switchTo: return .accentColor
-        case .activeUnknown, .activeFiveHourUnknown: return .orange
+        // Unverified is the normal state of a fresh login, so it is neutral, not a warning.
+        case .activeUnknown: return TowerType.secondary
+        case .activeFiveHourUnknown: return .orange
         case .allResting: return .red
         }
     }
@@ -1038,13 +1049,8 @@ struct RecommendBanner: View {
                     .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
             }
         case .activeUnknown(let nick, let room, let via):
-            Text("active seat unknown")
-                .font(TowerType.font(.body, weight: .semibold)).foregroundStyle(.orange)
-            Text("· most room \(nick)").font(TowerType.font(.body)).foregroundStyle(TowerType.secondary)
-            if let room {
-                Text("· \(Int(room.rounded()))% free")
-                    .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
-            }
+            Text(Self.unverifiedActiveLine(nick: nick, roomPct: room))
+                .font(TowerType.font(.body)).foregroundStyle(TowerType.secondary)
             if let via {
                 Text("· /login as Chrome \(via.label)")
                     .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)

@@ -18,16 +18,38 @@ func enforceSingleInstance() {
 // `tower mcp --self-test`   -> list the tools and read one account, then exit.
 // no args                   -> menubar app.
 let args = Set(CommandLine.arguments.dropFirst())
+// The one mode that runs, decided once. The demo gate below and the dispatch after it
+// both read this value, so the gate always judges the verb that actually runs.
+let verb = DemoMode.dispatched(args: args)
 
-if args.contains("selftest") {
+if verb == .selftest {
     exit(CLI.selftest())
+}
+
+// TOWER_DEMO=1 promises no real credential is read. Only the MCP server and panelshot
+// are wired for it (TowerMCPService.Environment.demo, the cached panel); status, rotate,
+// login-item and the app read the Keychain or the network directly, so they refuse
+// instead of quietly running live. TOWER_DEMO without TOWER_SUPPORT_DIR refuses too.
+if ProcessInfo.processInfo.environment["TOWER_DEMO"] == "1" {
+    if DemoMode.isMisconfigured() {
+        FileHandle.standardError.write(Data("TOWER_DEMO=1 needs TOWER_SUPPORT_DIR pointing at a demo store\n".utf8))
+        exit(2)
+    }
+    if let why = DemoMode.refusal(args: args) {
+        FileHandle.standardError.write(Data((why + "\n").utf8))
+        exit(2)
+    }
 }
 
 // Every mode below reads the store or the settings, so a pre-v0.1 install is carried
 // over first. A no-op once done.
 LegacyInstallMigration.runAtLaunch()
 
-if args.contains("mcp") {
+switch verb {
+case .selftest:
+    exit(CLI.selftest())
+
+case .mcp:
     // A first Keychain read can raise the dialog, exactly as `tower status` can, so the
     // server never reads a token until a tool that needs one is called.
     let service = TowerMCPService(env: .live())
@@ -45,13 +67,11 @@ if args.contains("mcp") {
     }
     sem.wait()
     exit(0)
-}
 
-if args.contains("rotate") {
+case .rotate:
     exit(CLI.rotate())
-}
 
-if args.contains("login-item") {
+case .loginItem:
     if args.contains("on") || args.contains("off") {
         if let err = LaunchAtLogin.set(args.contains("on")) {
             print("failed: \(err)")
@@ -60,9 +80,8 @@ if args.contains("login-item") {
     }
     print("start at login: \(LaunchAtLogin.isEnabled ? "ENABLED" : "disabled")")
     exit(0)
-}
 
-if args.contains("status") {
+case .status:
     let sem = DispatchSemaphore(value: 0)
     Task {
         await CLI.run()
@@ -70,9 +89,8 @@ if args.contains("status") {
     }
     sem.wait()
     exit(0)
-}
 
-if args.contains("panelshot") {
+case .panelshot:
     let out = CommandLine.arguments.dropFirst().first(where: { $0.hasSuffix(".png") })
         ?? "/tmp/tower-panel.png"
     // The renderer must live on the main actor, so block on the run loop rather
@@ -85,12 +103,13 @@ if args.contains("panelshot") {
     }
     while !done { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
     exit(code)
-}
 
-enforceSingleInstance()
-MainActor.assumeIsolated {
-    let app = NSApplication.shared
-    let delegate = AppDelegate()
-    app.delegate = delegate
-    app.run()
+case .app:
+    enforceSingleInstance()
+    MainActor.assumeIsolated {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
+    }
 }

@@ -343,6 +343,26 @@ your own, write `nicknames.json` in the same directory, for example
 The OpenRouter key comes from `OPENROUTER_API_KEY`, or from a command you set
 (see the README, "Configuration").
 
+`TOWER_SUPPORT_DIR` points Tower at another store directory instead of
+`~/Library/Application Support/Tower`. `TOWER_DEMO=1`, honoured only together with
+`TOWER_SUPPORT_DIR`, makes that store a demo: the active login is read from
+`<dir>/demo-credential.json` (`{"accessToken": "...", "emailHint": "..."}`) and never
+from the Keychain, refresh never reaches the network, the quota mirror stays inside the
+store, and this Mac's Chrome profiles, agent lanes, sessions, OpenRouter key, login item
+and settings are not read or changed. Without the file the active seat is unverified.
+Only `tower mcp` and `tower panelshot` run in demo mode; other verbs, and `TOWER_DEMO=1`
+without `TOWER_SUPPORT_DIR`, exit 2. `python3 scripts/demo-store.py <dir> --active work`
+writes an invented store whose `active-seat.json` is bound to its invented credential:
+
+```
+python3 scripts/demo-store.py /tmp/tower-demo --active work
+TOWER_DEMO=1 TOWER_SUPPORT_DIR=/tmp/tower-demo tower mcp
+```
+
+When Tower cannot verify which seat the CLI holds, `tower_advice` keeps `kind`
+`activeUnknown` and its summary names the roomiest seat and its room, for example
+`no verified active seat; most room: side (88%)`. The panel banner reads the same.
+
 ## Caveats
 
 - `/api/oauth/usage` is an **undocumented** endpoint used by the Claude Code client. It
