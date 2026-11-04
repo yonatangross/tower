@@ -124,7 +124,7 @@ struct ProviderReaders: Sendable {
         codex: { await Task.detached(priority: .utility) { CodexLive.fetch() }.value },
         lanes: { allowed in
             await Task.detached(priority: .utility) {
-                AgentLane.readAll(museRunner: AgentLane.runMuseUsage).filter { allowed.contains($0.key) }
+                AgentLane.readAll(museRunner: AgentLane.runMuseUsage, only: allowed)
             }.value
         })
 }

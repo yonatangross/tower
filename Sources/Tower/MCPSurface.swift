@@ -52,7 +52,11 @@ struct TowerMCPService: MCPService {
                 now: { Date() },
                 verifiedActiveEmail: { Store.shared.verifiedActiveSeat()?.email },
                 switchProfiles: { Store.shared.switchProfilesByEmail() },
-                lanes: { AgentLane.readAll(museRunner: AgentLane.runMuseUsage) },
+                // Only the lanes the operator turned ON are read; an OFF Muse never spawns.
+                lanes: {
+                    AgentLane.readAll(museRunner: AgentLane.runMuseUsage,
+                                      only: ProviderGate.current(defaults: TowerPreferences.shared).lanes)
+                },
                 sessions: { await AgentProbe.fetch() },
                 refresh: { await Refresher.refreshActive() },
                 activeCredential: keychainCredential,
@@ -1535,7 +1539,9 @@ struct TowerMCPService: MCPService {
     func lanes() -> MCPToolResult {
         let now = env.now()
         let outcomes = env.lanes()
-        let lanes: [JSON] = AgentLane.lanes.map { provider in
+        // An agent sees only the lanes the operator turned ON, whatever the reader returned.
+        let on = ProviderGate.current(defaults: env.defaults).lanes
+        let lanes: [JSON] = AgentLane.lanes.filter { on.contains($0) }.map { provider in
             let outcome = outcomes[provider] ?? .notConfigured
             var row: [String: JSON] = [
                 "provider": .string(provider.rawValue), "label": .string(provider.label),

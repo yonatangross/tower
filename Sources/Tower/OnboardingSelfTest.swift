@@ -82,6 +82,35 @@ enum OnboardingSelfTest {
         check("refresh: everything ON calls every reader once",
               everything.cursor == 1 && everything.openRouter == 1 && everything.codex == 1 && everything.laneCalls == 1, "")
 
+        // b88 HOLD on #20: the live lane reader read every lane and filtered after, so Muse
+        // OFF still spawned `muse usage`; tower_lanes over MCP ignored the toggles.
+        let laneHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-lanes-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: laneHome) }
+        let fakeMuse = AgentLane.binary(.muse, home: laneHome)
+        try? FileManager.default.createDirectory(at: fakeMuse.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: fakeMuse.path, contents: Data("#!/bin/sh\n".utf8),
+                                       attributes: [.posixPermissions: 0o755])
+        var museRuns = 0
+        let devinOnly = AgentLane.readAll(home: laneHome, env: [:],
+                                          museRunner: { _ in museRuns += 1; return nil }, only: [.devin])
+        check("lanes: Muse OFF never runs muse usage, even with another lane ON",
+              museRuns == 0 && Set(devinOnly.keys) == [.devin], "muse runs \(museRuns), read \(devinOnly.keys)")
+        let (laneDefaults, laneID) = suite("mcp-lanes")
+        defer { UserDefaults.standard.removePersistentDomain(forName: laneID) }
+        laneDefaults.set(false, forKey: ProviderToggles.setupPendingKey)
+        for p in WatchedProvider.allCases { ProviderToggles.set(p, p == .devin, defaults: laneDefaults) }
+        var mcpEnv = TowerMCPService.Environment.demo(supportDirectory: laneHome)
+        mcpEnv.defaults = laneDefaults
+        mcpEnv.lanes = { Dictionary(uniqueKeysWithValues: AgentLane.lanes.map { ($0, AgentLane.Outcome.notConfigured) }) }
+        let mcpListed = TowerMCPService(env: mcpEnv).lanes().structuredContent?["lanes"]
+        let listedProviders: [String] = {
+            guard case .array(let rows)? = mcpListed else { return [] }
+            return rows.compactMap { if case .string(let s) = $0["provider"] { return s } else { return nil } }
+        }()
+        check("tower_lanes lists only the lanes that are ON",
+              listedProviders == [Provider.devin.rawValue], "\(listedProviders)")
+
         // 3 and 6. First launch: pending until answered, nothing read before Start watching,
         // and it opens once.
         let (fresh, freshID) = suite("fresh")
