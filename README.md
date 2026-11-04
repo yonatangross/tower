@@ -229,8 +229,10 @@ in your macOS Keychain without a dialog, because the item is created by the same
 `security` tool that later reads it:
 
 ```bash
-# Once: store the key (the security tool becomes the item's trusted reader).
-security add-generic-password -a "$USER" -s OpenRouter -w <your-openrouter-key>
+# Once: store the key. With -w last, security asks for the key instead of taking
+# it on the command line, so it never lands in your shell history; -U updates an
+# existing item. The security tool becomes the item's trusted reader.
+security add-generic-password -U -a "$USER" -s OpenRouter -w
 # Tell Tower how to read it; this runs on every refresh.
 defaults write ai.yonyon.tower openRouterKeyCommand -array \
   /usr/bin/security find-generic-password -a "$USER" -s OpenRouter -w
