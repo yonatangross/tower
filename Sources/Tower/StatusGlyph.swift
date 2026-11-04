@@ -27,6 +27,19 @@ enum StatusGlyph {
         return image
     }
 
+    /// Where `tower selftest` checks the art: the running bundle's Resources when they ship
+    /// the glyph (a release build, compiled on CI, whose `#filePath` names a path on that
+    /// machine), otherwise the checkout's `Resources/StatusGlyph` (a `swift build` run).
+    static func selftestDirectory(bundleResources: URL?, sourceFile: String) -> URL {
+        if let bundleResources,
+           FileManager.default.fileExists(atPath: bundleResources.appendingPathComponent("\(name).png").path) {
+            return bundleResources
+        }
+        return URL(fileURLWithPath: sourceFile)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/StatusGlyph")
+    }
+
     /// The glyph shipped in the running bundle, or nil (a `swift run` build has no bundle
     /// resources; the status item then shows its title alone, as before).
     static func bundled(_ bundle: Bundle = .main) -> NSImage? {

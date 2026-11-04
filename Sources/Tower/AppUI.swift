@@ -760,7 +760,7 @@ enum PanelShotHydration {
                 hint: diskIdentityHint(), accounts: accounts),
             openRouter: OpenRouter.persistedOutcome(
                 from: accounts, lastSuccessAt: openRouterLastSuccess()),
-            laneOutcomes: lanes())
+            laneOutcomes: lanesFromStore(lanes(), accounts: accounts))
     }
 }
 
