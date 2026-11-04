@@ -327,15 +327,17 @@ its row and quota mirror. If usage cannot be read, its percentages remain unknow
 retirement written while profile verification is in flight takes precedence; Tower asks
 for `/login` and another refresh instead of silently undoing that change.
 
-TypeSafe sells prepaid credits per decision model, so the money section shows a TypeSafe
-group beside OpenRouter: one header, then a Jev credit row and a Clef credit row. Neither
-can be read live: TypeSafe's API publishes no balance or billing endpoint. Each figure is
-entered by hand, carries its own as-of day, turns amber under USD 10 and red under USD 5,
-and greys out after three days. Read the balances off the TypeSafe console's Billing page,
+Two decision models sell prepaid credits, so the money section shows a credits group
+beside OpenRouter: one header, then a row for TypeSafe's Jev and a row for Cloudflare's
+Clef (Workers AI, Jev-API compatible). Neither can be read live: neither vendor publishes a
+balance endpoint Tower can call. Each figure is entered by hand, carries its own as-of day,
+turns amber under USD 10 and red under USD 5, and greys out after three days. Read Jev's
+balance off the TypeSafe console's Billing page and Clef's off the Cloudflare dashboard,
 then set each with the MCP tool `tower_config_set`: `key` `typesafe.balanceUSD` for Jev or
-`typesafe.clef.balanceUSD` for Clef, `value` the dollars left. Tower dates the entry today;
-`null` clears it. A model with no entry has no row, and with neither entered the group is
-hidden. `tower status` prints both under its `typesafe` heading.
+`cloudflare.clef.balanceUSD` for Clef (the older `typesafe.clef.balanceUSD` still works),
+`value` the dollars left. Tower dates the entry today; `null` clears it. A model with no
+entry has no row, and with neither entered the group is hidden. `tower status` prints both
+under its `credits` heading, each row naming its vendor.
 
 Nicknames default to the first six characters of the email's local part. To pick
 your own, write `nicknames.json` in the same directory, for example

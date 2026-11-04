@@ -982,6 +982,47 @@ enum TypeSafe {
             }
         }
 
+        /// Who makes the model. Jev is TypeSafe's; Clef is Cloudflare's (Workers AI,
+        /// Jev-API compatible, launched 2026-10-01), so no label may file it under TypeSafe.
+        var vendor: String {
+            switch self {
+            case .jev: return "TypeSafe"
+            case .clef: return "Cloudflare"
+            }
+        }
+
+        /// Where a person reads the balance to re-enter it.
+        var billingSource: String {
+            switch self {
+            case .jev: return "TypeSafe console Billing"
+            case .clef: return "the Cloudflare dashboard (Workers AI)"
+            }
+        }
+
+        /// The `tower_config_set` key a person types. Clef's names its vendor; the storage
+        /// pair below keeps its first names, so an entry made before this still shows.
+        var configKey: String {
+            switch self {
+            case .jev: return "typesafe.balanceUSD"
+            case .clef: return "cloudflare.clef.balanceUSD"
+            }
+        }
+
+        /// Earlier config keys that still set this model, so a script or prompt written
+        /// against v0.1.0 keeps working.
+        var legacyConfigKeys: [String] {
+            switch self {
+            case .jev: return []
+            case .clef: return ["typesafe.clef.balanceUSD"]
+            }
+        }
+
+        /// The model a config key sets, the current key or an alias; nil for any other key.
+        static func forConfigKey(_ key: String) -> Model? {
+            allCases.first { $0.configKey == key || $0.legacyConfigKeys.contains(key) }
+        }
+
+
         /// Where the entered figure lives. Jev keeps the keys it had before Clef existed,
         /// so an entry made then still shows; Clef gets its own namespaced pair.
         var balanceKey: String {
@@ -1056,7 +1097,7 @@ enum TypeSafe {
                             defaults: UserDefaults = TowerPreferences.shared) -> String? {
         guard isEntered(model: model, defaults: defaults),
               balanceIsStale(model: model, now: now, defaults: defaults) else { return nil }
-        return "read TypeSafe console Billing, then tower_config_set \(model.balanceKey) <usd>"
+        return "read \(model.billingSource), then tower_config_set \(model.configKey) <usd>"
     }
 
     /// Traffic-light vocabulary on the entered balance. Strictly UNDER the lines: exactly
@@ -1090,7 +1131,7 @@ enum TypeSafe {
     static func statusRowText(model: Model = .jev, now: Date = Date(),
                               defaults: UserDefaults = TowerPreferences.shared) -> String {
         guard let usd = entry(model: model, defaults: defaults)?.usd else {
-            return "no balance entered (tower_config_set \(model.balanceKey) <usd>)"
+            return "no balance entered (tower_config_set \(model.configKey) <usd>)"
         }
         let staleMark = balanceIsStale(model: model, now: now, defaults: defaults) ? ", stale" : ""
         return "balance \(money(usd)) (\(enteredLabel(model: model, now: now, defaults: defaults)))\(staleMark), not live"
