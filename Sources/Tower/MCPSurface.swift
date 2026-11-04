@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 /// The Tower MCP surface: every tool, resource and prompt in docs/mcp-surface.md,
 /// implemented over the same Store, vault, refresher and readers the panel and the CLI
@@ -118,9 +119,11 @@ struct TowerMCPService: MCPService {
     }
 
     let env: Environment
+    let retrustCooldown: RetrustCooldown
 
-    init(env: Environment) {
+    init(env: Environment, retrustCooldown: RetrustCooldown = .shared) {
         self.env = env
+        self.retrustCooldown = retrustCooldown
     }
 
     // MARK: MCPService identity
@@ -1755,11 +1758,33 @@ struct TowerMCPService: MCPService {
         let stderr: String
     }
 
-    static func runChild(_ executable: URL, _ args: [String], timeout: TimeInterval) async -> ChildResult? {
+    /// The pixel size of the rendered panel, read from the PNG itself. The `wrote` line is
+    /// for people and changed shape in #23 ("(701x800 pt, 2103x2400 px)"), which made the
+    /// old line parser report 0x0. `stdout` is kept only so callers need not change.
+    static func panelshotSize(stdout: String, png: Data) -> (Int, Int) {
+        guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int
+        else { return (0, 0) }
+        return (width, height)
+    }
+
+    /// The render runs at the screen's own scale: a TOWER_PANELSHOT_SCALE set on the server
+    /// (for a video capture, say) must not silently enlarge every image an agent asks for.
+    static func panelshotChildEnvironment(
+        _ env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        env.filter { $0.key != PanelShot.scaleEnvKey }
+    }
+
+    static func runChild(_ executable: URL, _ args: [String], timeout: TimeInterval,
+                         environment: [String: String]? = nil) async -> ChildResult? {
         await Task.detached(priority: .utility) { () -> ChildResult? in
             let p = Process()
             p.executableURL = executable
             p.arguments = args
+            if let environment { p.environment = environment }
             let out = Pipe(), err = Pipe()
             p.standardOutput = out
             p.standardError = err
@@ -1802,15 +1827,12 @@ struct TowerMCPService: MCPService {
         var args = ["panelshot", out.path]
         if light { args.append("light") }
         if expand { args.append("expand") }
-        guard let result = await Self.runChild(exe, args, timeout: 60), result.status == 0,
+        guard let result = await Self.runChild(exe, args, timeout: 60,
+                                               environment: Self.panelshotChildEnvironment()),
+              result.status == 0,
               let png = try? Data(contentsOf: out)
         else { return .refused("ChildFailed", "tower panelshot did not produce an image") }
-        // "wrote /path (430x612)"
-        var width = 0, height = 0
-        if let open = result.stdout.lastIndex(of: "("), let close = result.stdout.lastIndex(of: ")"), open < close {
-            let dims = result.stdout[result.stdout.index(after: open)..<close].split(separator: "x")
-            if dims.count == 2 { width = Int(dims[0]) ?? 0; height = Int(dims[1]) ?? 0 }
-        }
+        let (width, height) = Self.panelshotSize(stdout: result.stdout, png: png)
         return MCPToolResult(
             content: [
                 .text("panel rendered \(width)x\(height), \(png.count) bytes"),
@@ -1897,6 +1919,10 @@ struct TowerMCPService: MCPService {
     /// only opens those dialogs; it never answers them. Refused when the vault may not
     /// prompt (an unsigned build, or a demo, whose vault has no real Keychain).
     func retrust() -> MCPToolResult {
+        if let wait = retrustCooldown.refusal(now: env.now()) {
+            return .refused("RetrustCooldown",
+                            "tower_retrust ran less than \(Int(RetrustCooldown.window)) s ago; try again in \(wait) s")
+        }
         switch env.vault.retrust() {
         case .failure(let error):
             return .refused("RetrustRefused", error.message)
