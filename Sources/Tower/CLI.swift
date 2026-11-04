@@ -2269,6 +2269,9 @@ enum CLI {
                       && Set(TowerMCPService.verbToTool.keys) == Set(cliVerbs.map(\.rawValue)))
         }
 
+        // First run and Settings (approved-design/onboarding-mockup.txt).
+        OnboardingSelfTest.run(check)
+
         print("  " + String(repeating: "─", count: 56))
         print(failures == 0 ? "  ✅ all passed\n" : "  ❌ \(failures) failed\n")
         return failures == 0 ? 0 : 1

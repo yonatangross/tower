@@ -158,10 +158,13 @@ read it the way `tower status` does. The full enumeration, with a
 
 ## Alerts
 
-Crossing 80%, 95% and 100% of either window posts a native notification, at most once
-per level per window. Bookkeeping is keyed by the window's `resets_at`, so a new window
-starts silent on its own and stale keys self-prune. macOS will ask for notification
-permission on first launch.
+Crossing a window's first warning level, then 95% and 100%, posts a native
+notification, at most once per level per window. The first level is set per window in
+Settings ▸ Alerts: 5h 80%, 7d 90% and Fable 90% by default (`alerts.warn.5h`,
+`alerts.warn.7d`, `alerts.warn.fable`, 50 to 94). Notifications can be turned off there
+(`alerts.notify`). Bookkeeping is keyed by the window's `resets_at`, so a new window
+starts silent on its own and stale keys self-prune. macOS asks for notification
+permission on first launch while notifications are on.
 
 ## How it works
 
@@ -314,6 +317,25 @@ usable seats; it produces no login plan when every mapped seat is stale or cappe
 
 A remembered seat polls until its access token expires; the freshness rules here are about
 the capture age, not the credential. Staleness of seats Tower cannot poll at all remains #20.
+
+## First run and Settings
+
+You choose what Tower watches. On a fresh install the first run lists what Tower found
+installed (by file and binary names only: no token, no Keychain item, no network) with one
+toggle per provider, pre-filled ON for what it found. Nothing is read until you press
+"Start watching"; "Skip, set up later" leaves everything off. An upgrade that already has
+store rows keeps every provider on and never sees the first run.
+
+Settings (the panel's "Settings…" button) holds the same choices, always editable:
+Providers (one toggle each; OFF stops reading at once and hides the rows), Accounts (forget
+one Claude seat, which retires it and drops its Tower Keychain item; add one by running
+`claude` then `/login`), Alerts, General (start at login, remember seats, text size) and
+Agents (MCP on or off, plus the two lines to register it). With MCP off, every `tower mcp`
+tool answers `MCPDisabled: MCP is off in Settings`.
+
+Over MCP, `tower_config_get` reports these under `settings.watch`, and `tower_config_set`
+takes `providers.<id>.enabled`, `mcp.enabled`, `alerts.warn.5h`, `alerts.warn.7d`,
+`alerts.warn.fable` and `alerts.notify`.
 
 ## Configuration
 
