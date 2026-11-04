@@ -307,7 +307,7 @@ final class LimitsModel: ObservableObject {
             openRouterLastSuccess: { DemoMode.openRouterLastSuccess() },
             // A demo shot shows the invented store only, not this Mac's agent CLIs. The one
             // exception is an invented Pi directory the demo names with TOWER_PI_DIR.
-            lanes: DemoMode.supportDirectory() == nil ? { AgentLane.readAll() } : { DemoMode.lanes() })
+            lanes: DemoMode.supportDirectory() == nil ? { PanelShotHydration.liveLanes() } : { DemoMode.lanes() })
         accounts = state.accounts
         switchProfiles = state.switchProfiles
         activeEmail = state.activeEmail
@@ -722,6 +722,16 @@ final class LimitsModel: ObservableObject {
 /// The panelshot data boundary. Its callers supply only local, synchronous reads;
 /// no refresh closure can enter this path.
 enum PanelShotHydration {
+    /// The lanes a live render reads: only the ones the operator turned ON (b87 on #26),
+    /// so `tower panelshot` and `tower_panelshot` never read an OFF lane.
+    static func liveLanes(
+        gate: () -> ProviderGate = { ProviderGate.current() },
+        read: (Set<Provider>) -> [Provider: AgentLane.Outcome] = { AgentLane.readAll(only: $0) }
+    ) -> [Provider: AgentLane.Outcome] {
+        let allowed = gate().lanes
+        return allowed.isEmpty ? [:] : read(allowed)
+    }
+
     struct State {
         let accounts: [AccountSnapshot]
         let switchProfiles: [String: ChromeProfileHint]

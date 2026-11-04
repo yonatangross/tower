@@ -108,6 +108,11 @@ enum OnboardingSelfTest {
             guard case .array(let rows)? = mcpListed else { return [] }
             return rows.compactMap { if case .string(let s) = $0["provider"] { return s } else { return nil } }
         }()
+        var panelshotAsked: [Set<Provider>] = []
+        _ = PanelShotHydration.liveLanes(gate: { ProviderGate(enabled: [.devin]) },
+                                         read: { panelshotAsked.append($0); return [:] })
+        check("panelshot reads only the lanes that are ON",
+              panelshotAsked == [[.devin]], "\(panelshotAsked)")
         check("tower_lanes lists only the lanes that are ON",
               listedProviders == [Provider.devin.rawValue], "\(listedProviders)")
 
