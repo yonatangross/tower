@@ -1422,8 +1422,26 @@ enum CLI {
               BrailleMeterMath.text(percent: 54, cells: 5) == "⣿⣿⣶⣀⣀"
               && BrailleMeterMath.text(percent: 0, cells: 3) == "⣀⣀⣀"
               && BrailleMeterMath.text(percent: 100, cells: 3) == "⣿⣿⣿")
-        check("seat board uses a provider-neutral meter heading",
-              SeatBoard.meterHeading == "usage pools")
+        // Every quota number says which it is (seen 2026-11-04: a bare Codex "0%" was read
+        // as "0 % room" by another tool). The panel's pool column is USED, the room column
+        // is ROOM, and both headings say so; `tower status` puts the word on every number.
+        check("seat board headings name used and room",
+              SeatBoard.meterHeading == "used" && SeatBoard.roomHeading == "room")
+        var codexZero = AccountSnapshot(email: "c@x", nickname: "cx", plan: "pro")
+        codexZero.provider = .codex
+        codexZero.capturedAt = Date().addingTimeInterval(-60)
+        codexZero.weeklyPct = 0
+        codexZero.weeklyResetsAt = Date().addingTimeInterval(3 * 86_400)
+        let codexLines = statusRowLines(codexZero, activeEmail: nil, refreshError: nil, now: Date())
+        check("tower status says a Codex 0 is used, not room",
+              codexLines.contains { $0.contains("7d") && $0.contains("0% used") }, codexLines.joined(separator: " | "))
+        var laneRow = AccountSnapshot(email: AgentLane.mirrorEmail(.devin), nickname: "devin", plan: "Pro")
+        laneRow.provider = .devin
+        laneRow.capturedAt = Date().addingTimeInterval(-60)
+        laneRow.scoped = [ScopedLimit(label: "Daily", percent: 35, resetsAt: Date().addingTimeInterval(3600))]
+        let laneLines = agentLaneStatusRowLines(laneRow, now: Date())
+        check("tower status says a lane window is used",
+              laneLines.contains { $0.contains("Daily") && $0.contains("35% used") }, laneLines.joined(separator: " | "))
         // Before the first refresh nothing was attempted, so nothing may read as failed.
         check("fleet lines before the first refresh say not read yet",
               fleetLines(blast: nil, machine: nil, read: .notYet)
@@ -2332,11 +2350,11 @@ enum CLI {
                 pct: window.percent, resetsAt: window.resetsAt,
                 capturedAt: account.capturedAt, now: now)
             let mark = trust == .stale ? "~" : ""
-            let text = effective.pct.map { mark + String(Int($0.rounded())) + "%" } ?? "?"
+            let text = effective.pct.map { mark + String(Int($0.rounded())) + "% used" } ?? "?"
             let when = effective.reset ? "reset ✓"
                 : (window.resetsAt.map { "resets " + clock($0) } ?? "-")
             lines.append("      " + pad(window.label, 8) + bar(effective.pct, trust: trust)
-                + " " + pad(text, 6) + when)
+                + " " + pad(text, 11) + when)
         }
         var notes = ["read " + age(account.capturedAt, now: now)]
         if let source = account.source { notes.append(source) }
@@ -2399,10 +2417,10 @@ enum CLI {
                        _ trust: Trust) -> String {
             // "~" marks a number extrapolated from an old capture rather than read now.
             let mark = trust == .stale ? "~" : ""
-            let percentage = value.pct.map { mark + String(Int($0.rounded())) + "%" } ?? "?"
+            let percentage = value.pct.map { mark + String(Int($0.rounded())) + "% used" } ?? "?"
             let when = value.reset ? "reset ✓" : (resetsAt.map { "resets " + clock($0) } ?? "-")
             return "      " + pad(label, account.kind == .cursor ? 15 : 6) + bar(value.pct, trust: trust)
-                + " " + pad(percentage, 6) + when
+                + " " + pad(percentage, 11) + when
         }
 
         // Only windows the provider actually publishes. Codex reports a 7d window and
