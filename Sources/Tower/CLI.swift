@@ -148,7 +148,6 @@ enum CLI {
         return RotateReport(code: 0, seats: split.active, lines: lines)
     }
 
-    /// Prints an advisory manual-login plan without changing the active Claude credential.
     /// What `tower retrust` prints and its exit code: the counts on success (exit 0), the
     /// vault's own refusal on failure (exit 1), for example an unsigned build that may
     /// never show the Keychain dialog. The running app picks the seats up by itself: it
@@ -163,6 +162,7 @@ enum CLI {
         }
     }
 
+    /// Prints an advisory manual-login plan without changing the active Claude credential.
     static func rotate() -> Int32 {
         let now = Date()
         let report = rotateReport(
@@ -2476,6 +2476,32 @@ enum CLI {
             check("tower_retrust in a demo is refused, with no Keychain dialog",
                   demoRetrust.isError && demoRetrust.structuredContent?["error"]["code"] == "RetrustRefused",
                   "\(demoRetrust.content)")
+            // b87 on #22: an agent may raise the Re-trust dialog at most once a minute.
+            var coolEnv = TowerMCPService.Environment.demo(supportDirectory: demoDir)
+            var coolNow = Date(timeIntervalSince1970: 1_800_000_000)
+            coolEnv.now = { coolNow }
+            let cooled = TowerMCPService(env: coolEnv, retrustCooldown: RetrustCooldown())
+            _ = cooled.retrust()
+            coolNow = coolNow.addingTimeInterval(10)
+            let second = cooled.retrust()
+            coolNow = coolNow.addingTimeInterval(RetrustCooldown.window)
+            let later = cooled.retrust()
+            check("tower_retrust refuses a second call within a minute, then allows one",
+                  second.structuredContent?["error"]["code"] == "RetrustCooldown"
+                      && later.structuredContent?["error"]["code"] != "RetrustCooldown",
+                  "\(second.content) / \(later.content)")
+            // b87 on #23: the MCP render's size comes from the PNG, so the new `wrote` line
+            // (points and pixels) cannot zero it, and the server's scale does not leak in.
+            let tinyRep = PanelShot.bitmap(for: NSRect(x: 0, y: 0, width: 3, height: 2), scale: 2)
+            let tinyPNG = tinyRep?.representation(using: .png, properties: [:]) ?? Data()
+            let shotSize = TowerMCPService.panelshotSize(
+                stdout: "wrote /tmp/x.png (2x2 pt, 6x4 px)\n", png: tinyPNG)
+            check("tower_panelshot reads its size from the PNG, not the wrote line",
+                  shotSize == (6, 4), "\(shotSize)")
+            let childEnv = TowerMCPService.panelshotChildEnvironment(
+                [PanelShot.scaleEnvKey: "3", "HOME": "/Users/x"])
+            check("tower_panelshot never passes the server's TOWER_PANELSHOT_SCALE to its render",
+                  childEnv[PanelShot.scaleEnvKey] == nil && childEnv["HOME"] == "/Users/x", "\(childEnv)")
             // 2026-11-04: LAContext.interactionNotAllowed did not stop a legacy keychain
             // dialog (measured); the process switch did. Background reads run with it off,
             // Re-trust alone turns it on and off again.
