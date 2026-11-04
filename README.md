@@ -96,34 +96,21 @@ Terminal alternative is in
 [troubleshooting](docs/playbooks/troubleshooting.md#macos-blocks-the-first-launch).
 To remove Tower, follow [uninstall](docs/playbooks/uninstall.md).
 
-### Upgrading from a build before v0.1
+### Keychain prompts
 
-Builds before v0.1 installed as `ai.yonatan-hq.claude-limits` with the executable
-`HQClaudeLimits`; v0.1 is `ai.yonyon.tower` with the executable `Tower`. On its
-first launch Tower moves `~/Library/Application Support/HQClaudeLimits/` into
-`~/Library/Application Support/Tower/` and copies your settings to the new id,
-never overwriting anything the new install already has. `scripts/install.sh`
-also stops the old process, moves start-at-login to the new id when it was on,
-and repoints a `~/.local/bin/tower` link that named the old executable.
+Tower shows the macOS Keychain dialog only when you press **Re-trust** (beside
+**Forget** in the panel), run `tower retrust`, or an agent calls `tower_retrust`.
+Launches, background refreshes, `tower status` and `tower mcp` never show it, and
+Tower never asks for your login password. Until you press Re-trust after an update,
+Tower reads only the seat you are signed into; the other remembered seats wait.
 
-What macOS ties to the old id and asks for once more:
+| Situation | Keychain prompts |
+| --- | --- |
+| Fresh install | 0 |
+| A new release (each release is a new ad hoc signature) | 1, when you press Re-trust |
+| Background refresh, CLI, MCP | 0, always |
 
-- **Keychain.** Until you press **Re-trust** (beside **Forget** in the panel),
-  Tower reads only the seat you are signed into, through the Claude Code
-  credential; the other remembered seats stay unread. Nothing else ever shows the
-  Keychain dialog: launches, background refreshes, `tower status` and `tower mcp`
-  never do, and Tower never asks for your login password.
-
-  | Situation | Keychain prompts |
-  | --- | --- |
-  | Fresh install | 0 |
-  | First Re-trust after upgrading from a build before v0.1 | one **Always Allow** per remembered seat, once (macOS gives each old item its own access list) |
-  | Any later identity change (a new release, which is ad hoc signed) | 1, when you press Re-trust |
-  | Background refresh, CLI, MCP | 0, always |
-- **Privacy prompts.** Any permission macOS granted the old build (for example
-  access to another app's data) is asked for again the first time Tower needs it.
-- **Start at login**, if you installed by unzipping rather than with
-  `scripts/install.sh`: run `tower login-item on` once.
+Start at login, if you installed by unzipping: run `tower login-item on` once.
 
 ## Build from source
 
@@ -158,8 +145,12 @@ apps installed on your Mac. Without them each row shows a two-letter tile.
 
 ## MCP
 
-`tower mcp` is a stdio MCP server in the same binary. Register it with your agent,
-for example in a project `.mcp.json`:
+`tower mcp` is a stdio MCP server in the same binary. It runs locally on your
+Mac, started by your agent as a child process; it opens no network port and sends
+nothing to Tower's author or anyone else. Its only network requests are the ones
+the app makes, to the providers' own usage APIs, and only when a tool such as
+`tower_refresh` asks for one. Register it with your agent, for example in a
+project `.mcp.json`:
 
 ```json
 {
@@ -224,14 +215,18 @@ into Claude Code at least once.
 | Decision-model credits (TypeSafe's Jev, Cloudflare's Clef) | entered by hand, neither publishes a balance API: the MCP tool `tower_config_set` with `typesafe.balanceUSD` (Jev) or `cloudflare.clef.balanceUSD` (Clef; the older `typesafe.clef.balanceUSD` still works), `null` to clear |
 | Text size | the panel's **Text size** picker, or `TOWER_TEXT_SIZE=s\|m\|l\|xl` |
 | Start at login | the panel checkbox, or `tower login-item on` |
-| Agent lane dispatches (optional) | a directory holding the `dispatch-worktrees.jsonl` and `lanes.jsonl` ledgers a dispatcher writes (for example a herdr plugin): `TOWER_DISPATCH_LEDGER_DIR`, herdr's `HERDR_PLUGIN_STATE_DIR`, or `defaults write ai.yonyon.tower dispatchLedgerDirectory <dir>`. Without one the lane rows show no dispatch |
 
-OpenRouter key from a password manager, run without a shell, never stored by
-Tower:
+`ai.yonyon.tower` in the commands below is Tower's bundle identifier (the
+publisher is yonyon.ai). `defaults write` uses it to find Tower's settings on your
+Mac. It is not an account, an email or a web address, and nothing is sent to it.
+
+OpenRouter key from a password manager: Tower runs the command you give it,
+without a shell, and never stores the key. Any command that prints the key
+works; this one reads it from your macOS Keychain:
 
 ```bash
 defaults write ai.yonyon.tower openRouterKeyCommand -array \
-  /opt/homebrew/bin/op read op://<vault>/<item>/credential
+  /usr/bin/security find-generic-password -s OpenRouter -w
 # Optional: a cache file your command writes; Tower deletes it once on a 401.
 defaults write ai.yonyon.tower openRouterKeyCacheFile ~/path/to/cache
 ```
