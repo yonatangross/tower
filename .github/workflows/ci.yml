@@ -49,3 +49,9 @@ jobs:
         run: |
           swift test
           .build/debug/Tower selftest
+      # The assembled bundle, the way a release builds it: Tower's own icon and
+      # menu-bar glyph are in Contents/Resources and Info.plist names AppIcon.
+      - name: Bundle icon
+        run: |
+          TOWER_BRAND_MARKS=off scripts/build-app.sh
+          /bin/bash scripts/test-bundle-icon.sh

@@ -2416,6 +2416,20 @@ enum CLI {
                       && Set(TowerMCPService.verbToTool.keys) == Set(cliVerbs.map(\.rawValue)))
         }
 
+        // Tower's own app icon and menu-bar glyph (the Beacon). The bundle half (Info.plist
+        // keys, AppIcon.icns) is checked on a built bundle by scripts/test-bundle-icon.sh;
+        // the glyph half is checked here against the repo's art.
+        let glyphDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/StatusGlyph")
+        let glyph = StatusGlyph.image(in: glyphDir)
+        check("the menu-bar glyph TowerGlyph loads as an 18 pt template image",
+              StatusGlyph.name == "TowerGlyph" && glyph?.isTemplate == true
+                  && glyph?.size == StatusGlyph.pointSize,
+              "\(String(describing: glyph))")
+        check("the menu-bar glyph carries a 1x and a 2x representation",
+              (glyph?.representations.count ?? 0) >= 2)
+
         print("  " + String(repeating: "─", count: 56))
         print(failures == 0 ? "  ✅ all passed\n" : "  ❌ \(failures) failed\n")
         return failures == 0 ? 0 : 1

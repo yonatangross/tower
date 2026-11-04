@@ -128,6 +128,17 @@ cp ".build/release/Tower" "$APP/Contents/MacOS/$BIN_NAME"
 if [ -d "$ROOT/Resources/icons" ]; then
   cp -R "$ROOT/Resources/icons" "$APP/Contents/Resources/icons"
 fi
+# Tower's OWN app icon and menu-bar glyph (the Beacon, made by scripts/make-icon.sh).
+# These are Tower's mark, not a vendor's, so they ship in every build, release included,
+# and are not part of the BrandMarks switch below. Without the icon macOS shows a blank
+# tile in System Settings and in Tower's notifications.
+for art in AppIcon/AppIcon.icns StatusGlyph/TowerGlyph.png StatusGlyph/TowerGlyph@2x.png; do
+  if [ ! -s "$ROOT/Resources/$art" ]; then
+    echo "   ERROR: Resources/$art is missing (run scripts/make-icon.sh)" >&2
+    exit 1
+  fi
+  cp "$ROOT/Resources/$art" "$APP/Contents/Resources/"
+done
 # A checkout ships no product icons (scripts/extract-brand-marks.sh copies them
 # from installed apps). With none extracted, local means off, so the stamp in
 # Info.plist still matches what the bundle carries.
@@ -158,6 +169,8 @@ printf '%s\n' \
   "  <key>CFBundleDisplayName</key><string>$APP_NAME</string>" \
   "  <key>CFBundleIdentifier</key><string>$BUNDLE_IDENTIFIER</string>" \
   "  <key>CFBundleExecutable</key><string>$BIN_NAME</string>" \
+  '  <key>CFBundleIconFile</key><string>AppIcon</string>' \
+  '  <key>CFBundleIconName</key><string>AppIcon</string>' \
   '  <key>CFBundlePackageType</key><string>APPL</string>' \
   '  <key>CFBundleShortVersionString</key><string>0.1.1</string>' \
   "  <key>CFBundleVersion</key><string>$BUILD_SHA</string>" \
