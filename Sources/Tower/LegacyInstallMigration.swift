@@ -88,6 +88,8 @@ enum LegacyInstallMigration {
     @discardableResult
     static func runAtLaunch(env: [String: String] = ProcessInfo.processInfo.environment) -> Report {
         var report = Report()
+        // A demo (TOWER_DEMO) must not change this Mac's real settings domain either.
+        if DemoMode.supportDirectory(env: env) != nil { return report }
         if (env["TOWER_SUPPORT_DIR"] ?? "").isEmpty {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             report = migrateSupportDirectory(base: base)

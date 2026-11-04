@@ -732,19 +732,48 @@ enum CLI {
         check("reachability: status renders the entered typesafe balance, not quota windows",
               typeSafeStatus == [
                   "  typesafe    BALANCE",
-                  "      balance $12.00 (entered 09-18 · 2d ago), not live",
+                  "      jev   balance $12.00 (entered 09-18 · 2d ago), not live",
               ] && !typeSafeStatus.joined(separator: "\n").contains("7d"))
         let typeSafeLate = typeSafeDay.date(from: "2026-09-27 12:00")!
         let staleLines = typeSafeStatusRowLines(now: typeSafeLate, defaults: typeSafeDefaults)
         check("typesafe stale row says how to re-enter",
-              staleLines.count == 3 && staleLines[2].contains("tower_config_set typesafe.balanceUSD"))
+              staleLines.count == 3 && staleLines[2].contains("tower_config_set typesafe.balanceUSD "))
         TypeSafe.enter(18.40, now: typeSafeLate, defaults: typeSafeDefaults)
         check("typesafe re-entry is dated today and clears the stale hint",
               TypeSafe.entry(defaults: typeSafeDefaults) == TypeSafe.Entry(usd: 18.40, asOf: "2026-09-27")
               && typeSafeStatusRowLines(now: typeSafeLate, defaults: typeSafeDefaults) == [
                   "  typesafe    BALANCE",
-                  "      balance $18.40 (entered 09-27 · 0d ago), not live",
+                  "      jev   balance $18.40 (entered 09-27 · 0d ago), not live",
               ])
+        // TypeSafe ships two decision models. Clef has its own key pair and its own day,
+        // so entering it leaves the Jev figure alone and adds a second line under the same
+        // heading; a stale Clef names its own key, never Jev's.
+        check("typesafe clef is absent until entered and leaves jev alone",
+              TypeSafe.entry(model: .clef, defaults: typeSafeDefaults) == nil
+              && TypeSafe.enteredModels(defaults: typeSafeDefaults) == [.jev])
+        TypeSafe.enter(4.20, model: .clef, now: typeSafeDay.date(from: "2026-09-20 09:00")!,
+                       defaults: typeSafeDefaults)
+        check("typesafe status groups jev and clef under one heading",
+              typeSafeStatusRowLines(now: typeSafeLate, defaults: typeSafeDefaults) == [
+                  "  typesafe    BALANCE",
+                  "      jev   balance $18.40 (entered 09-27 · 0d ago), not live",
+                  "      clef  balance $4.20 (entered 09-20 · 7d ago), stale, not live",
+                  "            read TypeSafe console Billing, then tower_config_set typesafe.clef.balanceUSD <usd>",
+              ]
+              && TypeSafe.entry(defaults: typeSafeDefaults) == TypeSafe.Entry(usd: 18.40, asOf: "2026-09-27"))
+        // The MCP payload carries both models; it must still validate against the schema
+        // `tower_status` and `tower_config_get` declare, or a strict client drops the call.
+        let typeSafeGroup = TowerMCPService.typesafeJSON(now: typeSafeLate, defaults: typeSafeDefaults)
+        check("typesafe MCP group validates and reports clef beside jev",
+              JSONSchemaCheck.validate(typeSafeGroup, against: TowerMCPService.typesafeGroupSchema).isEmpty
+              && typeSafeGroup["balanceUSD"] == .number(18.40)
+              && typeSafeGroup["models"]["clef"]["balanceUSD"] == .number(4.20)
+              && typeSafeGroup["models"]["clef"]["stale"] == .bool(true)
+              && typeSafeGroup["models"]["clef"]["live"] == .bool(false))
+        TypeSafe.clearEntry(model: .jev, defaults: typeSafeDefaults)
+        check("typesafe group stays while clef alone is entered",
+              TypeSafe.enteredModels(defaults: typeSafeDefaults) == [.clef]
+              && typeSafeStatusRowLines(now: typeSafeLate, defaults: typeSafeDefaults).count == 3)
 
         let historyDefaultsName = "tower-openrouter-history-\(UUID().uuidString)"
         let historyDefaults = UserDefaults(suiteName: historyDefaultsName)!
@@ -2070,25 +2099,113 @@ enum CLI {
         }
         try? FileManager.default.removeItem(at: piHome)
 
+        // --- Demo mode (TOWER_DEMO=1) -----------------------------------------------
+        // A demo store must show a verified active seat from its own invented credential,
+        // and must never fall through to the real login Keychain to get one.
+        do {
+            let demoDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tower-selftest-demo-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: demoDir) }
+            let demoNow = Date()
+            func demoSeat(_ nick: String, five: Double, week: Double) -> AccountSnapshot {
+                var seat = AccountSnapshot(email: "\(nick)@example.com", nickname: nick, plan: "max")
+                seat.fiveHourPct = five
+                seat.weeklyPct = week
+                seat.fiveHourResetsAt = demoNow.addingTimeInterval(3 * 3600)
+                seat.weeklyResetsAt = demoNow.addingTimeInterval(3 * 86_400)
+                seat.capturedAt = demoNow.addingTimeInterval(-60)
+                return seat
+            }
+            let demoSeats = [demoSeat("work", five: 22, week: 41), demoSeat("side", five: 0, week: 12),
+                             demoSeat("lab", five: 81, week: 88)]
+            let demoStore = Store(dir: demoDir)
+            _ = demoStore.save(Dictionary(uniqueKeysWithValues: demoSeats.map { ($0.email, $0) }))
+            let demoEnv = ["TOWER_DEMO": "1", "TOWER_SUPPORT_DIR": demoDir.path]
+            final class KeychainSpy: @unchecked Sendable { var reads = 0 }
+
+            // No demo-credential.json: honestly unverified, worded as a recommendation.
+            let blindSpy = KeychainSpy()
+            let blind = TowerMCPService(env: .live(processEnvironment: demoEnv, keychainCredential: {
+                blindSpy.reads += 1
+                return nil
+            })).advice()
+            check("demo without a credential file reads no Keychain", blindSpy.reads == 0,
+                  "Keychain reads: \(blindSpy.reads)")
+            check("unverified active seat names the roomiest seat and its room",
+                  blind.structuredContent?["kind"] == "activeUnknown"
+                      && blind.content == [.text("no verified active seat; most room: side (88%)")],
+                  "got \(blind.content)")
+
+            // The invented credential whose digest active-seat.json carries binds the seat.
+            try? Data(#"{"accessToken":"demo-token-work","emailHint":"work@example.com"}"#.utf8)
+                .write(to: demoDir.appendingPathComponent("demo-credential.json"))
+            demoStore.recordVerifiedActiveSeatUnlocked("work@example.com", token: "demo-token-work", now: demoNow)
+            let boundSpy = KeychainSpy()
+            let bound = TowerMCPService(env: .live(processEnvironment: demoEnv, keychainCredential: {
+                boundSpy.reads += 1
+                return nil
+            })).advice()
+            let boundKind = bound.structuredContent?["kind"].stringValue
+            check("demo credential binds the demo active seat (stay or switch)",
+                  boundKind == "stay" || boundKind == "switch", "kind \(boundKind ?? "nil")")
+            check("demo with a credential file reads no Keychain", boundSpy.reads == 0,
+                  "Keychain reads: \(boundSpy.reads)")
+            check("TOWER_DEMO alone is not demo mode",
+                  DemoMode.supportDirectory(env: ["TOWER_DEMO": "1"]) == nil
+                      && DemoMode.supportDirectory(env: ["TOWER_SUPPORT_DIR": demoDir.path]) == nil)
+            // The gate must judge the verb that will run, not any verb present: main.swift
+            // dispatches rotate, login-item and status before panelshot, so these three
+            // would run live against the real Keychain, login and login item.
+            check("demo refuses `panelshot status` (status runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "status"]) != nil)
+            check("demo refuses `panelshot rotate` (rotate runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "rotate"]) != nil)
+            check("demo refuses `panelshot login-item on` (login-item runs first, live)",
+                  DemoMode.refusal(args: ["panelshot", "login-item", "on"]) != nil)
+            check("demo still runs `mcp`, `mcp --self-test` and `panelshot out.png`",
+                  DemoMode.refusal(args: ["mcp"]) == nil && DemoMode.refusal(args: ["mcp", "--self-test"]) == nil
+                      && DemoMode.refusal(args: ["panelshot", "out.png"]) == nil)
+            check("demo refuses the app and plain status", DemoMode.refusal(args: []) != nil
+                      && DemoMode.refusal(args: ["status"]) != nil)
+            // A demo panel shows the invented Pi lane only when the demo names its directory.
+            check("demo shows no agent lanes without TOWER_PI_DIR", DemoMode.lanes(env: demoEnv).isEmpty)
+            let demoPi = demoDir.appendingPathComponent("pi")
+            try? FileManager.default.createDirectory(at: demoPi, withIntermediateDirectories: true)
+            let demoLanes = DemoMode.lanes(env: demoEnv.merging([PiLane.rootEnvKey: demoPi.path]) { $1 })
+            check("demo with TOWER_PI_DIR shows only the Pi lane, read from that directory",
+                  Set(demoLanes.keys) == [.pi] && demoLanes[.pi] != .notConfigured, "\(demoLanes)")
+            // Same contract as MCPSurfaceTests.testEveryCLIVerbHasATool, runnable without XCTest.
+            let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
+            let toolNames = Set(TowerMCPService.tools.map(\.name))
+            check("every CLI verb dispatches to itself and maps to a listed MCP tool",
+                  cliVerbs.allSatisfy { DemoMode.dispatched(args: [$0.rawValue]) == $0 }
+                      && cliVerbs.allSatisfy { TowerMCPService.verbToTool[$0.rawValue].map(toolNames.contains) == true }
+                      && Set(TowerMCPService.verbToTool.keys) == Set(cliVerbs.map(\.rawValue)))
+        }
+
         print("  " + String(repeating: "─", count: 56))
         print(failures == 0 ? "  ✅ all passed\n" : "  ❌ \(failures) failed\n")
         return failures == 0 ? 0 : 1
     }
 
-    /// Renders the TypeSafe (Jev) row from the entered figure. There is no fetch behind
-    /// this lane, so there is no capture, no error path and no store row: the only facts
-    /// are the entered figure and its not-live label, and the text says exactly that. A
-    /// stale figure adds the one line that fixes it: how to re-enter.
+    /// Renders the TypeSafe group from the entered figures: the heading, then one line per
+    /// decision model (Jev, Clef) that has an entry, named so the two cannot be confused.
+    /// There is no fetch behind this lane, so there is no capture, no error path and no
+    /// store row: the only facts are each entered figure and its not-live label, and the
+    /// text says exactly that. A stale figure adds the one line that fixes it, under its
+    /// own model: how to re-enter.
     static func typeSafeStatusRowLines(now: Date = Date(),
                                        defaults: UserDefaults = TowerPreferences.shared) -> [String] {
-        // No row until a balance was entered: nothing ships by default.
-        guard TypeSafe.isEntered(defaults: defaults) else { return [] }
-        var lines = [
-            "  " + pad("typesafe", 12) + "BALANCE",
-            "      " + TypeSafe.statusRowText(now: now, defaults: defaults),
-        ]
-        if let hint = TypeSafe.reenterHint(now: now, defaults: defaults) {
-            lines.append("      " + hint)
+        // No heading until some model has an entered balance: nothing ships by default.
+        let models = TypeSafe.enteredModels(defaults: defaults)
+        guard !models.isEmpty else { return [] }
+        var lines = ["  " + pad("typesafe", 12) + "BALANCE"]
+        for model in models {
+            lines.append("      " + pad(model.rawValue, 6)
+                         + TypeSafe.statusRowText(model: model, now: now, defaults: defaults))
+            if let hint = TypeSafe.reenterHint(model: model, now: now, defaults: defaults) {
+                lines.append("            " + hint)
+            }
         }
         return lines
     }

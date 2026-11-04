@@ -5,7 +5,7 @@ import AppKit
 
 extension Provider {
     /// Short monogram shown inside the harness tile. Two letters keeps every tile
-    /// the same size; Jev's manual credit rides on the TypeSafe provider.
+    /// the same size; the Jev and Clef manual credits ride on the TypeSafe provider.
     var boardMark: String {
         switch self {
         case .claude: return "cc"
@@ -774,15 +774,20 @@ struct SeatBoardRow: View {
 // MARK: - Money rows
 
 /// Cash balances are not quotas, so they render on their own band: a meter of
-/// remaining-vs-added for OpenRouter, and a threshold bar for Jev's entered
-/// credit where the amber $10 and red $5 ticks are the point.
+/// remaining-vs-added for OpenRouter, and a TypeSafe group with a threshold bar per
+/// decision model (Jev, Clef) where the amber $10 and red $5 ticks are the point.
 struct MoneyBoard: View {
     let orOutcome: OpenRouter.Outcome
     let orHistory: [OpenRouter.History.Sample]
     let now: Date
-    /// Whether the Jev credit row is open. It folds into one line by default: the figure is
-    /// operator-entered and usually old, so it has little to say until it is low.
-    @Binding var jevOpen: Bool
+    /// Whether a TypeSafe model's credit row is open. Each folds into one line by default:
+    /// the figure is operator-entered and usually old, so it has little to say until it is
+    /// low. A function rather than one binding per model, so a third model needs no new
+    /// parameter; the panel keys it as `money.<model>` (Jev keeps `money.jev`).
+    let creditOpen: (TypeSafe.Model) -> Binding<Bool>
+
+    /// The disclosure id a model's fold is stored under.
+    nonisolated static func disclosureID(_ model: TypeSafe.Model) -> String { "money.\(model.rawValue)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -835,18 +840,33 @@ struct MoneyBoard: View {
                 }
             }
 
-            // No row until a balance was entered: nothing ships by default.
-            if TypeSafe.isEntered() {
-                Button(action: { jevOpen.toggle() }) {
-                    Text(JevRow.foldedLine(now: now, open: jevOpen))
-                        .font(TowerType.font(.small))
-                        .foregroundStyle(JevRow.foldedColor(now: now))
-                        .contentShape(Rectangle())
+            // TypeSafe sells credits per decision model, so its models render as one group
+            // under one header. No group until some model has an entered balance, and no
+            // row for a model without one: nothing ships by default.
+            let entered = TypeSafe.enteredModels()
+            if !entered.isEmpty {
+                HStack(spacing: 4) {
+                    ProviderIcon(provider: .typesafe)
+                    Text("typesafe")
+                        .font(TowerType.font(.body, weight: .semibold))
+                    Text(TypeSafeCreditRow.groupDetail)
+                        .font(TowerType.font(.minimum))
+                        .foregroundStyle(TowerType.secondary)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .padding(.leading, TowerTextSize.pt(SeatBoardRow.leadWidth + 4))
-                .help("Jev credit is entered by hand; nothing can read it")
-                if jevOpen { JevRow(now: now) }
+                ForEach(entered, id: \.self) { model in
+                    let open = creditOpen(model)
+                    Button(action: { open.wrappedValue.toggle() }) {
+                        Text(TypeSafeCreditRow.foldedLine(model: model, now: now, open: open.wrappedValue))
+                            .font(TowerType.font(.small))
+                            .foregroundStyle(TypeSafeCreditRow.foldedColor(model: model, now: now))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, TowerTextSize.pt(SeatBoardRow.leadWidth + 4))
+                    .help("\(model.name) credit is entered by hand; nothing can read it")
+                    if open.wrappedValue { TypeSafeCreditRow(model: model, now: now) }
+                }
             }
         }
     }
@@ -891,19 +911,25 @@ struct MoneyMeter: View {
     }
 }
 
-/// Jev credit: the entered balance on a $25 scale as a braille meter coloured by the
-/// threshold state (red under $5, amber under $10), so the state is visible before the
-/// number is read. The balance is operator-entered, and the row says so every time.
-struct JevRow: View {
+/// One TypeSafe decision model's credit (Jev or Clef): the entered balance on a $25 scale
+/// as a braille meter coloured by the threshold state (red under $5, amber under $10), so
+/// the state is visible before the number is read. The balance is operator-entered, and
+/// the row says so every time.
+struct TypeSafeCreditRow: View {
+    let model: TypeSafe.Model
     let now: Date
 
     private static let scale: Double = 25
 
-    private var balance: Double { TypeSafe.entry()?.usd ?? 0 }
+    /// The group header's second line: what the rows under it are, and that they are
+    /// prepaid, so nobody reads them as quotas.
+    static let groupDetail = "decision models, prepaid credits"
+
+    private var balance: Double { TypeSafe.entry(model: model)?.usd ?? 0 }
     private var level: TypeSafe.BalanceLevel { TypeSafe.balanceLevel(balance) }
     /// Over three days an entered figure is too old to plan against; the row
     /// greys out instead of presenting it with live-colour confidence.
-    private var stale: Bool { TypeSafe.balanceIsStale(now: now) }
+    private var stale: Bool { TypeSafe.balanceIsStale(model: model, now: now) }
 
     /// The one line the row folds into: state word and figure, so a low balance is still
     /// visible without opening it.
@@ -911,18 +937,19 @@ struct JevRow: View {
         stale ? "stale" : level == .red ? "low" : level == .amber ? "watch" : "ok"
     }
 
-    static func foldedLine(now: Date, open: Bool) -> String {
-        let balance = TypeSafe.entry()?.usd ?? 0
+    nonisolated static func foldedLine(model: TypeSafe.Model, now: Date, open: Bool,
+                           defaults: UserDefaults = TowerPreferences.shared) -> String {
+        let balance = TypeSafe.entry(model: model, defaults: defaults)?.usd ?? 0
         let word = stateWord(level: TypeSafe.balanceLevel(balance),
-                             stale: TypeSafe.balanceIsStale(now: now))
-        return "\(open ? "-" : "+") jev credits \(TypeSafe.money(balance)) \(word)"
+                             stale: TypeSafe.balanceIsStale(model: model, now: now, defaults: defaults))
+        return "\(open ? "-" : "+") \(model.rawValue) credits \(TypeSafe.money(balance)) \(word)"
     }
 
     /// Quiet while the figure is fine or too old to trust; amber or red only for a live
     /// low balance, the case worth interrupting a folded line for.
-    static func foldedColor(now: Date) -> Color {
-        guard !TypeSafe.balanceIsStale(now: now) else { return TowerType.secondary }
-        switch TypeSafe.balanceLevel(TypeSafe.entry()?.usd ?? 0) {
+    static func foldedColor(model: TypeSafe.Model, now: Date) -> Color {
+        guard !TypeSafe.balanceIsStale(model: model, now: now) else { return TowerType.secondary }
+        switch TypeSafe.balanceLevel(TypeSafe.entry(model: model)?.usd ?? 0) {
         case .green: return TowerType.secondary
         case .amber: return .orange
         case .red: return .red
@@ -943,10 +970,10 @@ struct JevRow: View {
             ProviderIcon(provider: .typesafe)
                 .opacity(stale ? 0.6 : 1)
             VStack(alignment: .leading, spacing: 0) {
-                Text("jev credits")
+                Text("\(model.rawValue) credits")
                     .font(TowerType.font(.body, weight: .semibold))
                     .opacity(stale ? 0.7 : 1)
-                Text(TypeSafe.enteredAgeLabel(now: now))
+                Text(TypeSafe.enteredAgeLabel(model: model, now: now))
                     .font(TowerType.font(.small))
                     .foregroundStyle(TowerType.secondary)
                     .lineLimit(1)
@@ -968,7 +995,7 @@ struct JevRow: View {
             // and the exact config command lives in the tooltip, never in the panel text
             // (bug c, 2026-09-30: the raw tool call leaked into the UI).
             VStack(alignment: .trailing, spacing: 0) {
-                if let command = TypeSafe.reenterHint(now: now) {
+                if let command = TypeSafe.reenterHint(model: model, now: now) {
                     Text(TypeSafe.panelReenterAction)
                         .font(TowerType.font(.small, weight: .semibold))
                         .foregroundStyle(Color.accentColor)

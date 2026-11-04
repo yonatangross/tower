@@ -327,11 +327,15 @@ its row and quota mirror. If usage cannot be read, its percentages remain unknow
 retirement written while profile verification is in flight takes precedence; Tower asks
 for `/login` and another refresh instead of silently undoing that change.
 
-The Jev credit row (TypeSafe) cannot be read live: TypeSafe's API publishes no balance
-or billing endpoint. The figure is entered by hand and greys out after three days. Read the
-balance off the TypeSafe console's Billing page, then set it with the MCP tool
-`tower_config_set` (`key` `typesafe.balanceUSD`, `value` the dollars left). Tower dates the
-entry today; `null` clears it. With no entry the row is hidden.
+TypeSafe sells prepaid credits per decision model, so the money section shows a TypeSafe
+group beside OpenRouter: one header, then a Jev credit row and a Clef credit row. Neither
+can be read live: TypeSafe's API publishes no balance or billing endpoint. Each figure is
+entered by hand, carries its own as-of day, turns amber under USD 10 and red under USD 5,
+and greys out after three days. Read the balances off the TypeSafe console's Billing page,
+then set each with the MCP tool `tower_config_set`: `key` `typesafe.balanceUSD` for Jev or
+`typesafe.clef.balanceUSD` for Clef, `value` the dollars left. Tower dates the entry today;
+`null` clears it. A model with no entry has no row, and with neither entered the group is
+hidden. `tower status` prints both under its `typesafe` heading.
 
 Nicknames default to the first six characters of the email's local part. To pick
 your own, write `nicknames.json` in the same directory, for example
@@ -339,6 +343,26 @@ your own, write `nicknames.json` in the same directory, for example
 
 The OpenRouter key comes from `OPENROUTER_API_KEY`, or from a command you set
 (see the README, "Configuration").
+
+`TOWER_SUPPORT_DIR` points Tower at another store directory instead of
+`~/Library/Application Support/Tower`. `TOWER_DEMO=1`, honoured only together with
+`TOWER_SUPPORT_DIR`, makes that store a demo: the active login is read from
+`<dir>/demo-credential.json` (`{"accessToken": "...", "emailHint": "..."}`) and never
+from the Keychain, refresh never reaches the network, the quota mirror stays inside the
+store, and this Mac's Chrome profiles, agent lanes, sessions, OpenRouter key, login item
+and settings are not read or changed. Without the file the active seat is unverified.
+Only `tower mcp` and `tower panelshot` run in demo mode; other verbs, and `TOWER_DEMO=1`
+without `TOWER_SUPPORT_DIR`, exit 2. `python3 scripts/demo-store.py <dir> --active work`
+writes an invented store whose `active-seat.json` is bound to its invented credential:
+
+```
+python3 scripts/demo-store.py /tmp/tower-demo --active work
+TOWER_DEMO=1 TOWER_SUPPORT_DIR=/tmp/tower-demo tower mcp
+```
+
+When Tower cannot verify which seat the CLI holds, `tower_advice` keeps `kind`
+`activeUnknown` and its summary names the roomiest seat and its room, for example
+`no verified active seat; most room: side (88%)`. The panel banner reads the same.
 
 ## Caveats
 

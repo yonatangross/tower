@@ -210,13 +210,14 @@ final class MCPSurfaceTests: XCTestCase {
     /// Every verb main.swift dispatches has a tool, and the map names no verb that
     /// main.swift does not have. Walked from the source so a new verb fails here.
     func testEveryCLIVerbHasATool() throws {
-        let source = try String(contentsOf: Self.repoRoot.appendingPathComponent("Sources/Tower/main.swift"), encoding: .utf8)
-        let re = try NSRegularExpression(pattern: #"args\.contains\("([a-z][a-z-]*)"\)"#)
-        let verbs = Set(re.matches(in: source, range: NSRange(source.startIndex..., in: source)).compactMap {
-            Range($0.range(at: 1), in: source).map { String(source[$0]) }
-        })
-        // `on` and `off` are arguments to login-item, not verbs.
-        let realVerbs = verbs.subtracting(["on", "off"])
+        // The dispatch lives in DemoMode.dispatched (main.swift switches on its result), so
+        // the verbs come from DemoMode.Verb; each CLI word must dispatch to its own verb.
+        let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
+        for verb in cliVerbs {
+            XCTAssertEqual(DemoMode.dispatched(args: [verb.rawValue]), verb, "`tower \(verb.rawValue)` does not dispatch to itself")
+        }
+        XCTAssertEqual(DemoMode.dispatched(args: []), .app)
+        let realVerbs = Set(cliVerbs.map(\.rawValue))
         XCTAssertEqual(realVerbs, ["status", "selftest", "rotate", "login-item", "panelshot", "mcp"])
         let toolNames = Set(TowerMCPService.tools.map(\.name))
         for verb in realVerbs {
@@ -391,7 +392,10 @@ final class MCPSurfaceTests: XCTestCase {
     /// says the active seat is unknown.
     func testAdviceReportsActiveUnknownWhenIdentityIsUnverified() async throws {
         let blind = TowerMCPService(env: fixture.environment(verifiedActiveEmail: .some(nil)))
-        let advice = try await blind.callTool("tower_advice", arguments: [:]).structuredContent!
+        let result = try await blind.callTool("tower_advice", arguments: [:])
+        let advice = result.structuredContent!
+        guard case .text(let summary)? = result.content.first else { return XCTFail("no summary") }
+        XCTAssertTrue(summary.hasPrefix("no verified active seat; most room: cal ("), summary)
         XCTAssertEqual(advice["kind"], "activeUnknown")
         XCTAssertEqual(advice["nickname"], "cal")
         XCTAssertEqual(advice["percentUsed"], .null)
@@ -583,6 +587,28 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(jevCleared.structuredContent?["previous"], 12.5)
         XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.balanceKey))
         XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.balanceAsOfKey))
+
+        // Clef is TypeSafe's second decision model: its own key, its own day, reported
+        // beside Jev under `models` and never written into Jev's keys.
+        let clef = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": 8])
+        XCTAssertEqual(clef.structuredContent?["value"], 8)
+        XCTAssertEqual(clef.structuredContent?["previous"], .null)
+        XCTAssertEqual(clef.structuredContent?["asOf"], .string(asOf))
+        XCTAssertEqual(TypeSafe.entry(model: .clef, defaults: fixture.defaults), TypeSafe.Entry(usd: 8, asOf: asOf))
+        XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.balanceKey))
+        let clefConfig = try await call("tower_config_get").structuredContent!
+        XCTAssertEqual(clefConfig["typesafe"]["entered"], false)
+        XCTAssertEqual(clefConfig["typesafe"]["models"]["clef"]["balanceUSD"], 8)
+        XCTAssertEqual(clefConfig["typesafe"]["models"]["clef"]["level"], "amber")
+        let clefStatus = try await call("tower_status").structuredContent!
+        XCTAssertEqual(clefStatus["typesafe"]["models"]["clef"]["entered"], true)
+        XCTAssertEqual(clefStatus["typesafe"]["models"]["jev"]["entered"], false)
+        let clefNegative = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": -1])
+        XCTAssertEqual(clefNegative.structuredContent?["error"]["code"], "BadValue")
+        let clefCleared = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": .null])
+        XCTAssertEqual(clefCleared.structuredContent?["previous"], 8)
+        XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.Model.clef.balanceKey))
+        XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.Model.clef.balanceAsOfKey))
 
         let retired = try await call("tower_config_set", ["key": "retiredAccounts", "value": ["old@example.com"]])
         XCTAssertEqual(retired.structuredContent?["value"], ["old@example.com"])
