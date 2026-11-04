@@ -25,6 +25,16 @@ enum PanelShot {
         return MenuContent(model: model, refreshMode: .cached)
     }
 
+    /// What the rendered first run says it found. A demo never checks this Mac's paths:
+    /// it shows a fixed invented detection with the demo store's Claude seat count.
+    static func setupDetection() -> Detection {
+        if DemoMode.supportDirectory() != nil {
+            let seats = ProviderDetection.claudeSeatCount()
+            return Detection(found: [.claude, .codex, .cursor, .muse, .devin], claudeSeats: seats)
+        }
+        return ProviderDetection.detect(claudeSeats: { ProviderDetection.claudeSeatCount() })
+    }
+
     /// `TOWER_PANELSHOT_SCALE=3 tower panelshot out.png` rasterizes the same vector panel
     /// at 3 pixels per point, for video frames that a 2x screen capture would blur when
     /// scaled up. Unset keeps the screen's own backing scale, as before.
@@ -110,20 +120,36 @@ enum PanelShot {
                                      + TypeSafe.Model.allCases.map(MoneyBoard.disclosureID))
         }
 
+        // `panelshot setup` renders the first run; `panelshot settings <tab>` one Settings tab
+        // (providers, accounts, alerts, general, agents). Both use the cached model only.
+        let args = CommandLine.arguments
+        let root: AnyView
+        let width: CGFloat
+        if args.contains("setup") {
+            root = AnyView(FirstRunView(detection: setupDetection()))
+            width = TowerTextSize.pt(620)
+        } else if let i = args.firstIndex(of: "settings") {
+            let name = args.indices.contains(i + 1) ? args[i + 1].lowercased() : "providers"
+            let tab = SettingsView.Tab.allCases.first { $0.rawValue.lowercased().hasPrefix(name) } ?? .providers
+            root = AnyView(SettingsView(model: model, tab: tab))
+            width = TowerTextSize.pt(620)
+        } else {
+            root = AnyView(content.frame(width: TowerTextSize.pt(TowerType.panelWidth)))
+            width = TowerTextSize.pt(TowerType.panelWidth)
+        }
         let hosting = NSHostingController(
-            rootView: content
-                .frame(width: TowerTextSize.pt(TowerType.panelWidth))
+            rootView: root
                 .preferredColorScheme(light ? .light : .dark)
                 .background(Color(nsColor: .windowBackgroundColor)))
         let view = hosting.view
         var size = view.fittingSize
-        if size.height <= 0 { size = NSSize(width: TowerTextSize.pt(TowerType.panelWidth), height: 600) }
+        if size.height <= 0 { size = NSSize(width: width, height: 600) }
 
         // A bare view inherits no appearance reliably; a borderless, unordered
         // window gives the subtree real appearance plumbing to resolve
         // semantic colors against.
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: TowerTextSize.pt(TowerType.panelWidth), height: size.height),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: size.height),
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: NSAppearance.Name(rawValue: dark))
         window.contentView = view

@@ -201,6 +201,13 @@ struct MCPError: Error, Equatable, Sendable {
     static let resourceNotFound = -32002
     /// 2026-07-28 reserved codes.
     static let unsupportedProtocolVersion = -32022
+    /// Server-defined: MCP is off in Tower's Settings. `data.code` is "MCPDisabled".
+    static let accessDisabled = -32001
+
+    static var disabled: MCPError {
+        MCPError(code: accessDisabled, message: MCPAccess.refusalMessage,
+                 data: ["code": .string(MCPAccess.refusalCode)])
+    }
 
     let code: Int
     let message: String
@@ -227,6 +234,13 @@ protocol MCPService: Sendable {
     func getPrompt(_ name: String, arguments: [String: String]) async throws -> MCPPromptResult
     /// Completion candidates for a prompt argument or a resource template variable.
     func complete(refType: String, refName: String, argument: String, value: String) -> [String]
+    /// Whether the user allows MCP (Settings ▸ Agents). Read on every message, so a
+    /// change in the panel takes effect without restarting `tower mcp`.
+    var accessEnabled: Bool { get }
+}
+
+extension MCPService {
+    var accessEnabled: Bool { true }
 }
 
 // MARK: - Server
@@ -306,6 +320,14 @@ actor MCPServer {
         ["name": .string(service.serverName), "version": .string(service.serverVersion)]
     }
 
+    /// The only methods answered while MCP is off: the handshakes, which say so.
+    static let answeredWhileDisabled: Set<String> = ["initialize", "server/discover"]
+
+    /// The instructions, led by the refusal while MCP is off.
+    private var instructionsText: String {
+        service.accessEnabled ? service.instructions : MCPAccess.refusalMessage + "\n\n" + service.instructions
+    }
+
     /// Handles one inbound message. Returns the response to write, or nil for a
     /// notification (which has no id and gets no reply) and for a modern
     /// `subscriptions/listen`, whose response is deferred until the stream closes.
@@ -325,6 +347,11 @@ actor MCPServer {
         if isNotification {
             handleNotification(method, params: params)
             return nil
+        }
+        // Settings ▸ Agents: with MCP off every data-returning method, in both eras and
+        // including every subscribe, refuses here, before any dispatch reaches the service.
+        if !service.accessEnabled, !Self.answeredWhileDisabled.contains(method) {
+            return Self.errorResponse(id: id, MCPError.disabled)
         }
         let meta = params["_meta"]
         if !meta[Self.metaVersion].isNull {
@@ -408,7 +435,7 @@ actor MCPServer {
             return Self.cacheable([
                 "supportedVersions": .array(Self.modernProtocolVersions.map { .string($0) }),
                 "capabilities": modernCapabilities,
-                "instructions": .string(service.instructions),
+                "instructions": .string(instructionsText),
             ], ttlMs: 3_600_000)
         case "tools/list":
             return Self.cacheable(["tools": .array(service.listTools().map(\.json))], ttlMs: 3_600_000)
@@ -473,7 +500,7 @@ actor MCPServer {
                 "protocolVersion": .string(version),
                 "capabilities": legacyCapabilities,
                 "serverInfo": serverInfo,
-                "instructions": .string(service.instructions),
+                "instructions": .string(instructionsText),
             ]
         case "ping":
             return [:]
@@ -556,6 +583,8 @@ actor MCPServer {
     /// `notifications/resources/updated` to every legacy subscriber of the URI and to
     /// every modern stream that listed it, the latter tagged with its subscription id.
     func resourcesUpdated(_ uris: [String]) {
+        // A subscription made while MCP was on goes quiet once it is turned off.
+        guard service.accessEnabled else { return }
         for uri in uris {
             if subscriptions.contains(uri) {
                 send(["jsonrpc": "2.0", "method": "notifications/resources/updated", "params": ["uri": .string(uri)]])
@@ -568,6 +597,7 @@ actor MCPServer {
     }
 
     func resourceListChanged() {
+        guard service.accessEnabled else { return }
         if negotiatedVersion != nil {
             send(["jsonrpc": "2.0", "method": "notifications/resources/list_changed"])
         }

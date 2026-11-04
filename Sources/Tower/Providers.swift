@@ -2463,9 +2463,12 @@ enum AgentLane {
 
     static func readAll(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                         env: [String: String] = ProcessInfo.processInfo.environment,
-                        museRunner: MuseRunner? = nil)
+                        museRunner: MuseRunner? = nil,
+                        only allowed: Set<Provider>? = nil)
         -> [Provider: Outcome] {
-        Dictionary(uniqueKeysWithValues: lanes.map {
+        // Filter BEFORE reading: a lane that is OFF is never read, and Muse OFF never
+        // spawns `muse usage` (b88 HOLD on #20).
+        Dictionary(uniqueKeysWithValues: lanes.filter { allowed?.contains($0) ?? true }.map {
             ($0, read($0, home: home, env: env, museRunner: museRunner))
         })
     }
