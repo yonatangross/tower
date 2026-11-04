@@ -49,7 +49,8 @@ enum PanelShot {
         // `panelshot sessions` runs the session probe the panel runs (`claude agents --json`
         // and the per-session transcript and anchor reads, no credential), so the SESSIONS
         // section can be checked in a render instead of reading "not read yet".
-        if CommandLine.arguments.contains("sessions") {
+        // A demo shot never runs it: SESSIONS stays "not read yet" instead of real sessions.
+        if CommandLine.arguments.contains("sessions"), DemoMode.runsLiveSessionProbe() {
             model.agents = await AgentProbe.fetch()
             model.probed = true
         }

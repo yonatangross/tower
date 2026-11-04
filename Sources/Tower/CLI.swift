@@ -2046,6 +2046,59 @@ enum CLI {
               allResting.code == 1
                   && allResting.lines.contains { $0.contains("Every Claude seat") && $0.contains("resting") })
 
+        // Pi: an invented session log in a temp root (never the real ~/.pi), summed for a
+        // fixed "now" in UTC so the month and day edges do not depend on this machine.
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let piNow = DateParse.parse("2026-11-04T12:00:00Z")!
+        func piTurn(_ id: String, _ at: String, _ usd: Double) -> String {
+            #"{"type":"message","id":"\#(id)","timestamp":"\#(at)","message":{"role":"assistant","provider":"openrouter","model":"m","usage":{"cost":{"total":\#(usd)}}}}"#
+        }
+        var piTally = PiLane.Tally(now: piNow, calendar: utc)
+        piTally.add(text: [
+            piTurn("a", "2026-11-04T09:00:00Z", 1.25),
+            piTurn("b", "2026-11-02T09:00:00Z", 2.00),
+            piTurn("c", "2026-10-31T23:00:00Z", 9.00),
+            piTurn("a", "2026-11-04T09:00:00Z", 1.25),
+            "{not json \"assistant\" \"cost\"",
+        ].joined(separator: "\n"))
+        check("pi sums this month and today, once per entry",
+              abs(piTally.spend.monthUSD - 3.25) < 1e-9 && abs(piTally.spend.todayUSD - 1.25) < 1e-9
+                  && piTally.spend.messages == 2,
+              "month \(piTally.spend.monthUSD) today \(piTally.spend.todayUSD)")
+        check("pi skips a malformed line instead of failing", piTally.spend.skippedLines == 1)
+        var piSpend = piTally.spend
+        piSpend.provider = "openrouter"
+        let piShare = PiLane.share(piSpend, openRouter: .ok(OpenRouter.Budget(spent: 40, limit: 50)))
+        check("pi share is month spend over the OpenRouter limit, left is limit minus spent",
+              piShare == .openRouter(pct: 6.5, leftUSD: 10, limitUSD: 50), "\(piShare)")
+        check("pi without an OpenRouter balance shows spend only and says why",
+              PiLane.share(piSpend, openRouter: .notConfigured) == .spendOnly("no OpenRouter key in Tower"))
+        let piHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-pi-\(UUID().uuidString)")
+        check("pi row is hidden when the Pi directory does not exist",
+              PiLane.read(home: piHome, env: [PiLane.rootEnvKey: piHome.appendingPathComponent("absent").path])
+                  == .notConfigured)
+        // The disk path end to end: settings, one session this month, auth.json beside them.
+        let piRoot = piHome.appendingPathComponent("agent")
+        let piSession = piRoot.appendingPathComponent("sessions/--demo--/s.jsonl")
+        try? FileManager.default.createDirectory(at: piSession.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? Data(#"{"defaultProvider":"openrouter","defaultModel":"demo/model"}"#.utf8)
+            .write(to: piRoot.appendingPathComponent("settings.json"))
+        try? Data((piTurn("d1", "2026-11-03T10:00:00.000Z", 0.75) + "\n").utf8).write(to: piSession)
+        try? FileManager.default.setAttributes([.modificationDate: piNow], ofItemAtPath: piSession.path)
+        let piRead = PiLane.read(home: piHome, env: [PiLane.rootEnvKey: piRoot.path],
+                                 now: piNow, calendar: utc)
+        if case .ok(let r) = piRead, case .spend(let s) = r.usage {
+            check("pi reads settings and a session file from its root",
+                  s.provider == "openrouter" && s.model == "demo/model"
+                      && abs(s.monthUSD - 0.75) < 1e-9 && s.files == 1, "\(s)")
+        } else {
+            check("pi reads settings and a session file from its root", false, "\(piRead)")
+        }
+        try? FileManager.default.removeItem(at: piHome)
+
         // --- Demo mode (TOWER_DEMO=1) -----------------------------------------------
         // A demo store must show a verified active seat from its own invented credential,
         // and must never fall through to the real login Keychain to get one.
@@ -2114,6 +2167,30 @@ enum CLI {
                       && DemoMode.refusal(args: ["panelshot", "out.png"]) == nil)
             check("demo refuses the app and plain status", DemoMode.refusal(args: []) != nil
                       && DemoMode.refusal(args: ["status"]) != nil)
+            // A demo panel shows the invented Pi lane only when the demo names its directory.
+            check("demo shows no agent lanes without TOWER_PI_DIR", DemoMode.lanes(env: demoEnv).isEmpty)
+            let demoPi = demoDir.appendingPathComponent("pi")
+            try? FileManager.default.createDirectory(at: demoPi, withIntermediateDirectories: true)
+            let demoLanes = DemoMode.lanes(env: demoEnv.merging([PiLane.rootEnvKey: demoPi.path]) { $1 })
+            check("demo with TOWER_PI_DIR shows only the Pi lane, read from that directory",
+                  Set(demoLanes.keys) == [.pi] && demoLanes[.pi] != .notConfigured, "\(demoLanes)")
+            // TOWER_PI_DIR must stay inside the demo store: a path outside it, or a symlink
+            // in the store that points out, would put real Pi spend in a demo shot.
+            let outside = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tower-selftest-realpi-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: outside) }
+            try? FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+            check("demo ignores a TOWER_PI_DIR outside the demo store",
+                  DemoMode.lanes(env: demoEnv.merging([PiLane.rootEnvKey: outside.path]) { $1 }).isEmpty)
+            let escape = demoDir.appendingPathComponent("pi-escape")
+            try? FileManager.default.createSymbolicLink(at: escape, withDestinationURL: outside)
+            check("demo ignores a symlink in the store that points outside it",
+                  DemoMode.lanes(env: demoEnv.merging([PiLane.rootEnvKey: escape.path]) { $1 }).isEmpty)
+            check("demo ignores TOWER_PI_DIR when there is no demo store",
+                  DemoMode.lanes(env: [PiLane.rootEnvKey: demoPi.path]).isEmpty)
+            // `panelshot sessions` runs `claude agents --json`: a demo shot must not list real sessions.
+            check("demo panelshot never runs the live session probe",
+                  !DemoMode.runsLiveSessionProbe(env: demoEnv) && DemoMode.runsLiveSessionProbe(env: [:]))
             // Same contract as MCPSurfaceTests.testEveryCLIVerbHasATool, runnable without XCTest.
             let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
             let toolNames = Set(TowerMCPService.tools.map(\.name))
@@ -2405,6 +2482,11 @@ enum CLI {
         // TypeSafe publishes no billing or usage endpoint, so its section prints as the
         // static label it is, beside the provider sections above.
         typeSafeStatusRowLines().forEach { print($0) }
+
+        // Pi has no store row either: its spend is summed from its own session logs on
+        // every cycle and set against the OpenRouter balance this same refresh read.
+        PiLane.statusLines(result.lanes[.pi], openRouter: result.openRouterOutcome)
+            .forEach { print($0) }
 
         if !split.resting.isEmpty {
             // Time-gated rows only: a stale row is not waiting on a clock.

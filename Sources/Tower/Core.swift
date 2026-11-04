@@ -1367,6 +1367,35 @@ enum DemoMode {
         return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
     }
 
+    /// The agent lanes a demo panel shows: none of this Mac's CLIs, only an invented Pi
+    /// directory the demo names with TOWER_PI_DIR (never the real ~/.pi).
+    static func lanes(env: [String: String] = ProcessInfo.processInfo.environment) -> [Provider: AgentLane.Outcome] {
+        guard let dir = piDirectory(env: env) else { return [:] }
+        return [.pi: PiLane.read(env: [PiLane.rootEnvKey: dir])]
+    }
+
+    /// TOWER_PI_DIR, only when it resolves (symlinks followed) to a directory inside the
+    /// demo store. Anything else, including a link in the store that points out, is nil.
+    static func piDirectory(env: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        guard let store = supportDirectory(env: env), let dir = env[PiLane.rootEnvKey], !dir.isEmpty,
+              let realStore = realPath(store.path),
+              let realDir = realPath((dir as NSString).expandingTildeInPath)
+        else { return nil }
+        return realDir.hasPrefix(realStore.hasSuffix("/") ? realStore : realStore + "/") ? realDir : nil
+    }
+
+    private static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    /// `panelshot sessions` runs `claude agents --json`, which lists this Mac's real
+    /// sessions; a demo run never does.
+    static func runsLiveSessionProbe(env: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        supportDirectory(env: env) == nil
+    }
+
     /// TOWER_DEMO asked for without a store: the caller refuses to start rather than
     /// quietly running against the real store and Keychain.
     static func isMisconfigured(env: [String: String] = ProcessInfo.processInfo.environment) -> Bool {

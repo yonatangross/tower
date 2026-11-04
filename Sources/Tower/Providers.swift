@@ -19,8 +19,11 @@ import CryptoKit
 /// - `muse`, `devin` and `agy` are agent lanes whose usage their CLIs do NOT write anywhere
 ///   this app can read. See `AgentLane`: they show what is observable (model pin, last
 ///   dispatch, last limit hit) and never a percentage, so they are never ranked either.
+/// - `pi` is an agent lane that DOES record its spend: every assistant turn in its session
+///   logs carries a USD cost. See `PiLane`: its row is money (month and today), compared with
+///   the OpenRouter balance when Pi runs on OpenRouter, so it is never ranked as a quota.
 enum Provider: String, Codable, CaseIterable {
-    case claude, codex, cursor, openrouter, typesafe, muse, devin, agy
+    case claude, codex, cursor, openrouter, typesafe, muse, devin, agy, pi
 
     /// Only Claude publishes a short rolling window. Gating the meter on this is what keeps
     /// idea 3 ("hide windows that do not exist") honest as providers are added.
@@ -37,7 +40,7 @@ enum Provider: String, Codable, CaseIterable {
     var isRankable: Bool {
         switch self {
         case .claude, .codex, .cursor:              return true
-        case .openrouter, .typesafe, .muse, .devin, .agy:  return false
+        case .openrouter, .typesafe, .muse, .devin, .agy, .pi:  return false
         }
     }
 
@@ -51,7 +54,8 @@ enum Provider: String, Codable, CaseIterable {
     var primaryWindowLabel: String {
         switch self {
         case .claude, .codex, .openrouter: return "7d"
-        case .cursor:                      return "month"
+        // Pi's row sums a calendar month of session costs.
+        case .cursor, .pi:                 return "month"
         // No window on this lane is ever published, so the label never reaches a claim:
         // weeklyPct stays nil and the threshold machinery never reads it.
         case .typesafe:                    return "day"
@@ -72,6 +76,7 @@ enum Provider: String, Codable, CaseIterable {
         case .muse:       return "Muse"
         case .devin:      return "Devin"
         case .agy:        return "Antigravity"
+        case .pi:         return "Pi"
         }
     }
 }
@@ -1656,7 +1661,8 @@ enum AgentLane {
     /// Display order in the panel. cursor is in here for its CLI lane (the agent the
     /// dispatch ledgers record as kind "cursor"); the Cursor IDE's subscription spend is
     /// a separate provider row above, so the panel shows both sides of the same seat.
-    static let lanes: [Provider] = [.muse, .devin, .cursor, .agy]
+    /// Pi is last: it is the one lane whose row is money rather than a quota.
+    static let lanes: [Provider] = [.muse, .devin, .cursor, .agy, .pi]
 
     /// How far back the Devin log scan reaches: seven days. The quota window the refusal
     /// names is one day, so anything older cannot be the present state, and the log
@@ -1673,6 +1679,8 @@ enum AgentLane {
         case notReadable(String)
         /// The tool does not expose usage at all.
         case notExposed
+        /// The tool records what it spent (Pi's per-turn USD cost), summed by `PiLane`.
+        case spend(PiLane.Spend)
     }
 
     /// A lane's usage as the tool itself recorded it. Percents are REMAINING, the way
@@ -1715,6 +1723,7 @@ enum AgentLane {
             return "\(plan)usage on file"
         case .notReadable: return "usage not readable"
         case .notExposed: return headerDetail
+        case .spend(let s): return "\(PiLane.money(s.monthUSD)) this month"
         }
     }
 
@@ -1725,6 +1734,7 @@ enum AgentLane {
         switch r.usage {
         case .notExposed: return nil
         case .notReadable(let why): return "not readable: \(why)"
+        case .spend(let s): return PiLane.spendLine(s)
         case .quota(let q):
             var parts: [String] = []
             if let d = q.dailyRemainingPct {
@@ -2087,10 +2097,15 @@ enum AgentLane {
     // MARK: Panel text (pure, so the wording is tested rather than eyeballed)
 
     static func modelLine(_ r: Reading) -> String {
-        r.modelPin.map { "model \($0)" } ?? "no model pinned"
+        if case .spend(let s) = r.usage { return PiLane.modelLine(s) }
+        return r.modelPin.map { "model \($0)" } ?? "no model pinned"
     }
 
     static func dispatchLine(_ r: Reading, now: Date) -> String {
+        // Pi's own log says when it last ran, which beats any ledger.
+        if case .spend(let s) = r.usage {
+            return s.newest.map { "last turn \(CLI.age($0, now: now))" } ?? "no turn this month"
+        }
         guard let d = r.lastDispatch else { return "no dispatch recorded" }
         return "last dispatch \(CLI.age(d.at, now: now))"
     }
@@ -2366,6 +2381,10 @@ enum AgentLane {
                      home: URL = FileManager.default.homeDirectoryForCurrentUser,
                      env: [String: String] = ProcessInfo.processInfo.environment,
                      museRunner: MuseRunner? = nil) -> Outcome {
+        // Pi is found by its data directory, not a binary: it installs through a package
+        // manager whose bin path a login item cannot predict, and its logs are what the
+        // row reads anyway.
+        if lane == .pi { return PiLane.read(home: home, env: env) }
         let fm = FileManager.default
         guard fm.isExecutableFile(atPath: binary(lane, home: home).path) else {
             return .notConfigured
