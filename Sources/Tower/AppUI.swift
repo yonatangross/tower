@@ -2161,6 +2161,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
+            // Tower's own mark beside the title (light, nickname, %). A template image,
+            // so macOS tints it for the menu bar; a bundle without the art shows the
+            // title alone, as before.
+            if let glyph = StatusGlyph.bundled() {
+                button.image = glyph
+                button.imagePosition = .imageLeft
+            }
             button.title = LimitsModel.shared.title
             button.target = self
             button.action = #selector(statusItemClicked(_:))

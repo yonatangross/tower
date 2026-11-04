@@ -363,7 +363,10 @@ struct SeatBoard: View {
     @State private var hoveredID: String?
 
     private static let providers: [Provider] = [.claude, .codex, .cursor]
-    static let meterHeading = "usage pools"
+    /// The pool column is how much of each window is USED; the room column is what is
+    /// LEFT on the tightest one. Each heading says which, so no bare number is ambiguous.
+    static let meterHeading = "used"
+    static let roomHeading = "room"
     /// The disclosure that holds the stale seats.
     static let staleDisclosureID = "seats.stale"
 
@@ -447,7 +450,7 @@ struct SeatBoard: View {
                     .frame(width: TowerTextSize.pt(SeatBoardRow.seatWidth), alignment: .leading)
                 Text(Self.meterHeading)
                     .frame(width: TowerTextSize.pt(SeatBoardRow.meterWidth), alignment: .leading)
-                Text("room")
+                Text(Self.roomHeading)
                     .frame(width: TowerTextSize.pt(SeatBoardRow.roomWidth), alignment: .trailing)
                 Text("reset")
                     .frame(width: TowerTextSize.pt(SeatBoardRow.resetWidth), alignment: .trailing)
