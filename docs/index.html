@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tower: which AI coding account has room?</title>
+<meta name="description" content="A macOS menu bar app that shows where every AI coding account stands and which one has room. Built-in MCP server. MIT.">
+<meta property="og:title" content="Tower: which AI coding account has room?">
+<meta property="og:description" content="Usage per window, room left and next reset for every Claude Code account, with Codex and Cursor plans beside them.">
+<meta property="og:image" content="https://raw.githubusercontent.com/yonatangross/tower/main/docs/images/social-preview.png">
+<style>
+  :root{--bg:#141414;--ink:#f2f2f2;--mute:#9a9a9a;--dim:#3a3a3a;--green:#3ddc68;--amber:#f5c542;--orange:#f59a2b;--red:#ef4b4b}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:400 18px/1.55 -apple-system,"SF Pro Text","Helvetica Neue",Arial,sans-serif}
+  main{max-width:880px;margin:0 auto;padding:56px 24px 80px}
+  .mark{font:800 22px/1 -apple-system,Arial,sans-serif;letter-spacing:.28em}
+  .mark i{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);margin-left:6px}
+  h1{font:800 clamp(40px,7vw,72px)/1.04 -apple-system,Arial,sans-serif;margin:40px 0 18px}
+  .lede{color:var(--mute);font-size:21px;max-width:640px;margin:0 0 28px}
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:44px}
+  .cta a{padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:700}
+  .cta .p{background:var(--green);color:#0c2a14}
+  .cta .s{border:1px solid #444;color:var(--ink)}
+  .towers{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin:0 0 12px}
+  .tower{display:flex;flex-direction:column-reverse;gap:4px;padding:6px;border-radius:12px}
+  .tower.best{outline:2px solid var(--green);box-shadow:0 0 40px rgba(61,220,104,.28)}
+  .tower b{display:block;height:14px;border-radius:4px;background:var(--dim)}
+  .lab{text-align:center;margin-top:8px;font-weight:700}
+  .lab small{display:block;color:var(--mute);font-weight:400;font-size:13px}
+  .lab em{font:800 22px ui-monospace,Menlo,monospace;font-style:normal}
+  .note{color:#6d6d6d;font-size:13px;margin:6px 0 44px}
+  figure{margin:0 0 44px}
+  figure img{width:100%;border-radius:14px;border:1px solid #333;box-shadow:0 24px 60px rgba(0,0,0,.55)}
+  figcaption{color:#6d6d6d;font-size:13px;margin-top:8px}
+  h2{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin:44px 0 14px}
+  ul{padding-left:20px;margin:0} li{margin:8px 0}
+  pre{background:#0d0d0d;border:1px solid #2a2a2a;border-radius:10px;padding:16px;overflow:auto;font:14px/1.5 ui-monospace,Menlo,monospace}
+  .pb{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+  .pb a{display:block;padding:14px 16px;border:1px solid #333;border-radius:10px;color:var(--ink);text-decoration:none}
+  .pb a span{display:block;color:var(--mute);font-size:14px}
+  footer{margin-top:56px;color:var(--mute);font-size:14px}
+  a{color:var(--green)}
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">TOWER<i></i></div>
+  <h1>Which account has room?</h1>
+  <p class="lede">A macOS menu bar app for people who run several AI coding subscriptions. It shows where every account stands (usage per window, room left, when it resets) and tells you which one to switch to before you get stuck.</p>
+  <div class="cta">
+    <a class="p" href="https://github.com/yonatangross/tower/releases/latest">Download the latest release</a>
+    <a class="s" href="https://github.com/yonatangross/tower">View on GitHub</a>
+  </div>
+
+  <div class="towers" id="towers" aria-label="Four invented demo accounts, one with the most room lit"></div>
+  <p class="note">Demo accounts are invented.</p>
+
+  <figure>
+    <img src="images/panel-demo.png" alt="The Tower panel with four invented demo accounts">
+    <figcaption>The panel, with invented accounts.</figcaption>
+  </figure>
+
+  <h2>What it does</h2>
+  <ul>
+    <li><b>Seats.</b> Real Claude Code usage for each account you have signed into: the 5 hour and weekly windows, the room left, the next reset. Codex and Cursor plans sit beside them.</li>
+    <li><b>Advice.</b> Which seat has the most room, and when to switch.</li>
+    <li><b>MCP server.</b> <code>tower mcp</code> lets Claude Code, Codex, Cursor and other agents ask which account has room.</li>
+  </ul>
+
+  <h2>Every coding agent</h2>
+  <p>Claude Code, Codex, Cursor, Cursor CLI, Devin, Muse, Antigravity and Pi, with the OpenRouter balance and the TypeSafe Jev and Cloudflare Clef balances you enter by hand. Other agents and OpenRouter appear when those tools are installed.</p>
+  <p>Windows support and more harnesses coming next.</p>
+
+  <h2>Ask your agent</h2>
+  <p><code>tower mcp</code> is a stdio MCP server. Reads never show a Keychain dialog. Plain prompts land on a tool:</p>
+  <ul>
+    <li>&ldquo;Which of my accounts has room for a long refactor?&rdquo; <code>tower_room</code></li>
+    <li>&ldquo;Should I stay on this account or switch?&rdquo; <code>tower_advice</code></li>
+    <li>&ldquo;When does my weekly window reset?&rdquo; <code>tower_resets</code></li>
+    <li>&ldquo;Is any reading stale? How fresh is each one?&rdquo; <code>tower_freshness</code></li>
+    <li>&ldquo;Give me a rotation plan for the next login.&rdquo; <code>tower_rotate</code></li>
+    <li>&ldquo;Show me the Tower panel.&rdquo; <code>tower_panelshot</code> (an image)</li>
+  </ul>
+<pre>claude mcp add --scope user tower -- ~/.local/bin/tower mcp</pre>
+
+  <h2>Install</h2>
+  <p>macOS 14 or later, Apple silicon. Intel Macs build from source.</p>
+<pre>gh release download --repo yonatangross/tower --pattern 'Tower.app.zip*'
+shasum -a 256 -c Tower.app.zip.sha256 &amp;&amp; ditto -x -k Tower.app.zip ~/Applications
+open ~/Applications/Tower.app</pre>
+  <p>Then run <code>/login</code> once per Claude Code account. Blocked on first launch? See the troubleshooting playbook.</p>
+
+  <h2>Playbooks</h2>
+  <div class="pb">
+    <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/setup.md">Setup<span>install, first run, Keychain trust</span></a>
+    <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/multi-account.md">Multi-account<span>several seats, Codex, Cursor</span></a>
+    <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/mcp.md">MCP<span>let your agents ask which account has room</span></a>
+    <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/troubleshooting.md">Troubleshooting<span>Gatekeeper, Intel Macs, odd rows</span></a>
+  </div>
+
+  <footer>Open source, <a href="https://github.com/yonatangross/tower/blob/main/LICENSE">MIT</a>. Tower reads the same numbers Claude Code's <code>/usage</code> screen shows, through an undocumented endpoint that can change with any Claude Code release. Nothing leaves your Mac except requests to the providers' own APIs.</footer>
+</main>
+<script>
+  // Invented demo seats: used % per account, room = 100 - used; the lit cells equal the room printed under each tower. Same values as docs/images/panel-demo.png.
+  var seats=[{n:'side',p:'claude code max',u:12,best:1},{n:'work',p:'claude code max',u:41},{n:'lab',p:'claude code max',u:88},{n:'codex',p:'codex pro',u:35}];
+  function col(p){return p<50?'#3ddc68':p<75?'#f5c542':p<85?'#f59a2b':'#ef4b4b'}
+  var host=document.getElementById('towers'),rows=14;
+  seats.forEach(function(s){
+    var w=document.createElement('div'),t=document.createElement('div');t.className='tower'+(s.best?' best':'');
+    var filled=(100-s.u)/100*rows;   // cells lit = room %, the last cell partly
+    for(var r=0;r<rows;r++){var b=document.createElement('b'),on=Math.max(0,Math.min(1,filled-r));
+      if(on>=1)b.style.background=col(s.u);
+      else if(on>0)b.style.background='linear-gradient(to top,'+col(s.u)+' '+Math.round(on*100)+'%,var(--dim) '+Math.round(on*100)+'%)';
+      t.appendChild(b)}
+    var l=document.createElement('div');l.className='lab';
+    l.innerHTML=s.n+'<small>'+s.p+'</small><em style="color:'+col(s.u)+'">'+(100-s.u)+'%</em> room';
+    w.appendChild(t);w.appendChild(l);host.appendChild(w);
+  });
+</script>
+</body>
+</html>
