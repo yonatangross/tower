@@ -2329,12 +2329,16 @@ enum Refresher {
                              openRouter: OpenRouter.Outcome,
                              codex: CodexReader.Reading? = nil,
                              lanes: [Provider: AgentLane.Outcome] = [:],
+                             gate: ProviderGate = .all,
                              now: Date = Date()) -> String? {
-        store.seedDeclaredAccounts(into: &accounts)
-        store.seedKnownAccounts(into: &accounts)
+        if gate.on(.claude) {
+            store.seedDeclaredAccounts(into: &accounts)
+            store.seedKnownAccounts(into: &accounts)
+        }
         // Codex: the CLI's live answer when it came back, else the rollouts on disk, so it
-        // refreshes on every seed rather than only when a credential is pollable.
-        store.seedCodexAccount(into: &accounts, live: codex)
+        // refreshes on every seed rather than only when a credential is pollable. OFF reads
+        // neither.
+        if gate.on(.codex) { store.seedCodexAccount(into: &accounts, live: codex) }
         // Cursor is the opposite: local identity, remote numbers. The fetch already ran
         // concurrently with the Claude poll, so only the fold happens under the lock.
         let cursorKey = store.seedCursorAccount(into: &accounts, outcome: cursor, now: now)
@@ -2605,22 +2609,32 @@ enum Refresher {
     /// retained copy of its access token does, until that token expires; then the seat
     /// reads needs login until it signs into Claude Code again.
     @discardableResult
-    static func refreshActive() async -> RefreshResult {
-        // Independent of the Claude credential entirely: Cursor has its own identity and its
-        // own endpoint, so it must still be read on a machine with no Claude Code login at
-        // all. Started before the guard for exactly that reason.
-        async let cursorProbe = CursorUsage.fetch()
-        async let openRouterProbe = OpenRouter.fetch()
-        // A subprocess round trip of a second or two; blocking, so off the cooperative pool.
-        async let codexProbe = Task.detached(priority: .utility) { CodexLive.fetch() }.value
-        // File reads plus one bounded `muse usage --json` (8 s cap), off the main actor.
-        async let laneProbe = Task.detached(priority: .utility) {
-            AgentLane.readAll(museRunner: AgentLane.runMuseUsage)
-        }.value
-        let cursor = await cursorProbe
-        let openRouter = await openRouterProbe
-        let codex = await codexProbe
-        let lanes = await laneProbe
+    static func refreshActive(gate: ProviderGate = .current(),
+                              readers: ProviderReaders = .live) async -> RefreshResult {
+        // Only the providers the user turned on are read (Settings ▸ Providers). Cursor,
+        // OpenRouter, Codex and the lanes run concurrently and are independent of the Claude
+        // credential; an OFF provider's reader is never called.
+        let probes = await readers.probe(gate)
+        let cursor = probes.cursor
+        let openRouter = probes.openRouter
+        let codex = probes.codex
+        let lanes = probes.lanes
+
+        // Claude Code OFF: no Keychain read and no usage call; only the other folds land.
+        guard gate.on(.claude) else {
+            var cursorKey: String?
+            let (accounts, saveError) = Store.shared.mutate { accounts in
+                cursorKey = seed(into: &accounts, store: Store.shared, cursor: cursor,
+                                 openRouter: openRouter, codex: codex, lanes: lanes, gate: gate)
+            }
+            return RefreshResult(
+                accounts: accounts, activeEmail: nil,
+                outcome: saveError.map { .failed($0) } ?? .noCredential(detail: "Claude Code is off in Settings"),
+                openRouterOutcome: openRouter,
+                openRouterFoldCommitted: Self.openRouterFoldCommitted(outcome: openRouter, saveError: saveError),
+                cursorKey: cursorKey,
+                lanes: lanes)
+        }
 
         let keychainCallsAtStart = KeychainCallCounter.shared.total
         defer { KeychainCallCounter.shared.logCycle("refresh", startTotal: keychainCallsAtStart) }
@@ -2664,7 +2678,7 @@ enum Refresher {
         let (accounts, saveError) = Store.shared.mutate { accounts in
             cursorKey = seed(into: &accounts, store: Store.shared,
                              cursor: cursor, openRouter: openRouter, codex: codex,
-                             lanes: lanes)
+                             lanes: lanes, gate: gate)
             if let observation {
                 let filtered = observation.excluding(retiredEmails: Store.shared.retiredEmails)
                 ClaudeRoster.apply(
@@ -2810,7 +2824,8 @@ enum Thresholds {
 
     /// Pure: mutates only the snapshot's bookkeeping and returns what should be announced.
     /// Kept free of UserNotifications so the `status` CLI never touches the GUI stack.
-    static func evaluate(_ snap: inout AccountSnapshot, now: Date = Date()) -> [Alert] {
+    static func evaluate(_ snap: inout AccountSnapshot, now: Date = Date(),
+                         settings: AlertSettings = .defaults) -> [Alert] {
         var out: [Alert] = []
         snap.notified = migrated(snap.notified, now: now)
 
@@ -2826,7 +2841,7 @@ enum Thresholds {
             if now >= resetsAt { return }
             let k = key(window, resetsAt)
             let already = snap.notified[k] ?? 0
-            guard let hit = levels.last(where: { pct >= $0 }), hit > already else { return }
+            guard let hit = settings.levels(forWindow: window).last(where: { pct >= $0 }), hit > already else { return }
             snap.notified[k] = hit
             out.append(Alert(nickname: snap.nickname, window: window, pct: pct, resetsAt: resetsAt))
         }
@@ -2836,6 +2851,10 @@ enum Thresholds {
         // alert text is read by a human: "Cursor at 95% of 7d" would promise relief in a
         // week when the credits actually refill on the invoice boundary.
         check(snap.kind.primaryWindowLabel, snap.weeklyPct, snap.weeklyResetsAt)
+        // Fable is a scoped weekly pool on Claude seats; it gets its own first level.
+        for pool in snap.scoped where pool.label == "Fable" {
+            check("Fable", pool.percent, pool.resetsAt)
+        }
 
         // Drop bookkeeping for windows that have already reset, so the dict stays small.
         // `expiry` also discards pre-quantisation keys, which is the migration path off the
