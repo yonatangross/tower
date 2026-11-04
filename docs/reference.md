@@ -122,7 +122,7 @@ ln -sf ~/Applications/Tower.app/Contents/MacOS/Tower ~/.local/bin/tower
 | `tower selftest` | Pure-logic checks, no network, no GUI |
 | `tower login-item [on\|off]` | Read or set start-at-login |
 | `tower rotate` | Advisory manual login plan: which Claude seat to sign into next, through which Chrome profile |
-| `tower panelshot [out.png] [light] [expand]` | Render the real panel offscreen from persisted data, no credential read |
+| `tower panelshot [out.png] [light] [expand]` | Render the real panel offscreen from persisted data, no credential read. `TOWER_PANELSHOT_SCALE` (a whole number 1 to 4) renders at that many pixels per point, for example 3 for video frames; any other value exits 2. Unset keeps the screen's own scale. `tower_panelshot` over MCP never passes it on. |
 | `tower mcp` | Stdio MCP server over the same store and Keychain, for any lane that can speak MCP (see below) |
 | `tower mcp --self-test` | List the tools and read one account, an MCP preflight; exits non zero on a broken server |
 
