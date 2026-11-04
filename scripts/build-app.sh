@@ -172,7 +172,7 @@ printf '%s\n' \
   '  <key>CFBundleIconFile</key><string>AppIcon</string>' \
   '  <key>CFBundleIconName</key><string>AppIcon</string>' \
   '  <key>CFBundlePackageType</key><string>APPL</string>' \
-  '  <key>CFBundleShortVersionString</key><string>0.1.1</string>' \
+  '  <key>CFBundleShortVersionString</key><string>0.1.3</string>' \
   "  <key>CFBundleVersion</key><string>$BUILD_SHA</string>" \
   '  <key>LSMinimumSystemVersion</key><string>14.0</string>' \
   '  <!-- menubar-only: no Dock icon, no main window -->' \

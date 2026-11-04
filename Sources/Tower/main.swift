@@ -71,6 +71,13 @@ case .mcp:
 case .rotate:
     exit(CLI.rotate())
 
+case .retrust:
+    // The one read that may show the Keychain dialog, started from a terminal or an agent.
+    // macOS asks Always Allow once per seat; the user answers it.
+    let report = CLI.retrustReport(ClaudeSeatVault.shared.retrust())
+    report.lines.forEach { print($0) }
+    exit(report.code)
+
 case .loginItem:
     if args.contains("on") || args.contains("off") {
         if let err = LaunchAtLogin.set(args.contains("on")) {

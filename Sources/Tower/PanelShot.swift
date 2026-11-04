@@ -25,7 +25,55 @@ enum PanelShot {
         return MenuContent(model: model, refreshMode: .cached)
     }
 
+    /// `TOWER_PANELSHOT_SCALE=3 tower panelshot out.png` rasterizes the same vector panel
+    /// at 3 pixels per point, for video frames that a 2x screen capture would blur when
+    /// scaled up. Unset keeps the screen's own backing scale, as before.
+    nonisolated static let scaleEnvKey = "TOWER_PANELSHOT_SCALE"
+    nonisolated static let scaleRange = 1...4
+
+    /// nil = unset (the screen's backing scale). A value that is not a whole number in
+    /// `scaleRange` is an error, never a silent fallback to 1x or 2x.
+    nonisolated static func requestedScale(
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Result<Int?, ScaleError> {
+        guard let raw = env[scaleEnvKey]?.trimmingCharacters(in: .whitespaces), !raw.isEmpty
+        else { return .success(nil) }
+        guard let value = Int(raw), scaleRange.contains(value) else { return .failure(ScaleError(raw: raw)) }
+        return .success(value)
+    }
+
+    struct ScaleError: Error, Equatable {
+        let raw: String
+        var message: String {
+            "panelshot: \(PanelShot.scaleEnvKey)=\(raw) is not a whole number from "
+                + "\(PanelShot.scaleRange.lowerBound) to \(PanelShot.scaleRange.upperBound)"
+        }
+    }
+
+    /// A bitmap of `bounds` points at exactly `scale` pixels per point. `size` stays in
+    /// points, so cacheDisplay draws the vector content at the higher density instead of
+    /// stretching a 1x image onto a larger canvas.
+    nonisolated static func bitmap(for bounds: NSRect, scale: Int) -> NSBitmapImageRep? {
+        guard bounds.width > 0, bounds.height > 0, scaleRange.contains(scale) else { return nil }
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int((bounds.width * CGFloat(scale)).rounded()),
+            pixelsHigh: Int((bounds.height * CGFloat(scale)).rounded()),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return nil }
+        rep.size = bounds.size
+        return rep
+    }
+
     static func run(to url: URL) async -> Int32 {
+        let scale: Int?
+        switch requestedScale() {
+        case .success(let value): scale = value
+        case .failure(let error):
+            print(error.message)
+            return 2
+        }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         // Offscreen views get no appearance from a window, so name one: without
@@ -85,14 +133,16 @@ enum PanelShot {
         try? await Task.sleep(nanoseconds: 300_000_000)
         view.layoutSubtreeIfNeeded()
 
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
-        else { return 1 }
+        let made = scale.map { bitmap(for: view.bounds, scale: $0) }
+            ?? view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        guard let rep = made else { return 1 }
         view.cacheDisplay(in: view.bounds, to: rep)
         guard let png = rep.representation(using: .png, properties: [:])
         else { return 1 }
         do {
             try png.write(to: url)
-            print("wrote \(url.path) (\(Int(size.width))x\(Int(size.height)))")
+            print("wrote \(url.path) (\(Int(size.width))x\(Int(size.height)) pt, "
+                  + "\(rep.pixelsWide)x\(rep.pixelsHigh) px)")
             return 0
         } catch {
             print("panelshot failed: \(error)")

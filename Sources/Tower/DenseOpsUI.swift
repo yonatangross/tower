@@ -623,6 +623,7 @@ struct SeatBoardRow: View {
                                 .foregroundStyle(TowerType.secondary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.85)
+                                .help("from the \(account.kind.readingSource); Refresh reads it again")
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(
@@ -630,6 +631,13 @@ struct SeatBoardRow: View {
                                 )
                             if let note = SeatUsagePresentation.reopenedNote(account, rest: rest, now: now) {
                                 Text(note)
+                                    .font(TowerType.font(.minimum))
+                                    .foregroundStyle(TowerType.dim)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                            } else if rest?.isStale == true, !usage.isLive {
+                                // Where the old number came from, so the user knows what to check.
+                                Text(account.kind.readingSource)
                                     .font(TowerType.font(.minimum))
                                     .foregroundStyle(TowerType.dim)
                                     .lineLimit(1)
@@ -752,6 +760,9 @@ struct SeatBoardRow: View {
                 Text("captured \(CLI.age(account.capturedAt, now: now))")
                 if let err = account.lastError {
                     Text(err).foregroundStyle(.red).lineLimit(1)
+                }
+                if account.kind == .cursor, CursorUsage.needsConnect(account.lastError) {
+                    CursorConnectButton()
                 }
                 if showsSwitch {
                     Button("switch to this seat", action: onSwitch)
@@ -1300,6 +1311,38 @@ struct SessionsBoard: View {
                     .buttonStyle(.plain)
                     if idleOpen { ForEach(idle) { groupRow($0, showAccount: showAccount) } }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Connect Cursor
+
+enum CursorConnectState: Equatable {
+    case idle
+    case waiting
+    case failed(String)
+}
+
+/// The Cursor row's one action when Tower has no Cursor sign-in of its own: open Cursor's
+/// sign-in page, then show that Tower is waiting for it.
+struct CursorConnectButton: View {
+    @ObservedObject var model = LimitsModel.shared
+
+    var body: some View {
+        switch model.cursorConnect {
+        case .waiting:
+            Text("waiting for Cursor sign-in").foregroundStyle(.orange)
+        case .idle:
+            Button("Connect Cursor") { model.connectCursor() }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+        case .failed(let why):
+            HStack(spacing: 4) {
+                Button("Connect Cursor") { model.connectCursor() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                Text(why).foregroundStyle(.red).lineLimit(1)
             }
         }
     }

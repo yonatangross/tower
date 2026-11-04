@@ -52,11 +52,16 @@ Codex.
 
 ## Cursor
 
-Tower reads the signed in Cursor account from Cursor's local state and its two
-monthly model pools (**Cursor Models** and **Other Models**) from the Cursor
-usage page Cursor itself uses. No setup, no Keychain prompt. When the Cursor
-session expires, the row reads `Cursor session refused` until you sign into
-Cursor again.
+Cursor needs a one-time **Connect Cursor** in Tower. Open the Cursor row and click
+**Connect Cursor**: Cursor's sign-in page opens in your browser, and when you finish
+there Tower stores its own sign-in in its own Keychain item. Tower then reads the two
+monthly model pools (**Cursor Models** and **Other Models**) with that sign-in and
+renews it about a week before it expires.
+
+Tower never uses or touches the Cursor app's own sign-in, so connecting Tower can never
+sign you out of Cursor. Signing in again in the Cursor app does not change Tower's row.
+When Tower's sign-in ends or is refused, the row reads `Connect Cursor in Tower` and the
+same button fixes it.
 
 ## How Tower ranks
 
