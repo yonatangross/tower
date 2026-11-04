@@ -9,9 +9,11 @@ zip, macOS marks it as quarantined and Gatekeeper may refuse the first launch
 Check the checksum first (`shasum -a 256 -c Tower.app.zip.sha256` prints `OK`),
 then either:
 
-- **System Settings**: try to open Tower once, then open System Settings,
-  Privacy & Security, scroll to the message about Tower and press
-  **Open Anyway**. Confirm once.
+- **System Settings**: open Tower once and press **Done** on the warning. Open
+  System Settings, Privacy & Security, scroll to Security, and next to "Tower
+  was blocked to protect your Mac" press **Open Anyway**. Press **Open Anyway**
+  again in the dialog and enter your login password if macOS asks. On macOS 15
+  and later, Control-click and Open no longer skips this; Open Anyway is the way.
 - **Terminal**, if you prefer: remove the quarantine flag from the app you just
   verified.
 
