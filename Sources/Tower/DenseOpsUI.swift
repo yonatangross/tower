@@ -623,6 +623,7 @@ struct SeatBoardRow: View {
                                 .foregroundStyle(TowerType.secondary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.85)
+                                .help("from the \(account.kind.readingSource); Refresh reads it again")
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(
@@ -630,6 +631,13 @@ struct SeatBoardRow: View {
                                 )
                             if let note = SeatUsagePresentation.reopenedNote(account, rest: rest, now: now) {
                                 Text(note)
+                                    .font(TowerType.font(.minimum))
+                                    .foregroundStyle(TowerType.dim)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                            } else if rest?.isStale == true, !usage.isLive {
+                                // Where the old number came from, so the user knows what to check.
+                                Text(account.kind.readingSource)
                                     .font(TowerType.font(.minimum))
                                     .foregroundStyle(TowerType.dim)
                                     .lineLimit(1)

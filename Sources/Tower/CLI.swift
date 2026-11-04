@@ -389,6 +389,38 @@ enum CLI {
         check("stale account still exposes the raw number", stale.usedPct(now: now) == 40)
         check("stale account worstTrust is stale", stale.worstTrust(now: now) == .stale)
 
+        // A stale reading says how old it is and where it came from, never a bare
+        // "stale": the user needs to know whether to wait, refresh or fix a source.
+        var oldRead = AccountSnapshot(email: "r@r", nickname: "r", plan: "max")
+        oldRead.capturedAt = now.addingTimeInterval(-(2 * 3600 + 2 * 60))
+        oldRead.weeklyPct = 30
+        oldRead.weeklyResetsAt = upcoming
+        check("a stale row says how long ago it was read",
+              SeatUsagePresentation(account: oldRead, now: now).stateText == "read 2h 2m ago",
+              SeatUsagePresentation(account: oldRead, now: now).stateText)
+        check("every quota provider names where its reading comes from",
+              Provider.claude.readingSource == "Claude usage API"
+                  && Provider.codex.readingSource == "Codex CLI"
+                  && Provider.cursor.readingSource == "Cursor usage API"
+                  && Provider.devin.readingSource == "Devin CLI cache"
+                  && Provider.muse.readingSource == "muse usage")
+        // The panel says so when Tower itself stopped refreshing (or only shows readings
+        // saved by an earlier run), instead of leaving every row to read "stale".
+        let lastGood = now.addingTimeInterval(-20 * 60)
+        check("panel says Tower is not refreshing after two missed intervals",
+              RefreshHealth.line(lastRefresh: lastGood, newestReading: lastGood, now: now, interval: 300)
+                  == "Tower is not refreshing: last refresh \(CLI.clock(lastGood)), 20m ago",
+              RefreshHealth.line(lastRefresh: lastGood, newestReading: lastGood, now: now, interval: 300) ?? "nil")
+        let savedOnly = now.addingTimeInterval(-52 * 60)
+        check("panel with no refresh yet says it shows saved readings and how old",
+              RefreshHealth.line(lastRefresh: nil, newestReading: savedOnly, now: now, interval: 300)
+                  == "Saved readings only: newest from \(CLI.clock(savedOnly)), 52m ago",
+              RefreshHealth.line(lastRefresh: nil, newestReading: savedOnly, now: now, interval: 300) ?? "nil")
+        check("panel says nothing while refreshes are on time",
+              RefreshHealth.line(lastRefresh: now.addingTimeInterval(-240), newestReading: now, now: now, interval: 300) == nil
+                  && RefreshHealth.line(lastRefresh: nil, newestReading: now.addingTimeInterval(-120), now: now, interval: 300) == nil
+                  && RefreshHealth.line(lastRefresh: nil, newestReading: nil, now: now, interval: 300) == nil)
+
         var mixed = AccountSnapshot(email: "m@m", nickname: "m", plan: "max")
         mixed.capturedAt = ancient
         mixed.fiveHourPct = 90

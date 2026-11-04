@@ -38,7 +38,7 @@ struct SeatUsagePresentation: Equatable {
         }
 
         roomText = Self.percent(cachedRoom)
-        stateText = "stale cache \(Self.age(now.timeIntervalSince(capturedAt)))"
+        stateText = Self.readText(now.timeIntervalSince(capturedAt))
     }
 
     /// The words for `AccountSnapshot.fiveHourUnreported`, one string for every surface.
@@ -136,6 +136,15 @@ struct SeatUsagePresentation: Equatable {
         guard let latest, !labels.isEmpty else { return nil }
         return Reopened(windows: labels.joined(separator: "+"), at: latest)
     }
+
+    /// "read 2h 2m ago": how old a stale reading is, in words a user acts on. A capture
+    /// dated after now is a clock problem, named as one.
+    static func readText(_ interval: TimeInterval) -> String {
+        interval < 0 ? "read time ahead of this clock (clock skew)" : "read \(age(interval)) ago"
+    }
+
+    /// The same age without the clock-skew case, for "N ago" lines.
+    static func readingAge(_ interval: TimeInterval) -> String { age(max(0, interval)) }
 
     private static func age(_ interval: TimeInterval) -> String {
         if interval < 0 { return "clock skew" }

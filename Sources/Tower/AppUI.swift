@@ -234,7 +234,7 @@ final class LimitsModel: ObservableObject {
 
     /// Refresh the configured roster every five minutes; login changes also fetch the
     /// affected profile promptly without repeating other providers.
-    private static let pollInterval: TimeInterval = 300
+    static let pollInterval: TimeInterval = 300
     /// `/login` writes profile Keychain items independently of Tower.  A short
     /// local poll makes the just-signed-in seat visible before the next five-minute cadence.
     private static let loginPollInterval: TimeInterval = 5
@@ -1949,6 +1949,21 @@ struct MenuContent: View {
             if let e = model.refreshError {
                 Text("⚠️ refresh failed: \(e)")
                     .font(TowerType.font(.small)).foregroundStyle(.red).lineLimit(2)
+            }
+            // Nothing refreshed for two intervals (the app was stopped, or every refresh
+            // failed): one line says so, with the fix beside it, so the rows' ages read as
+            // a Tower problem rather than eight separate provider problems.
+            if !model.refreshing,
+               let health = RefreshHealth.line(lastRefresh: model.lastRefresh,
+                                               newestReading: RefreshHealth.newestReading(model.accounts),
+                                               now: Date(), interval: LimitsModel.pollInterval) {
+                HStack(spacing: 6) {
+                    Text(health)
+                        .font(TowerType.font(.small)).foregroundStyle(.orange).lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button("Refresh") { Task { await model.refresh() } }
+                        .font(TowerType.font(.small))
+                }
             }
             Divider()
 
