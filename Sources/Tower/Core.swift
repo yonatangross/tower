@@ -2041,27 +2041,23 @@ final class Store {
                            outcome: CursorUsage.Outcome,
                            home: URL = FileManager.default.homeDirectoryForCurrentUser,
                            now: Date = Date()) -> String? {
-        guard let id = CursorAuth.identity(home: home) else {
-            // A login Tower cannot read is a failure, not an absent lane. Write the reason
-            // onto every existing Cursor row and leave its numbers and `capturedAt` exactly
-            // as they were, so they keep aging into stale instead of being refreshed or
-            // silently kept. Returns nil: no capture happened, so nothing to announce. With
-            // no prior row there is nothing to age and nothing is invented.
-            if case .identityUnreadable(let why) = outcome {
-                for (key, var snap) in accounts where snap.kind == .cursor {
-                    snap.lastError = why
-                    accounts[key] = snap
-                }
-            }
+        // The row's label comes from the Cursor app (email and plan, never a token). With
+        // no Cursor app, a reading made with Tower's own sign-in still names its row.
+        let label: CursorAuth.Label
+        if let local = CursorAuth.label(home: home) {
+            label = local
+        } else if case .ok(let reading) = outcome {
+            label = CursorAuth.Label(email: reading.email, plan: reading.plan)
+        } else {
             return nil
         }
-        let key = AccountSnapshot.storeKey(email: id.email, provider: .cursor)
+        let key = AccountSnapshot.storeKey(email: label.email, provider: .cursor)
         var snap = accounts[key] ?? AccountSnapshot(
-            email: id.email,
-            nickname: Nickname.derive(from: id.email),
-            plan: id.plan)
+            email: label.email,
+            nickname: Nickname.derive(from: label.email),
+            plan: label.plan)
         snap.provider = .cursor
-        snap.plan = id.plan
+        snap.plan = label.plan
 
         switch outcome {
         case .ok(let reading):
@@ -2069,11 +2065,12 @@ final class Store {
         case .rejected(let code):
             // `capturedAt` is deliberately NOT advanced. The old numbers stay on screen and
             // start aging, which is the visible stale state a refused cookie has to produce.
-            snap.lastError = CursorUsage.refusedError(code: code, opaqueToken: id.opaqueToken)
+            snap.lastError = "Cursor refused the usage read (HTTP \(code))."
         case .unavailable:
             snap.lastError = "could not read Cursor usage (network, or the response "
                 + "did not parse)"
-        case .identityUnreadable(let why):
+        case .connectNeeded(let why):
+            // `capturedAt` stays: the old numbers age into stale under the reason.
             snap.lastError = why
         case .notConfigured:
             // Identity resolved but the fetch declined to run. Leave the row as it stands.
