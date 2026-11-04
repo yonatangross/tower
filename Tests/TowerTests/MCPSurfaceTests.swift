@@ -588,6 +588,28 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.balanceKey))
         XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.balanceAsOfKey))
 
+        // Clef is TypeSafe's second decision model: its own key, its own day, reported
+        // beside Jev under `models` and never written into Jev's keys.
+        let clef = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": 8])
+        XCTAssertEqual(clef.structuredContent?["value"], 8)
+        XCTAssertEqual(clef.structuredContent?["previous"], .null)
+        XCTAssertEqual(clef.structuredContent?["asOf"], .string(asOf))
+        XCTAssertEqual(TypeSafe.entry(model: .clef, defaults: fixture.defaults), TypeSafe.Entry(usd: 8, asOf: asOf))
+        XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.balanceKey))
+        let clefConfig = try await call("tower_config_get").structuredContent!
+        XCTAssertEqual(clefConfig["typesafe"]["entered"], false)
+        XCTAssertEqual(clefConfig["typesafe"]["models"]["clef"]["balanceUSD"], 8)
+        XCTAssertEqual(clefConfig["typesafe"]["models"]["clef"]["level"], "amber")
+        let clefStatus = try await call("tower_status").structuredContent!
+        XCTAssertEqual(clefStatus["typesafe"]["models"]["clef"]["entered"], true)
+        XCTAssertEqual(clefStatus["typesafe"]["models"]["jev"]["entered"], false)
+        let clefNegative = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": -1])
+        XCTAssertEqual(clefNegative.structuredContent?["error"]["code"], "BadValue")
+        let clefCleared = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": .null])
+        XCTAssertEqual(clefCleared.structuredContent?["previous"], 8)
+        XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.Model.clef.balanceKey))
+        XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.Model.clef.balanceAsOfKey))
+
         let retired = try await call("tower_config_set", ["key": "retiredAccounts", "value": ["old@example.com"]])
         XCTAssertEqual(retired.structuredContent?["value"], ["old@example.com"])
         XCTAssertEqual(fixture.store.retiredEmails, ["old@example.com"])

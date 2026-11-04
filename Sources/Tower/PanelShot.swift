@@ -54,10 +54,11 @@ enum PanelShot {
             model.probed = true
         }
 
-        // `panelshot unfold` opens the three folds (stale seats, the Jev row, idle
+        // `panelshot unfold` opens the folds (stale seats, each TypeSafe credit row, idle
         // sessions) so the render shows what the folded lines hide.
         if CommandLine.arguments.contains("unfold") {
-            model.expanded.formUnion([SeatBoard.staleDisclosureID, "money.jev", "sessions.idle"])
+            model.expanded.formUnion([SeatBoard.staleDisclosureID, "sessions.idle"]
+                                     + TypeSafe.Model.allCases.map(MoneyBoard.disclosureID))
         }
 
         let hosting = NSHostingController(
