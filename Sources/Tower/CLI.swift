@@ -149,6 +149,20 @@ enum CLI {
     }
 
     /// Prints an advisory manual-login plan without changing the active Claude credential.
+    /// What `tower retrust` prints and its exit code: the counts on success (exit 0), the
+    /// vault's own refusal on failure (exit 1), for example an unsigned build that may
+    /// never show the Keychain dialog. The running app picks the seats up by itself: it
+    /// re-reads an unreadable seat silently every `ClaudeSeatVault.readRetryBackoff`.
+    static func retrustReport(_ result: Result<(readable: Int, unreadable: Int), ClaudeSeatVaultError>)
+        -> (code: Int32, lines: [String]) {
+        switch result {
+        case .success(let counts):
+            return (0, ["Re-trust: \(counts.readable) remembered seats readable, \(counts.unreadable) still unreadable. macOS asks Always Allow once per seat."])
+        case .failure(let error):
+            return (1, ["Re-trust failed: \(error.message)"])
+        }
+    }
+
     static func rotate() -> Int32 {
         let now = Date()
         let report = rotateReport(
@@ -2430,6 +2444,38 @@ enum CLI {
                       && DemoMode.refusal(args: ["panelshot", "out.png"]) == nil)
             check("demo refuses the app and plain status", DemoMode.refusal(args: []) != nil
                       && DemoMode.refusal(args: ["status"]) != nil)
+            // `tower retrust`: an agent can start Re-trust; the user still approves each
+            // Keychain dialog. A demo has no real Keychain, so it refuses.
+            check("retrust dispatches to its own verb and a demo refuses it",
+                  DemoMode.dispatched(args: ["retrust"]) == .retrust
+                      && DemoMode.refusal(args: ["retrust"]) != nil)
+            let retrustOK = CLI.retrustReport(.success((readable: 6, unreadable: 1)))
+            check("tower retrust reports readable and unreadable seats and exits 0",
+                  retrustOK.code == 0
+                      && retrustOK.lines == ["Re-trust: 6 remembered seats readable, 1 still unreadable. macOS asks Always Allow once per seat."],
+                  "\(retrustOK)")
+            let retrustNo = CLI.retrustReport(.failure(ClaudeSeatVaultError("Re-trust needs the signed Tower app")))
+            check("tower retrust prints the refusal and exits 1",
+                  retrustNo.code == 1 && retrustNo.lines == ["Re-trust failed: Re-trust needs the signed Tower app"],
+                  "\(retrustNo)")
+            let demoRetrust = TowerMCPService(env: .demo(supportDirectory: demoDir)).retrust()
+            check("tower_retrust in a demo is refused, with no Keychain dialog",
+                  demoRetrust.isError && demoRetrust.structuredContent?["error"]["code"] == "RetrustRefused",
+                  "\(demoRetrust.content)")
+            let retrustSpec = TowerMCPService.tools.first { $0.name == "tower_retrust" }
+            check("tower_retrust is listed as a user-interactive write, not idempotent",
+                  retrustSpec?.annotations.readOnlyHint == false && retrustSpec?.annotations.idempotentHint == false
+                      && (retrustSpec?.description.contains("Always Allow") ?? false))
+            // After a CLI retrust grants access, the running app finds the seat by itself:
+            // while any seat is unreadable its silent read is due again after the backoff.
+            let pickup = ClaudeSeatLaunchCache()
+            let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+            pickup.keep(ClaudeSeatKeychainReadout(records: [], unreadable: [ClaudeSeatUnreadableItem(service: "s", account: "a", label: "l", status: -25293)]),
+                        now: t0, interaction: .suppressed)
+            check("the app re-reads an unreadable seat after the backoff, so a CLI retrust is picked up",
+                  !pickup.readDue(now: t0.addingTimeInterval(30), backoff: ClaudeSeatVault.readRetryBackoff)
+                      && pickup.readDue(now: t0.addingTimeInterval(ClaudeSeatVault.readRetryBackoff + 1),
+                                        backoff: ClaudeSeatVault.readRetryBackoff))
             // A demo panel shows the invented Pi lane only when the demo names its directory.
             check("demo shows no agent lanes without TOWER_PI_DIR", DemoMode.lanes(env: demoEnv).isEmpty)
             let demoPi = demoDir.appendingPathComponent("pi")

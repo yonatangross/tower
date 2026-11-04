@@ -45,7 +45,7 @@ launch? See [troubleshooting](docs/playbooks/troubleshooting.md#macos-blocks-the
 - **Extras.** OpenRouter balance, agent lanes (Muse, Devin, the Cursor CLI,
   Antigravity, and Pi with its spend this month and today as a share of the
   OpenRouter budget) and live Claude Code sessions, when those tools are present.
-- **CLI.** `tower status`, `tower rotate`, `tower panelshot`, `tower selftest`.
+- **CLI.** `tower status`, `tower rotate`, `tower retrust`, `tower panelshot`, `tower selftest`.
 
 It reads the same numbers Claude Code's `/usage` screen shows, through an
 **undocumented** endpoint that can change with any Claude Code release.
@@ -163,7 +163,7 @@ agent prompts are in the [MCP playbook](docs/playbooks/mcp.md).
 | `tower_resets`, `tower_freshness`, `tower_alerts` | reset times, how fresh each reading is, threshold state |
 | `tower_seats`, `tower_lanes`, `tower_sessions` | remembered seats, agent lanes, running Claude Code sessions |
 | `tower_openrouter_history`, `tower_config_get`, `tower_selftest`, `tower_panelshot` | balance trend, settings, checks, a panel image |
-| `tower_refresh`, `tower_forget_seats`, `tower_config_set`, `tower_alert_ack` | writes, each annotated and refused with a named code when a precondition fails |
+| `tower_refresh`, `tower_retrust`, `tower_forget_seats`, `tower_config_set`, `tower_alert_ack` | writes, each annotated and refused with a named code when a precondition fails |
 
 Example call (`tools/call`, `tower_advice`, no arguments) and its structured
 result, from the invented demo store:
