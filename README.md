@@ -100,8 +100,9 @@ To remove Tower, follow [uninstall](docs/playbooks/uninstall.md).
 
 Tower shows the macOS Keychain dialog only when you press **Re-trust** (beside
 **Forget** in the panel), run `tower retrust`, or an agent calls `tower_retrust`.
-Launches, background refreshes, `tower status` and `tower mcp` never show it, and
-Tower never asks for your login password. Until you press Re-trust after an update,
+Launches, background refreshes, `tower status` and `tower mcp` never show it. The
+dialog Re-trust opens is macOS's own and may ask for your login keychain password;
+Tower never sees that password. Until you press Re-trust after an update,
 Tower reads only the seat you are signed into; the other remembered seats wait.
 
 | Situation | Keychain prompts |
@@ -220,13 +221,19 @@ into Claude Code at least once.
 publisher is yonyon.ai). `defaults write` uses it to find Tower's settings on your
 Mac. It is not an account, an email or a web address, and nothing is sent to it.
 
-OpenRouter key from a password manager: Tower runs the command you give it,
-without a shell, and never stores the key. Any command that prints the key
-works; this one reads it from your macOS Keychain:
+OpenRouter key from a password manager: Tower runs the command you give it on
+every refresh, without a shell, and never stores the key. The command must print
+the key without asking anything: Tower waits for it, so a command that shows a
+dialog or waits for a fingerprint holds up each refresh. This pair keeps the key
+in your macOS Keychain without a dialog, because the item is created by the same
+`security` tool that later reads it:
 
 ```bash
+# Once: store the key (the security tool becomes the item's trusted reader).
+security add-generic-password -a "$USER" -s OpenRouter -w <your-openrouter-key>
+# Tell Tower how to read it; this runs on every refresh.
 defaults write ai.yonyon.tower openRouterKeyCommand -array \
-  /usr/bin/security find-generic-password -s OpenRouter -w
+  /usr/bin/security find-generic-password -a "$USER" -s OpenRouter -w
 # Optional: a cache file your command writes; Tower deletes it once on a 401.
 defaults write ai.yonyon.tower openRouterKeyCacheFile ~/path/to/cache
 ```
