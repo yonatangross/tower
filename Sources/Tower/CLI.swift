@@ -2174,6 +2174,23 @@ enum CLI {
             let demoLanes = DemoMode.lanes(env: demoEnv.merging([PiLane.rootEnvKey: demoPi.path]) { $1 })
             check("demo with TOWER_PI_DIR shows only the Pi lane, read from that directory",
                   Set(demoLanes.keys) == [.pi] && demoLanes[.pi] != .notConfigured, "\(demoLanes)")
+            // TOWER_PI_DIR must stay inside the demo store: a path outside it, or a symlink
+            // in the store that points out, would put real Pi spend in a demo shot.
+            let outside = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tower-selftest-realpi-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: outside) }
+            try? FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+            check("demo ignores a TOWER_PI_DIR outside the demo store",
+                  DemoMode.lanes(env: demoEnv.merging([PiLane.rootEnvKey: outside.path]) { $1 }).isEmpty)
+            let escape = demoDir.appendingPathComponent("pi-escape")
+            try? FileManager.default.createSymbolicLink(at: escape, withDestinationURL: outside)
+            check("demo ignores a symlink in the store that points outside it",
+                  DemoMode.lanes(env: demoEnv.merging([PiLane.rootEnvKey: escape.path]) { $1 }).isEmpty)
+            check("demo ignores TOWER_PI_DIR when there is no demo store",
+                  DemoMode.lanes(env: [PiLane.rootEnvKey: demoPi.path]).isEmpty)
+            // `panelshot sessions` runs `claude agents --json`: a demo shot must not list real sessions.
+            check("demo panelshot never runs the live session probe",
+                  !DemoMode.runsLiveSessionProbe(env: demoEnv) && DemoMode.runsLiveSessionProbe(env: [:]))
             // Same contract as MCPSurfaceTests.testEveryCLIVerbHasATool, runnable without XCTest.
             let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
             let toolNames = Set(TowerMCPService.tools.map(\.name))
