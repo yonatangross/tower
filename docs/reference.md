@@ -50,7 +50,7 @@ the [setup playbook](playbooks/setup.md) cover the plain zip. From a clone,
 handles start at login and an upgrade from a build before v0.1:
 
 ```bash
-./scripts/install.sh --from-release v0.1.0
+./scripts/install.sh --from-release v0.1.1
 ln -sf ~/Applications/Tower.app/Contents/MacOS/Tower ~/.local/bin/tower
 tower login-item on
 ```

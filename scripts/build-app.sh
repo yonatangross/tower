@@ -159,7 +159,7 @@ printf '%s\n' \
   "  <key>CFBundleIdentifier</key><string>$BUNDLE_IDENTIFIER</string>" \
   "  <key>CFBundleExecutable</key><string>$BIN_NAME</string>" \
   '  <key>CFBundlePackageType</key><string>APPL</string>' \
-  '  <key>CFBundleShortVersionString</key><string>0.1.0</string>' \
+  '  <key>CFBundleShortVersionString</key><string>0.1.1</string>' \
   "  <key>CFBundleVersion</key><string>$BUILD_SHA</string>" \
   '  <key>LSMinimumSystemVersion</key><string>14.0</string>' \
   '  <!-- menubar-only: no Dock icon, no main window -->' \
