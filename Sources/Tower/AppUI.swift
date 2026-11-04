@@ -141,6 +141,8 @@ final class LimitsModel: ObservableObject {
     @Published var lastRefresh: Date?
     @Published var refreshError: String?
     @Published var refreshing = false
+    /// Tower's own Cursor sign-in, while it runs: idle, waiting on the browser, or failed.
+    @Published var cursorConnect: CursorConnectState = .idle
     @Published var launchAtLogin = LaunchAtLogin.isEnabled
     @Published var loginError: String?
     @Published var retainClaudeSeats = ClaudeSeatRetention.isEnabled()
@@ -489,6 +491,36 @@ final class LimitsModel: ObservableObject {
     }
 
     /// Refreshes usage, sessions, and derived panel state from one coordinated observation.
+    /// Opens Cursor's sign-in page in the browser and polls for the token pair, then
+    /// stores it in Tower's own Keychain item and refreshes. Never touches the Cursor app.
+    func connectCursor() {
+        guard cursorConnect != .waiting else { return }
+        guard let pkce = CursorSignIn.newPKCE() else {
+            cursorConnect = .failed("could not start the Cursor sign-in: the system random source failed")
+            return
+        }
+        let uuid = UUID().uuidString
+        cursorConnect = .waiting
+        NSWorkspace.shared.open(CursorSignIn.authorizeURL(challenge: pkce.challenge, uuid: uuid))
+        Task {
+            let result = await CursorSignIn.poll(uuid: uuid, verifier: pkce.verifier,
+                                                 http: URLSessionCursorHTTP())
+            switch result {
+            case .signedIn(let tokens):
+                if KeychainCursorTokenStore.shared.save(tokens) {
+                    cursorConnect = .idle
+                    await refresh()
+                } else {
+                    cursorConnect = .failed("could not save the Cursor sign-in to the Keychain")
+                }
+            case .failed(let why):
+                cursorConnect = .failed(why)
+            case .timedOut:
+                cursorConnect = .failed("Cursor sign-in timed out after 5 minutes")
+            }
+        }
+    }
+
     func refresh() async {
         guard !refreshing else { return }
         refreshing = true

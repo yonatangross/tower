@@ -1207,25 +1207,23 @@ enum TypeSafe {
 /// package. Measured 2026-08-18 against a live 47 MB `state.vscdb` while Cursor was running:
 /// 5 ms, no lock contention.
 enum CursorAuth {
-    struct Identity {
+    /// The row's label from the Cursor app's state: who is signed in and on which plan.
+    /// Never a token: Tower's usage reads use its own sign-in (CursorSignIn), so nothing
+    /// read here is ever sent anywhere.
+    struct Label: Equatable {
         let email: String
-        /// "pro", "free", ... straight from the row. Never guessed.
         let plan: String
-        let subscriptionStatus: String?
-        /// The WorkOS session JWT. Never logged, never persisted by this app.
-        let accessToken: String
-        /// The JWT's `sub`, e.g. "google-oauth2|user_01J8…". Half of the session cookie.
-        /// When the token is opaque this is `cursorAuth/stripeMembershipAuthId` instead.
-        let subject: String
-        /// True when `accessToken` is not a JWT. Measured 2026-10-31: Cursor now stores a
-        /// 603 char token with no dots. The old cookie route answers 401 for it, so a
-        /// refusal must say the format changed instead of blaming an expired session.
-        var opaqueToken: Bool = false
     }
 
     static func stateDB(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         home.appendingPathComponent(
             "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+    }
+
+    /// The sqlite3 arguments for one read. `-readonly` comes first, so no read can write,
+    /// migrate or lock the database the Cursor app is using.
+    static func sqliteArguments(db: URL, key: String) -> [String] {
+        ["-readonly", db.path, "select value from ItemTable where key='\(key)' limit 1;"]
     }
 
     /// One value out of `ItemTable`. Returns nil for a missing row, an unreadable database,
@@ -1235,9 +1233,7 @@ enum CursorAuth {
         guard FileManager.default.fileExists(atPath: db.path) else { return nil }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        // -readonly so a poll can never write, migrate or lock the database Cursor is using.
-        p.arguments = ["-readonly", db.path,
-                       "select value from ItemTable where key='\(key)' limit 1;"]
+        p.arguments = sqliteArguments(db: db, key: key)
         let out = Pipe()
         p.standardOutput = out
         p.standardError = Pipe()
@@ -1250,42 +1246,14 @@ enum CursorAuth {
         return s.isEmpty ? nil : s
     }
 
-    static func identity(home: URL = FileManager.default.homeDirectoryForCurrentUser)
-        -> Identity? {
+    /// nil when the Cursor app is not installed or nobody is signed in to it. The email
+    /// keys the row (so a row from before Tower's own sign-in keeps its history); the
+    /// membership auth id stands in when the app caches no email.
+    static func label(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Label? {
         let db = stateDB(home: home)
-        guard let token = read("cursorAuth/accessToken", db: db) else { return nil }
-        // A JWT names its own subject. An opaque token does not, so fall back to the
-        // membership auth id the same db stores. Returning nil here for an opaque token is
-        // what hid the 2026-10-23 format change: the row aged with no error at all.
-        let claims = CodexAuth.decodeJWTPayload(token)
-        let opaque = claims == nil
-        let claimed = (claims?["sub"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        guard let subject = claimed ?? read("cursorAuth/stripeMembershipAuthId", db: db),
-              !subject.isEmpty
-        else { return nil }
-        // The cached email can lag a re-login, so the subject is what identifies the row and
-        // the email is only a label. Falling back to the subject keeps the row addressable
-        // rather than dropping it for want of a display string.
-        let email = read("cursorAuth/cachedEmail", db: db) ?? subject
-        return Identity(
-            email: email,
-            plan: read("cursorAuth/stripeMembershipType", db: db) ?? "?",
-            subscriptionStatus: read("cursorAuth/stripeSubscriptionStatus", db: db),
-            accessToken: token,
-            subject: subject,
-            opaqueToken: opaque)
-    }
-
-    /// The dashboard's session cookie: `<url-encoded sub>::<jwt>`.
-    ///
-    /// Verified live 2026-08-18 against cursor.com: this exact composition authenticates
-    /// `/api/auth/me`, `/api/usage` and the `/api/dashboard/*` routes. The separator is a
-    /// literal "::" percent-encoded as %3A%3A, which is why it is built by hand rather than
-    /// by percent-encoding the whole string.
-    static func sessionCookie(_ id: Identity) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        let sub = id.subject.addingPercentEncoding(withAllowedCharacters: allowed) ?? id.subject
-        return "WorkosCursorSessionToken=\(sub)%3A%3A\(id.accessToken)"
+        guard let email = read("cursorAuth/cachedEmail", db: db)
+                ?? read("cursorAuth/stripeMembershipAuthId", db: db) else { return nil }
+        return Label(email: email, plan: read("cursorAuth/stripeMembershipType", db: db) ?? "?")
     }
 }
 
@@ -1351,59 +1319,65 @@ enum CursorUsage {
     enum Outcome: Equatable {
         /// No Cursor install, or nobody signed in. The section hides.
         case notConfigured
-        /// Cursor is installed and signed in, but the session token was refused. LOUD: this
-        /// is the cookie-expiry case, and it must never look like absence or like zero spend.
+        /// A refusal Tower cannot attribute to its own sign-in. LOUD: it must never look like
+        /// absence or like zero spend. (A refusal of Tower's own token is `.connectNeeded`.)
         case rejected(Int)
         /// Signed in, but the answer did not arrive or did not parse.
         case unavailable
-        /// Cursor's state holds a login but Tower could not build an identity from it (an
-        /// opaque token and no stored subject, so no honest session cookie). Its own case,
-        /// NOT `.notConfigured`: that one means "no Cursor lane here" and the store leaves
-        /// the row alone, which is how a stale row aged with no error. This one makes the
-        /// store write the reason onto the existing row.
-        case identityUnreadable(String)
+        /// Tower has no sign-in of its own for Cursor (or Cursor ended it or refused it).
+        /// The row says to connect Cursor in Tower; it never points at the Cursor app.
+        case connectNeeded(String)
         case ok(Reading)
     }
 
-    /// True when Cursor's state db holds a login token at all, readable or not.
-    static func loginPresent(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
-        CursorAuth.read("cursorAuth/accessToken", db: CursorAuth.stateDB(home: home)) != nil
+    /// What the row says when Tower has no Cursor sign-in of its own. It never sends the
+    /// person to the Cursor app: re-signing there cannot help, because Tower no longer
+    /// borrows that sign-in.
+    static let connectReason =
+        "Connect Cursor in Tower: click Connect Cursor on this row. "
+        + "Tower uses its own Cursor sign-in and never the Cursor app's."
+    static let signedOutReason =
+        "Cursor ended Tower's sign-in. Connect Cursor in Tower again."
+    /// Whether a Cursor row's error is one a "Connect Cursor" click fixes.
+    static func needsConnect(_ lastError: String?) -> Bool {
+        lastError?.contains("Connect Cursor in Tower") == true
     }
 
-    static let identityUnreadableReason =
-        "Cursor is installed and signed in, but Tower cannot build a session from its stored login: "
-        + "the token is not a JWT and no membership auth id is stored. Usage is unreadable."
+    static func refusedOwnReason(code: Int) -> String {
+        "Cursor refused Tower's sign-in (HTTP \(code)). Connect Cursor in Tower again."
+    }
 
-    /// The reason text a refused read leaves on the row. An opaque token is sent as a
-    /// bearer to the editor's own route (`fetchBearer`), which accepts that shape, so a
-    /// refusal there means the session itself was refused. The text still names the token
-    /// kind so a refusal is never mistaken for the old cookie-route format problem.
-    static func refusedError(code: Int, opaqueToken: Bool) -> String {
-        if opaqueToken {
-            return "Cursor session refused (HTTP \(code)) on the editor usage route; the stored "
-                + "token is not a JWT. Sign in again in Cursor to refresh it."
+    /// Reads the usage pools with Tower's own sign-in, renewing it first when it expires
+    /// within a week. Nothing read from the Cursor app is ever sent.
+    static func fetch(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                      now: Date = Date(),
+                      store: any CursorTokenStore = KeychainCursorTokenStore.shared,
+                      http: any CursorHTTP = URLSessionCursorHTTP()) async -> Outcome {
+        let label = CursorAuth.label(home: home)
+        guard var tokens = store.load() else {
+            return label == nil ? .notConfigured : .connectNeeded(connectReason)
         }
-        return "Cursor session refused (HTTP \(code)). "
-            + "Sign in again in Cursor to refresh it."
+        if CursorSignIn.needsRenewal(tokens, now: now) {
+            let reply = await http.send(CursorSignIn.renewRequest(refreshToken: tokens.refreshToken))
+            switch reply.map({ CursorSignIn.renewResult(status: $0.status, body: $0.body) }) ?? .failed {
+            case .renewed(let fresh):
+                tokens = fresh
+                store.save(fresh)
+            case .loggedOut:
+                store.clear()
+                return .connectNeeded(signedOutReason)
+            case .failed:
+                // A failed renewal keeps the current token while it still works; once it has
+                // expired, the only fix is a new sign-in.
+                if let exp = CursorSignIn.expiry(of: tokens.accessToken), exp <= now {
+                    return .connectNeeded(signedOutReason)
+                }
+            }
+        }
+        let rowLabel = label ?? CursorAuth.Label(email: "cursor@tower.local", plan: "?")
+        return await fetchBearer(token: tokens.accessToken, label: rowLabel, now: now, http: http)
     }
 
-    private static func request(_ path: String, cookie: String, body: [String: Any]?)
-        -> URLRequest? {
-        guard let url = URL(string: host + path) else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue(cookie, forHTTPHeaderField: "Cookie")
-        req.setValue(UsageAPI.userAgent, forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 15
-        guard let body else { return req }
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Without this the route answers 403 "Invalid origin for state-changing request",
-        // even though every call here is a read. See the type comment.
-        req.setValue(host, forHTTPHeaderField: "Origin")
-        req.setValue(host + "/dashboard", forHTTPHeaderField: "Referer")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return req
-    }
 
     /// Body, or the outcome that explains why there is none.
     ///
@@ -1417,17 +1391,14 @@ enum CursorUsage {
 
     /// A refusal is the one case that must never look like absence, so it is reported
     /// separately from every other non-200.
-    private static func send(_ req: URLRequest) async -> Fetched {
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse
-        else { return .failed(.unavailable) }
-        // 307 is what an unauthenticated call gets: the dashboard bounces it to the login
-        // page. Treated as a refusal, because that is exactly what it is.
-        if http.statusCode == 401 || http.statusCode == 403 || http.statusCode == 307 {
-            return .failed(.rejected(http.statusCode))
+    private static func send(_ req: URLRequest, http: any CursorHTTP) async -> Fetched {
+        guard let reply = await http.send(req) else { return .failed(.unavailable) }
+        // A refusal of Tower's own token means a new sign-in, never "sign in again in Cursor".
+        if reply.status == 401 || reply.status == 403 || reply.status == 307 {
+            return .failed(.connectNeeded(refusedOwnReason(code: reply.status)))
         }
-        guard (200..<300).contains(http.statusCode) else { return .failed(.unavailable) }
-        return .body(data)
+        guard (200..<300).contains(reply.status) else { return .failed(.unavailable) }
+        return .body(reply.body)
     }
 
     struct Summary: Decodable {
@@ -1444,42 +1415,11 @@ enum CursorUsage {
         let individualUsage: IndividualUsage?
     }
 
-    static func fetch(home: URL = FileManager.default.homeDirectoryForCurrentUser,
-                      now: Date = Date()) async -> Outcome {
-        guard let id = CursorAuth.identity(home: home) else {
-            // A login that exists but cannot be turned into an identity is a failure to
-            // read, not the absence of Cursor.
-            return loginPresent(home: home) ? .identityUnreadable(identityUnreadableReason)
-                                            : .notConfigured
-        }
-        if id.opaqueToken { return await fetchBearer(id, now: now) }
-        let cookie = CursorAuth.sessionCookie(id)
+    // MARK: Bearer route (Tower's own token)
 
-        guard let usageReq = request("/api/usage-summary", cookie: cookie, body: nil)
-        else { return .unavailable }
-
-        let data: Data
-        switch await send(usageReq) {
-        case .failed(let outcome): return outcome
-        case .body(let d): data = d
-        }
-        guard let summary = try? JSONDecoder().decode(Summary.self, from: data) else {
-            return .unavailable
-        }
-        let plan = summary.membershipType?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let dashboardPlan = plan.flatMap { $0.isEmpty ? nil : $0 } ?? id.plan
-        let reset = DateParse.parse(summary.billingCycleEnd).flatMap { $0 > now ? $0 : nil }
-        return .ok(Reading(email: id.email, plan: dashboardPlan,
-                           cursorModelsPct: summary.individualUsage?.plan?.autoPercentUsed,
-                           otherModelsPct: summary.individualUsage?.plan?.apiPercentUsed,
-                           periodResetsAt: reset))
-    }
-
-    // MARK: Bearer route (opaque token)
-
-    /// The route the Cursor editor itself calls for the current period. Since 2026-10-23
-    /// Cursor stores an opaque access token that the dashboard cookie route refuses; the
-    /// editor sends that same token as a bearer to this Connect RPC.
+    /// The route the Cursor editor itself calls for the current period, sent with the JWT
+    /// from Tower's own sign-in (CursorSignIn). The Cursor app's stored value is never
+    /// sent: since 2026-10-31 it is opaque, equal to its refresh token, and refused here.
     ///
     /// ⚠️ UNDOCUMENTED, same risk class as the dashboard route. Measured 2026-11-03 with no
     /// credentials: POST answers 401 `ERROR_NOT_LOGGED_IN` (the route exists; a missing one
@@ -1541,9 +1481,10 @@ enum CursorUsage {
         return nil
     }
 
-    static func fetchBearer(_ id: CursorAuth.Identity, now: Date) async -> Outcome {
+    static func fetchBearer(token: String, label: CursorAuth.Label, now: Date,
+                            http: any CursorHTTP) async -> Outcome {
         let data: Data
-        switch await send(bearerRequest(token: id.accessToken)) {
+        switch await send(bearerRequest(token: token), http: http) {
         case .failed(let outcome): return outcome
         case .body(let d): data = d
         }
@@ -1555,7 +1496,7 @@ enum CursorUsage {
             return .unavailable
         }
         let reset = parsed.periodResetsAt.flatMap { $0 > now ? $0 : nil }
-        return .ok(Reading(email: id.email, plan: parsed.plan ?? id.plan,
+        return .ok(Reading(email: label.email, plan: parsed.plan ?? label.plan,
                            cursorModelsPct: parsed.cursorModelsPct,
                            otherModelsPct: parsed.otherModelsPct,
                            periodResetsAt: reset))
