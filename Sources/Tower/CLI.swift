@@ -586,6 +586,20 @@ enum CLI {
         check("panelshot expansion never writes preferences while live expansion does",
               panelshotPreparation.2 == 0 && panelshotPreparation.3 == 1)
         try? FileManager.default.removeItem(at: panelshotIdentity)
+        let shotBounds = NSRect(x: 0, y: 0, width: 400, height: 120)
+        let shot3x = PanelShot.bitmap(for: shotBounds, scale: 3)
+        check("panelshot scale 3 makes the pixel width 3x the point width",
+              shot3x?.pixelsWide == 1200 && shot3x?.pixelsHigh == 360
+              && shot3x?.size == shotBounds.size)
+        check("panelshot with no scale keeps the screen's own backing scale",
+              PanelShot.requestedScale(env: [:]) == .success(nil))
+        check("panelshot reads TOWER_PANELSHOT_SCALE=3 as 3",
+              PanelShot.requestedScale(env: [PanelShot.scaleEnvKey: "3"]) == .success(3))
+        check("panelshot refuses a scale that is not a whole number from 1 to 4",
+              ["0", "5", "2.5", "x", "-3"].allSatisfy {
+                  if case .failure = PanelShot.requestedScale(env: [PanelShot.scaleEnvKey: $0]) { return true }
+                  return false
+              } && PanelShot.bitmap(for: shotBounds, scale: 9) == nil)
         var loginWatch = ClaudeLoginTracker()
         let sameToken = ClaudeCredential(
             service: Keychain.defaultService, accessToken: "same-token",
