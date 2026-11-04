@@ -1194,6 +1194,15 @@ struct TowerMCPService: MCPService {
     /// One decision model's entered credit, the shape `typesafeModelProperties` declares.
     static func typesafeModelJSON(_ model: TypeSafe.Model, now: Date = Date(),
                                   defaults: UserDefaults = TowerPreferences.shared) -> JSON {
+        // A model the operator turned OFF in Settings shows no figure to an agent.
+        let watched: WatchedProvider = model == .jev ? .jev : .clef
+        guard ProviderToggles.isEnabled(watched, defaults: defaults) else {
+            return [
+                "entered": false, "balanceUSD": .null, "asOf": .null, "level": .null,
+                "text": .string("\(model.name) is off in Tower Settings"), "live": false, "ageDays": .null,
+                "stale": false, "reenter": .null,
+            ]
+        }
         let text = JSON.string(TypeSafe.statusRowText(model: model, now: now, defaults: defaults))
         guard let entry = TypeSafe.entry(model: model, defaults: defaults) else {
             return [
@@ -1705,6 +1714,9 @@ struct TowerMCPService: MCPService {
 
     func openRouterHistory() -> MCPToolResult {
         let now = env.now()
+        guard ProviderToggles.isEnabled(.openrouter, defaults: env.defaults) else {
+            return .ok("OpenRouter is off in Tower Settings", ["generatedAt": .date(now), "samples": [], "trend": .null])
+        }
         let samples = OpenRouter.History.load(defaults: env.defaults)
         let trend = OpenRouter.History.trend(samples)
         func sample(_ s: OpenRouter.History.Sample) -> JSON {
@@ -1737,8 +1749,9 @@ struct TowerMCPService: MCPService {
                 "retainClaudeSeats": .bool(env.vault.isRetentionEnabled()),
                 "launchAtLogin": .bool(env.launchAtLogin()),
                 "expandedSections": .array((env.defaults.stringArray(forKey: "expandedSections") ?? []).map { .string($0) }),
-                "knownAccounts": .array(knownAccounts().map { .string($0) }),
-                "retiredAccounts": .array(env.store.retiredEmails.sorted().map { .string($0) }),
+                // Claude seat emails; empty while Claude Code is OFF in Settings.
+                "knownAccounts": .array(claudeOn ? knownAccounts().map { .string($0) } : []),
+                "retiredAccounts": .array(claudeOn ? env.store.retiredEmails.sorted().map { .string($0) } : []),
                 "watch": SettingsConfig.json(defaults: env.defaults),
             ],
             "paths": [

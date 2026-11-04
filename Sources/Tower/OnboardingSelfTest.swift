@@ -368,5 +368,106 @@ enum OnboardingSelfTest {
         check("config: Copy config holds the two documented lines",
               MCPConfigLines.both == "ln -sf ~/Applications/Tower.app/Contents/MacOS/Tower ~/.local/bin/tower\n"
                   + "claude mcp add --scope user tower -- ~/.local/bin/tower mcp", "")
+
+        visibilitySweep(check)
+    }
+}
+
+// MARK: - Every MCP read path against every provider toggle (b90 HOLD on #41)
+
+extension OnboardingSelfTest {
+    /// One unique marker per provider, seeded where that provider's data lives. With every
+    /// provider ON each marker must appear somewhere (so the sweep can see it at all); with
+    /// one provider OFF none of its markers may appear in any tool, resource, prompt or
+    /// listing. New tools are covered automatically: the sweep walks `TowerMCPService.tools`.
+    static func visibilitySweep(_ check: (String, Bool, String) -> Void) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-sweep-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func row(_ email: String, _ nick: String, _ provider: Provider?) -> AccountSnapshot {
+            var a = AccountSnapshot(email: email, nickname: nick, plan: "pro")
+            a.provider = provider
+            a.weeklyPct = 30
+            a.capturedAt = Date().addingTimeInterval(-60)
+            return a
+        }
+        _ = Store(dir: dir).save([
+            "m-claude@marker.test": row("m-claude@marker.test", "mclaude", nil),
+            "codex:m-codex@marker.test": row("m-codex@marker.test", "mcodex", .codex),
+            "cursor:m-cursor@marker.test": row("m-cursor@marker.test", "mcursor", .cursor),
+            "openrouter:m-openrouter@marker.test": row("m-openrouter@marker.test", "mopenrouter", .openrouter),
+            "muse:m-muse@marker.test": row("m-muse@marker.test", "mmuse", .muse),
+            "devin:m-devin@marker.test": row("m-devin@marker.test", "mdevin", .devin),
+        ])
+        try? Data(#"["m-known@marker.test"]"#.utf8).write(to: dir.appendingPathComponent("known-accounts.json"))
+        try? Data(#"["m-retired@marker.test"]"#.utf8).write(to: dir.appendingPathComponent("retired-accounts.json"))
+
+        let markers: [WatchedProvider: [String]] = [
+            .claude: ["m-claude@marker.test", "m-known@marker.test", "m-retired@marker.test"],
+            .codex: ["m-codex@marker.test"],
+            .cursor: ["m-cursor@marker.test"],
+            .openrouter: ["m-openrouter@marker.test", "77.75"],
+            .jev: ["61.25"],
+            .clef: ["93.5"],
+            .muse: ["m-muse@marker.test"],
+            .devin: ["m-devin@marker.test"],
+        ]
+
+        func everything(off: WatchedProvider?) -> String {
+            let (defaults, id) = suite("sweep")
+            defer { UserDefaults.standard.removePersistentDomain(forName: id) }
+            defaults.set(false, forKey: ProviderToggles.setupPendingKey)
+            for p in WatchedProvider.allCases { ProviderToggles.set(p, p != off, defaults: defaults) }
+            OpenRouter.History.record(OpenRouter.Budget(spent: 10, limit: 87.75), defaults: defaults)
+            for (model, usd) in [(TypeSafe.Model.jev, 61.25), (.clef, 93.5)] {
+                defaults.set(usd, forKey: model.balanceKey)
+                defaults.set("2026-11-04", forKey: model.balanceAsOfKey)
+            }
+            var env = TowerMCPService.Environment.demo(supportDirectory: dir)
+            env.defaults = defaults
+            let store = env.store
+            env.refresh = {
+                RefreshResult(accounts: store.load(), activeEmail: "m-claude@marker.test",
+                              outcome: .ok(email: "m-claude@marker.test"),
+                              openRouterOutcome: .notConfigured, openRouterFoldCommitted: false)
+            }
+            let service = TowerMCPService(env: env, retrustCooldown: RetrustCooldown())
+            return blocking {
+                var out = ""
+                func add(_ r: MCPToolResult?) {
+                    guard let r else { return }
+                    out += "\(r.content) \(String(describing: r.structuredContent))\n"
+                }
+                // Both spawn a child Tower process (tower_selftest would run this sweep again).
+                let skipped: Set<String> = ["tower_selftest", "tower_panelshot"]
+                for spec in TowerMCPService.tools where spec.annotations.readOnlyHint && !skipped.contains(spec.name) {
+                    add(try? await service.callTool(spec.name, arguments: [:]))
+                }
+                for nick in ["mclaude", "mcodex", "mcursor", "mopenrouter"] {
+                    add(try? await service.callTool("tower_account", arguments: ["account": .string(nick)]))
+                }
+                add(try? await service.callTool("tower_refresh", arguments: [:]))
+                let resources = service.listResources()
+                out += "\(resources)\n"
+                for r in resources {
+                    for c in (try? await service.readResource(r.uri)) ?? [] { out += "\(c)\n" }
+                }
+                for p in service.listPrompts() {
+                    if let got = try? await service.getPrompt(p.name, arguments: [:]) { out += "\(got)\n" }
+                }
+                return out
+            }
+        }
+
+        let allOn = everything(off: nil)
+        let unseen = markers.values.flatMap { $0 }.filter { !allOn.contains($0) }
+        check("sweep: with every provider ON, each provider's marker is visible somewhere",
+              unseen.isEmpty, "never seen: \(unseen)")
+        for (provider, own) in markers.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            let text = everything(off: provider)
+            let leaked = own.filter { text.contains($0) }
+            check("sweep: with \(provider.rawValue) OFF, no MCP tool, resource or prompt shows its data",
+                  leaked.isEmpty, "leaked: \(leaked)")
+        }
     }
 }
