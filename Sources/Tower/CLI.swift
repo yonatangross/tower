@@ -752,6 +752,16 @@ enum CLI {
               openRouterAccounts[openRouterKey]?.balanceUSD == 53.82
               && openRouterAccounts[openRouterKey]?.availablePct == orBudget.availablePct
               && openRouterAccounts[openRouterKey]?.capturedAt == openRouterCapturedAt)
+        // b88 on #32: the key command runs on every refresh; one that never finishes (a
+        // dialog, a fingerprint wait) must not hold the refresh.
+        let keyStart = Date()
+        let slowKey = OpenRouter.runKeyCommand(["/bin/sleep", "5"], timeout: 0.5)
+        let keyElapsed = Date().timeIntervalSince(keyStart)
+        check("an OpenRouter key command that does not finish is stopped at its timeout",
+              slowKey == nil && keyElapsed < 2, "result \(String(describing: slowKey)), \(keyElapsed) s")
+        check("a key command that finishes in time still returns its output",
+              OpenRouter.runKeyCommand(["/bin/echo", "sk-test"], timeout: 5)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines) == "sk-test")
         openRouterStore.seedOpenRouterAccount(
             into: &openRouterAccounts, outcome: .rejected(401, keyFingerprint: "9f3c", lastSuccessAt: nil),
             now: openRouterCapturedAt.addingTimeInterval(600))

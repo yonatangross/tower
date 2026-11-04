@@ -787,7 +787,7 @@ enum OpenRouter {
 
     /// Read the key on each poll from the configured source (see `KeySource`).
     static func apiKey(source: KeySource = .current(),
-                       run: ([String]) -> String? = runKeyCommand) -> String? {
+                       run: ([String]) -> String? = { runKeyCommand($0) }) -> String? {
         let raw: String?
         if let command = source.command {
             raw = run(command)
@@ -799,7 +799,12 @@ enum OpenRouter {
         return key.isEmpty ? nil : key
     }
 
-    static func runKeyCommand(_ argv: [String]) -> String? {
+    /// How long the key command may run. It runs on every refresh, in a child the
+    /// Keychain dialog switch does not cover, so a command that prompts must not stall
+    /// the refresh (b88 on #32).
+    static let keyCommandTimeout: TimeInterval = 10
+
+    static func runKeyCommand(_ argv: [String], timeout: TimeInterval = keyCommandTimeout) -> String? {
         guard let executable = argv.first, !executable.isEmpty else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: (executable as NSString).expandingTildeInPath)
@@ -811,11 +816,28 @@ enum OpenRouter {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return String(data: data, encoding: .utf8)
+        // Read on another thread: a child that never exits keeps the pipe open, and the
+        // read would block this refresh with it.
+        final class Box: @unchecked Sendable { var data = Data() }
+        let box = Box()
+        let read = DispatchSemaphore(value: 0)
+        let handle = output.fileHandleForReading
+        DispatchQueue.global(qos: .utility).async {
+            box.data = handle.readDataToEndOfFile()
+            read.signal()
+        }
+        guard exited.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            _ = exited.wait(timeout: .now() + 1)
+            return nil
+        }
+        // The child exited; its output is complete unless a grandchild still holds the pipe.
+        guard read.wait(timeout: .now() + 1) == .success,
+              process.terminationStatus == 0 else { return nil }
+        return String(data: box.data, encoding: .utf8)
     }
 
     static func monthlyBudget() -> Double? {
