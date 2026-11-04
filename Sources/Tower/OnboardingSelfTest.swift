@@ -147,6 +147,51 @@ enum OnboardingSelfTest {
         check("MCP reads never return the stored rows of a provider that is OFF",
               offLeaked.isEmpty && claudeShown, "leaked in \(offLeaked.count) of \(offReads.count), claude shown \(claudeShown)")
 
+        // Security review of #31: fail closed. The quota-cache resource keeps only rows it
+        // knows are visible, even rows the store does not hold; an unparsable file is {}.
+        if let stored = try? Data(contentsOf: offDir.appendingPathComponent("accounts.json")),
+           var object = (try? JSONSerialization.jsonObject(with: stored)) as? [String: Any],
+           var extra = object["codex:cx@example.com"] as? [String: Any] {
+            extra["email"] = "zz@example.com"
+            object["codex:zz@example.com"] = extra
+            if let mirror = try? JSONSerialization.data(withJSONObject: object) {
+                try? mirror.write(to: offDir.appendingPathComponent("quota-cache.json"))
+            }
+        }
+        let allowText = offService.quotaCacheText()
+        check("tower://quota-cache drops a row the store does not hold when its provider is OFF",
+              !allowText.contains("zz@example.com") && !allowText.contains("cx@example.com")
+                  && allowText.contains("cc@example.com"), allowText)
+        try? Data("not json".utf8).write(to: offDir.appendingPathComponent("quota-cache.json"))
+        check("tower://quota-cache answers {} when the file cannot be read as JSON",
+              offService.quotaCacheText() == "{}", offService.quotaCacheText())
+        try? FileManager.default.removeItem(at: offDir.appendingPathComponent("quota-cache.json"))
+
+        // Claude OFF: no Claude identity, seat or session reaches an agent.
+        let (noClaude, noClaudeID) = suite("claude-off")
+        defer { UserDefaults.standard.removePersistentDomain(forName: noClaudeID) }
+        noClaude.set(false, forKey: ProviderToggles.setupPendingKey)
+        for p in WatchedProvider.allCases { ProviderToggles.set(p, p != .claude, defaults: noClaude) }
+        var claudeOffEnv = TowerMCPService.Environment.demo(supportDirectory: offDir)
+        claudeOffEnv.defaults = noClaude
+        let offStore = claudeOffEnv.store
+        claudeOffEnv.refresh = {
+            RefreshResult(accounts: offStore.load(), activeEmail: "cc@example.com", outcome: .ok(email: "cc@example.com"),
+                          openRouterOutcome: .notConfigured, openRouterFoldCommitted: false)
+        }
+        let claudeOff = TowerMCPService(env: claudeOffEnv)
+        let refreshed = blocking { await claudeOff.refresh(account: nil) }
+        check("tower_refresh never names the active login of a provider that is OFF",
+              refreshed.structuredContent?["activeEmail"] == .null
+                  && !"\(refreshed.content) \(String(describing: refreshed.structuredContent))".contains("cc@example.com"),
+              "\(String(describing: refreshed.structuredContent?["activeEmail"]))")
+        let seatsOff = claudeOff.seats()
+        check("tower_seats refuses while Claude Code is OFF",
+              seatsOff.structuredContent?["error"]["code"] == "ProviderOff", "\(seatsOff.content)")
+        let sessionsOff = blocking { await claudeOff.sessions() }
+        check("tower_sessions reports nothing while Claude Code is OFF",
+              sessionsOff.structuredContent?["available"] == false, "\(sessionsOff.content)")
+
         // 3 and 6. First launch: pending until answered, nothing read before Start watching,
         // and it opens once.
         let (fresh, freshID) = suite("fresh")
