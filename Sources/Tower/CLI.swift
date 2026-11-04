@@ -731,8 +731,8 @@ enum CLI {
         let typeSafeStatus = typeSafeStatusRowLines(now: typeSafeNow, defaults: typeSafeDefaults)
         check("reachability: status renders the entered typesafe balance, not quota windows",
               typeSafeStatus == [
-                  "  typesafe    BALANCE",
-                  "      jev   balance $12.00 (entered 09-18 · 2d ago), not live",
+                  "  credits     BALANCE",
+                  "      jev   TypeSafe   balance $12.00 (entered 09-18 · 2d ago), not live",
               ] && !typeSafeStatus.joined(separator: "\n").contains("7d"))
         let typeSafeLate = typeSafeDay.date(from: "2026-09-27 12:00")!
         let staleLines = typeSafeStatusRowLines(now: typeSafeLate, defaults: typeSafeDefaults)
@@ -742,8 +742,8 @@ enum CLI {
         check("typesafe re-entry is dated today and clears the stale hint",
               TypeSafe.entry(defaults: typeSafeDefaults) == TypeSafe.Entry(usd: 18.40, asOf: "2026-09-27")
               && typeSafeStatusRowLines(now: typeSafeLate, defaults: typeSafeDefaults) == [
-                  "  typesafe    BALANCE",
-                  "      jev   balance $18.40 (entered 09-27 · 0d ago), not live",
+                  "  credits     BALANCE",
+                  "      jev   TypeSafe   balance $18.40 (entered 09-27 · 0d ago), not live",
               ])
         // TypeSafe ships two decision models. Clef has its own key pair and its own day,
         // so entering it leaves the Jev figure alone and adds a second line under the same
@@ -755,10 +755,10 @@ enum CLI {
                        defaults: typeSafeDefaults)
         check("typesafe status groups jev and clef under one heading",
               typeSafeStatusRowLines(now: typeSafeLate, defaults: typeSafeDefaults) == [
-                  "  typesafe    BALANCE",
-                  "      jev   balance $18.40 (entered 09-27 · 0d ago), not live",
-                  "      clef  balance $4.20 (entered 09-20 · 7d ago), stale, not live",
-                  "            read TypeSafe console Billing, then tower_config_set typesafe.clef.balanceUSD <usd>",
+                  "  credits     BALANCE",
+                  "      jev   TypeSafe   balance $18.40 (entered 09-27 · 0d ago), not live",
+                  "      clef  Cloudflare balance $4.20 (entered 09-20 · 7d ago), stale, not live",
+                  "            read the Cloudflare dashboard (Workers AI), then tower_config_set cloudflare.clef.balanceUSD <usd>",
               ]
               && TypeSafe.entry(defaults: typeSafeDefaults) == TypeSafe.Entry(usd: 18.40, asOf: "2026-09-27"))
         // The MCP payload carries both models; it must still validate against the schema
@@ -774,6 +774,35 @@ enum CLI {
         check("typesafe group stays while clef alone is entered",
               TypeSafe.enteredModels(defaults: typeSafeDefaults) == [.clef]
               && typeSafeStatusRowLines(now: typeSafeLate, defaults: typeSafeDefaults).count == 3)
+        // Clef is Cloudflare's decision model (Workers AI, Jev-API compatible), not a
+        // TypeSafe product: every label names its own vendor, a stale Clef points at the
+        // Cloudflare dashboard, and the new key is cloudflare.clef.balanceUSD while the old
+        // typesafe.clef.balanceUSD still writes the same entry.
+        check("clef is Cloudflare's model and jev is TypeSafe's",
+              TypeSafe.Model.clef.vendor == "Cloudflare" && TypeSafe.Model.jev.vendor == "TypeSafe")
+        check("a stale clef names the Cloudflare dashboard and the cloudflare key",
+              TypeSafe.reenterHint(model: .clef, now: typeSafeLate, defaults: typeSafeDefaults)
+                  == "read the Cloudflare dashboard (Workers AI), then tower_config_set cloudflare.clef.balanceUSD <usd>")
+        check("the folded clef line names Cloudflare, the jev line names TypeSafe",
+              TypeSafeCreditRow.foldedLine(model: .clef, now: typeSafeLate, open: false, defaults: typeSafeDefaults)
+                  .contains("clef · Cloudflare")
+                  && !TypeSafeCreditRow.groupDetail.lowercased().contains("typesafe"))
+        let clefEnvDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-clef-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: clefEnvDir) }
+        var clefEnv = TowerMCPService.Environment.demo(supportDirectory: clefEnvDir)
+        clefEnv.defaults = typeSafeDefaults
+        let clefService = TowerMCPService(env: clefEnv)
+        let viaNewKey = clefService.configSet(key: "cloudflare.clef.balanceUSD", value: .number(6.50))
+        let newKeyEntry = TypeSafe.entry(model: .clef, defaults: typeSafeDefaults)
+        let viaOldKey = clefService.configSet(key: "typesafe.clef.balanceUSD", value: .number(7.25))
+        check("cloudflare.clef.balanceUSD sets clef, and the old typesafe.clef key still does",
+              viaNewKey.isError != true && newKeyEntry?.usd == 6.50
+                  && viaOldKey.isError != true && TypeSafe.entry(model: .clef, defaults: typeSafeDefaults)?.usd == 7.25,
+              "\(viaNewKey.content) \(viaOldKey.content)")
+        check("the MCP group names each model's vendor",
+              TowerMCPService.typesafeJSON(now: typeSafeLate, defaults: typeSafeDefaults)["models"]["clef"]["vendor"]
+                  == .string("Cloudflare"))
 
         let historyDefaultsName = "tower-openrouter-history-\(UUID().uuidString)"
         let historyDefaults = UserDefaults(suiteName: historyDefaultsName)!
@@ -2249,9 +2278,9 @@ enum CLI {
         // No heading until some model has an entered balance: nothing ships by default.
         let models = TypeSafe.enteredModels(defaults: defaults)
         guard !models.isEmpty else { return [] }
-        var lines = ["  " + pad("typesafe", 12) + "BALANCE"]
+        var lines = ["  " + pad("credits", 12) + "BALANCE"]
         for model in models {
-            lines.append("      " + pad(model.rawValue, 6)
+            lines.append("      " + pad(model.rawValue, 6) + pad(model.vendor, 11)
                          + TypeSafe.statusRowText(model: model, now: now, defaults: defaults))
             if let hint = TypeSafe.reenterHint(model: model, now: now, defaults: defaults) {
                 lines.append("            " + hint)

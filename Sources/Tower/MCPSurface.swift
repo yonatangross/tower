@@ -300,14 +300,15 @@ struct TowerMCPService: MCPService {
         var properties = typesafeModelProperties(reenterKey: TypeSafe.Model.jev.balanceKey).objectValue ?? [:]
         var models: [String: JSON] = [:]
         for model in TypeSafe.Model.allCases {
-            var p = typesafeModelProperties(reenterKey: model.balanceKey).objectValue ?? [:]
+            var p = typesafeModelProperties(reenterKey: model.configKey).objectValue ?? [:]
             p["model"] = ["type": "string"]
             p["name"] = ["type": "string"]
+            p["vendor"] = ["type": "string", "description": "who makes the model: TypeSafe (Jev) or Cloudflare (Clef)"]
             models[model.rawValue] = ["type": "object", "required": typesafeModelRequired, "properties": .object(p)]
         }
         properties["models"] = [
             "type": "object",
-            "description": "every TypeSafe decision model by name (jev, clef), each with the same fields as the Jev figures above",
+            "description": "every decision model by name (jev from TypeSafe, clef from Cloudflare), each with the same fields as the Jev figures above plus its vendor",
             "required": .array(TypeSafe.Model.allCases.map { .string($0.rawValue) }),
             "properties": .object(models),
         ]
@@ -697,11 +698,11 @@ struct TowerMCPService: MCPService {
             annotations: write("Forget retained seats", destructive: true, idempotent: true, openWorld: false)),
         MCPToolSpec(
             name: "tower_config_set", title: "Set configuration",
-            description: "Sets one configuration key: retainClaudeSeats (false deletes every owned seat first), launchAtLogin, openrouter.monthlyBudgetUSD (null clears), typesafe.balanceUSD (the Jev credit balance read off the TypeSafe console, dated today; null clears it and hides the row), typesafe.clef.balanceUSD (the same for the Clef decision model), knownAccounts, retiredAccounts. Refused with UnknownKey, BadValue, KeychainRefused or the underlying error.",
+            description: "Sets one configuration key: retainClaudeSeats (false deletes every owned seat first), launchAtLogin, openrouter.monthlyBudgetUSD (null clears), typesafe.balanceUSD (the Jev credit balance read off the TypeSafe console, dated today; null clears it and hides the row), cloudflare.clef.balanceUSD (the same for Cloudflare's Clef decision model, read off the Cloudflare dashboard; typesafe.clef.balanceUSD is the older alias), knownAccounts, retiredAccounts. Refused with UnknownKey, BadValue, KeychainRefused or the underlying error.",
             inputSchema: [
                 "type": "object", "required": ["key", "value"],
                 "properties": [
-                    "key": ["type": "string", "enum": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "typesafe.clef.balanceUSD", "knownAccounts", "retiredAccounts"]],
+                    "key": ["type": "string", "enum": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "cloudflare.clef.balanceUSD", "typesafe.clef.balanceUSD", "knownAccounts", "retiredAccounts"]],
                     "value": ["description": "boolean, number or null, or an array of emails, depending on the key"],
                 ],
                 "additionalProperties": false,
@@ -1188,6 +1189,7 @@ struct TowerMCPService: MCPService {
             var m = typesafeModelJSON(model, now: now, defaults: defaults).objectValue ?? [:]
             m["model"] = .string(model.rawValue)
             m["name"] = .string(model.name)
+            m["vendor"] = .string(model.vendor)
             models[model.rawValue] = .object(m)
         }
         group["models"] = .object(models)
@@ -1912,10 +1914,10 @@ struct TowerMCPService: MCPService {
             guard let usd = value.doubleValue, usd > 0 else { return .refused("BadValue", "openrouter.monthlyBudgetUSD takes a positive number or null") }
             env.defaults.set(usd, forKey: OpenRouter.budgetKey)
             return .ok("openrouter.monthlyBudgetUSD \(usd)", ["key": .string(key), "value": .number(usd), "previous": previous > 0 ? .number(previous) : .null])
-        case TypeSafe.Model.jev.balanceKey, TypeSafe.Model.clef.balanceKey:
+        case _ where TypeSafe.Model.forConfigKey(key) != nil:
             // No endpoint publishes a decision model's balance, so a re-entry is the only
             // way its row stops being stale. The as-of day is the day of entry, stamped here.
-            let model: TypeSafe.Model = key == TypeSafe.Model.clef.balanceKey ? .clef : .jev
+            let model = TypeSafe.Model.forConfigKey(key) ?? .jev
             let previous: JSON = TypeSafe.entry(model: model, defaults: env.defaults).map { .number($0.usd) } ?? .null
             if value.isNull {
                 TypeSafe.clearEntry(model: model, defaults: env.defaults)
@@ -1961,7 +1963,7 @@ struct TowerMCPService: MCPService {
             ])
         default:
             return .refused("UnknownKey", "no configuration key \(key)",
-                            extra: ["known": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "typesafe.clef.balanceUSD", "knownAccounts", "retiredAccounts"]])
+                            extra: ["known": ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD", "typesafe.balanceUSD", "cloudflare.clef.balanceUSD", "typesafe.clef.balanceUSD", "knownAccounts", "retiredAccounts"]])
         }
     }
 

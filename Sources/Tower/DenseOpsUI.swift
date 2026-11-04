@@ -846,8 +846,7 @@ struct MoneyBoard: View {
             let entered = TypeSafe.enteredModels()
             if !entered.isEmpty {
                 HStack(spacing: 4) {
-                    ProviderIcon(provider: .typesafe)
-                    Text("typesafe")
+                    Text("credits")
                         .font(TowerType.font(.body, weight: .semibold))
                     Text(TypeSafeCreditRow.groupDetail)
                         .font(TowerType.font(.minimum))
@@ -923,7 +922,7 @@ struct TypeSafeCreditRow: View {
 
     /// The group header's second line: what the rows under it are, and that they are
     /// prepaid, so nobody reads them as quotas.
-    static let groupDetail = "decision models, prepaid credits"
+    static let groupDetail = "decision models, entered by hand"
 
     private var balance: Double { TypeSafe.entry(model: model)?.usd ?? 0 }
     private var level: TypeSafe.BalanceLevel { TypeSafe.balanceLevel(balance) }
@@ -942,7 +941,7 @@ struct TypeSafeCreditRow: View {
         let balance = TypeSafe.entry(model: model, defaults: defaults)?.usd ?? 0
         let word = stateWord(level: TypeSafe.balanceLevel(balance),
                              stale: TypeSafe.balanceIsStale(model: model, now: now, defaults: defaults))
-        return "\(open ? "-" : "+") \(model.rawValue) credits \(TypeSafe.money(balance)) \(word)"
+        return "\(open ? "-" : "+") \(model.rawValue) · \(model.vendor) credits \(TypeSafe.money(balance)) \(word)"
     }
 
     /// Quiet while the figure is fine or too old to trust; amber or red only for a live
