@@ -185,7 +185,7 @@ struct SettingsView: View {
     private func warnStepper(_ label: String, _ key: String, _ value: Binding<Double>) -> some View {
         Stepper("\(label)  \(Int(value.wrappedValue)) %", value: Binding(get: { value.wrappedValue }, set: { v in
             value.wrappedValue = v
-            TowerPreferences.shared.set(v, forKey: key)
+            AlertSettings.write(key, v)
         }), in: AlertSettings.allowedWarn, step: 5).font(TowerType.font(.body))
     }
 

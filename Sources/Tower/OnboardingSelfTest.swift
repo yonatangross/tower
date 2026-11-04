@@ -27,6 +27,15 @@ enum OnboardingSelfTest {
 
     final class Box<T>: @unchecked Sendable { var value: T?; init() {} }
 
+    /// Counts what the MCP server pushes on its own (notifications).
+    final class PushRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var messages: [JSON] = []
+        func record(_ m: JSON) { lock.lock(); messages.append(m); lock.unlock() }
+        func clear() { lock.lock(); messages.removeAll(); lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return messages.count }
+    }
+
     private static func blocking<T: Sendable>(_ work: @escaping @Sendable () async -> T) -> T {
         let box = Box<T>()
         let done = DispatchSemaphore(value: 0)
@@ -139,22 +148,101 @@ enum OnboardingSelfTest {
         defer { UserDefaults.standard.removePersistentDomain(forName: mcpID) }
         env.defaults = mcpDefaults
         let service = TowerMCPService(env: env)
-        let offSet = service.configSet(key: MCPAccess.enabledKey, value: .bool(false))
+        // Turned off the way the panel does it: a direct write, never through MCP.
+        mcpDefaults.set(false, forKey: MCPAccess.enabledKey)
         let refused = blocking { (try? await service.callTool("tower_status", arguments: [:])) ?? .refused("threw", "threw") }
         check("mcp: OFF refuses every tool with MCPDisabled and says where to turn it on",
-              offSet.isError == false && refused.isError
+              refused.isError
                   && refused.structuredContent?["error"]["code"] == .string(MCPAccess.refusalCode)
                   && MCPAccess.refusalMessage.contains("Settings"), "\(refused.content)")
+
+        // Security 1: the gate sits at the protocol dispatch, so every data method refuses,
+        // not only tools/call. initialize and server/discover answer and say MCP is off.
+        let pushed = PushRecorder()
+        let server = MCPServer(service: service, send: { pushed.record($0) })
+        let uri = service.listResources().first?.uri ?? "tower://status"
+        let prompt = service.listPrompts().first?.name ?? "rotate"
+        let modernMeta: JSON = [MCPServer.metaVersion: .string(MCPServer.latestProtocolVersion),
+                                MCPServer.metaClientCapabilities: [:]]
+        func request(_ method: String, _ params: JSON = [:], modern: Bool = false) -> JSON {
+            var p = params.objectValue ?? [:]
+            if modern { p["_meta"] = modernMeta }
+            let message: JSON = ["jsonrpc": "2.0", "id": 7, "method": .string(method), "params": .object(p)]
+            return blocking { await server.handle(message) ?? .null }
+        }
+        func isDisabled(_ r: JSON) -> Bool {
+            r["error"]["data"]["code"] == .string(MCPAccess.refusalCode)
+                && (r["error"]["message"].stringValue ?? "").contains("Settings")
+        }
+        let dataMethods: [(String, JSON, Bool)] = [
+            ("tools/list", [:], false), ("tools/call", ["name": "tower_status"], false),
+            ("resources/list", [:], false), ("resources/templates/list", [:], false),
+            ("resources/read", ["uri": .string(uri)], false), ("resources/subscribe", ["uri": .string(uri)], false),
+            ("prompts/list", [:], false), ("prompts/get", ["name": .string(prompt)], false),
+            ("completion/complete", ["ref": ["type": "ref/prompt", "name": .string(prompt)],
+                                     "argument": ["name": "x", "value": ""]], false),
+            ("ping", [:], false), ("logging/setLevel", ["level": "debug"], false),
+            ("tools/list", [:], true), ("resources/read", ["uri": .string(uri)], true),
+            ("subscriptions/listen", ["notifications": ["resourcesListChanged": true]], true),
+        ]
+        let leaked = dataMethods.filter { !isDisabled(request($0.0, $0.1, modern: $0.2)) }.map { "\($0.0)\($0.2 ? " (modern)" : "")" }
+        check("mcp: OFF refuses every data method at the protocol layer with MCPDisabled",
+              leaked.isEmpty, "answered: \(leaked)")
+        let hello = request("initialize", ["protocolVersion": "2025-11-25"])
+        let discover = request("server/discover", [:], modern: true)
+        check("mcp: OFF still answers initialize and server/discover, saying MCP is off",
+              (hello["result"]["instructions"].stringValue ?? "").contains(MCPAccess.refusalMessage)
+                  && (discover["result"]["instructions"].stringValue ?? "").contains(MCPAccess.refusalMessage), "")
+        pushed.clear()
+        blocking { await server.resourceListChanged(); await server.resourcesUpdated([uri]) }
+        check("mcp: OFF pushes no resource notifications", pushed.count == 0, "\(pushed.count)")
+
         mcpDefaults.set(true, forKey: MCPAccess.enabledKey)
+        let stillRefused = dataMethods.filter { isDisabled(request($0.0, $0.1, modern: $0.2)) }.map(\.0)
+        let listed = request("tools/list")["result"]["tools"].arrayValue?.isEmpty == false
+            && request("resources/list")["result"]["resources"].arrayValue != nil
+            && request("prompts/list")["result"]["prompts"].arrayValue != nil
+            && request("resources/read", ["uri": .string(uri)])["result"]["contents"].arrayValue != nil
+        check("mcp: ON answers every data method again", stillRefused.isEmpty && listed, "refused: \(stillRefused)")
+        let cleanHello = request("initialize", ["protocolVersion": "2025-11-25"])
+        check("mcp: ON initialize no longer says MCP is off",
+              !(cleanHello["result"]["instructions"].stringValue ?? "").contains(MCPAccess.refusalMessage), "")
         let allowed = blocking { (try? await service.callTool("tower_config_get", arguments: [:])) ?? .refused("threw", "threw") }
         check("mcp: ON answers again, and tower_config_get carries the watch settings",
               !allowed.isError && allowed.structuredContent?["settings"]["watch"]["mcpEnabled"] == .bool(true), "")
 
-        // 8 and 9. The settings keys work over MCP in demo mode and validate against the schema.
-        let setProvider = service.configSet(key: WatchedProvider.codex.defaultsKey, value: .bool(false))
-        let badWarn = service.configSet(key: AlertSettings.weeklyKey, value: .number(99))
-        check("config: a provider toggle and an alert level are settable; an out-of-range level is refused",
-              !setProvider.isError && !ProviderToggles.isEnabled(.codex, defaults: mcpDefaults) && badWarn.isError, "")
+        // Security 2: an agent cannot change the user's consent settings. Every consent key
+        // is refused by tower_config_set with UserConsentRequired and stays as stored.
+        let consentProbes: [(String, JSON)] = WatchedProvider.allCases.map { ($0.defaultsKey, .bool(false)) }
+            + [(MCPAccess.enabledKey, .bool(false)), (AlertSettings.notifyKey, .bool(false)),
+               (AlertSettings.fiveHourKey, .number(60)), (AlertSettings.weeklyKey, .number(60)),
+               (AlertSettings.fableKey, .number(60))]
+        for p in WatchedProvider.allCases { ProviderToggles.set(p, true, defaults: mcpDefaults) }
+        mcpDefaults.set(true, forKey: AlertSettings.notifyKey)
+        for k in [AlertSettings.fiveHourKey, AlertSettings.weeklyKey, AlertSettings.fableKey] { mcpDefaults.set(85.0, forKey: k) }
+        let before = SettingsConfig.json(defaults: mcpDefaults)
+        var writable: [String] = []
+        for (key, value) in consentProbes {
+            let r = service.configSet(key: key, value: value)
+            let refusedRight = r.isError
+                && r.structuredContent?["error"]["code"] == .string(SettingsConfig.consentRefusalCode)
+                && r.content == [.text("\(SettingsConfig.consentRefusalCode): \(key) is the user's choice: change this in Tower Settings")]
+            if !refusedRight { writable.append(key) }
+        }
+        check("config: tower_config_set refuses every consent key with UserConsentRequired",
+              writable.isEmpty && consentProbes.count == WatchedProvider.allCases.count + 5, "accepted: \(writable)")
+        check("config: a refused consent write leaves every stored value unchanged",
+              SettingsConfig.json(defaults: mcpDefaults) == before && MCPAccess.isEnabled(defaults: mcpDefaults), "")
+        let listedKeys = Set((allowed.structuredContent?["settings"]["watch"]["providers"].objectValue ?? [:]).keys)
+        check("config: tower_config_get still lists every consent setting",
+              listedKeys == Set(WatchedProvider.allCases.map(\.rawValue))
+                  && !allowed.structuredContent!["settings"]["watch"]["alerts"]["notify"].isNull, "\(listedKeys)")
+        // The panel's own setters (Settings ▸ Providers, Alerts) still write.
+        ProviderToggles.set(.codex, false, defaults: mcpDefaults)
+        AlertSettings.write(AlertSettings.weeklyKey, 70, defaults: mcpDefaults)
+        check("config: the panel's own setters still write the consent settings",
+              !ProviderToggles.isEnabled(.codex, defaults: mcpDefaults)
+                  && AlertSettings.current(defaults: mcpDefaults).weekly == 70, "")
         check("config: the watch settings validate against their schema",
               JSONSchemaCheck.validate(SettingsConfig.json(defaults: mcpDefaults), against: SettingsConfig.schema).isEmpty, "")
         check("config: Copy config holds the two documented lines",

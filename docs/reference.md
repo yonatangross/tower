@@ -330,12 +330,16 @@ Settings (the panel's "Settings…" button) holds the same choices, always edita
 Providers (one toggle each; OFF stops reading at once and hides the rows), Accounts (forget
 one Claude seat, which retires it and drops its Tower Keychain item; add one by running
 `claude` then `/login`), Alerts, General (start at login, remember seats, text size) and
-Agents (MCP on or off, plus the two lines to register it). With MCP off, every `tower mcp`
-tool answers `MCPDisabled: MCP is off in Settings`.
+Agents (MCP on or off, plus the two lines to register it). With MCP off, `tower mcp`
+answers only `initialize` and `server/discover`, whose instructions say MCP is off. Every
+other method (tools, resources, prompts, completion, ping, logging and every subscribe)
+gets the JSON-RPC error -32001 with `data.code` `MCPDisabled`, and no resource
+notification is pushed.
 
-Over MCP, `tower_config_get` reports these under `settings.watch`, and `tower_config_set`
-takes `providers.<id>.enabled`, `mcp.enabled`, `alerts.warn.5h`, `alerts.warn.7d`,
-`alerts.warn.fable` and `alerts.notify`.
+These are the user's consent, so only the panel writes them. `tower_config_get` reports
+them under `settings.watch`. `tower_config_set` refuses `providers.<id>.enabled`,
+`mcp.enabled`, `alerts.warn.5h`, `alerts.warn.7d`, `alerts.warn.fable` and `alerts.notify`
+with `UserConsentRequired` ("change this in Tower Settings") and writes nothing.
 
 ## Configuration
 

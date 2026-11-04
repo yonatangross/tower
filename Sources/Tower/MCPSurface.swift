@@ -929,6 +929,8 @@ struct TowerMCPService: MCPService {
 
     // MARK: Tool dispatch
 
+    var accessEnabled: Bool { MCPAccess.isEnabled(defaults: env.defaults) }
+
     func callTool(_ name: String, arguments: JSON) async throws -> MCPToolResult {
         // Settings ▸ Agents: MCP off refuses every tool with one clear, structured error.
         guard MCPAccess.isEnabled(defaults: env.defaults) else {

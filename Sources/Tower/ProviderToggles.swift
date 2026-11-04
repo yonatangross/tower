@@ -182,6 +182,12 @@ struct AlertSettings: Equatable, Sendable {
             notify: (store.object(forKey: notifyKey) as? Bool) ?? defaults.notify)
     }
 
+    /// The panel's own writer (Settings ▸ Alerts and the first run). Out-of-range values
+    /// are clamped into the allowed range rather than stored.
+    static func write(_ key: String, _ value: Double, defaults store: UserDefaults = TowerPreferences.shared) {
+        store.set(min(max(value, allowedWarn.lowerBound), allowedWarn.upperBound), forKey: key)
+    }
+
     /// The levels announced for a window, low to high.
     func levels(forWindow window: String) -> [Double] {
         let first: Double
@@ -210,17 +216,21 @@ enum MCPAccess {
 
 // MARK: - tower_config_get / tower_config_set
 
-/// The Settings keys an agent can read and write over MCP, beside the older ones. Every
-/// write lands in the same defaults the Settings view reads, so the two never disagree.
+/// The Settings keys an agent can READ over MCP. They are the user's consent (what Tower
+/// reads, whether agents may ask, whether and when it notifies), so tower_config_set
+/// refuses every one of them; only the panel writes them.
 enum SettingsConfig {
     static let providerKeys: [String] = WatchedProvider.allCases.map(\.defaultsKey)
+    /// The refusal tower_config_set gives for a setting only the user may change.
+    static let consentRefusalCode = "UserConsentRequired"
     static let keys: [String] = [MCPAccess.enabledKey, AlertSettings.fiveHourKey, AlertSettings.weeklyKey,
                                  AlertSettings.fableKey, AlertSettings.notifyKey] + providerKeys
 
-    /// Every key tower_config_set accepts, older ones first, as the schema enum lists them.
-    static let allConfigKeys: [JSON] = (["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD",
-                                         "typesafe.balanceUSD", "cloudflare.clef.balanceUSD", "typesafe.clef.balanceUSD",
-                                         "knownAccounts", "retiredAccounts"] + keys).map { .string($0) }
+    /// Every key tower_config_set accepts, as the schema enum lists them. The consent keys
+    /// are not among them.
+    static let allConfigKeys: [JSON] = ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD",
+                                        "typesafe.balanceUSD", "cloudflare.clef.balanceUSD", "typesafe.clef.balanceUSD",
+                                        "knownAccounts", "retiredAccounts"]
 
     static func json(defaults: UserDefaults) -> JSON {
         let a = AlertSettings.current(defaults: defaults)
@@ -245,25 +255,11 @@ enum SettingsConfig {
         ],
     ]
 
-    /// nil when the key is not one of these; the caller then tries the older keys.
+    /// nil when the key is not a consent key; the caller then tries the older keys. A
+    /// consent key is refused and nothing is written.
     static func set(key: String, value: JSON, defaults: UserDefaults) -> MCPToolResult? {
         guard keys.contains(key) else { return nil }
-        let previous: JSON = defaults.object(forKey: key).map { v in
-            if let b = v as? Bool { return .bool(b) }
-            if let d = v as? Double { return .number(d) }
-            return .null
-        } ?? .null
-        switch key {
-        case AlertSettings.fiveHourKey, AlertSettings.weeklyKey, AlertSettings.fableKey:
-            guard let v = value.doubleValue, AlertSettings.allowedWarn.contains(v) else {
-                return .refused("BadValue", "\(key) takes a number from \(Int(AlertSettings.allowedWarn.lowerBound)) to \(Int(AlertSettings.allowedWarn.upperBound))")
-            }
-            defaults.set(v, forKey: key)
-            return .ok("\(key) \(Int(v)) %", ["key": .string(key), "value": .number(v), "previous": previous])
-        default:
-            guard let on = value.boolValue else { return .refused("BadValue", "\(key) takes a boolean") }
-            defaults.set(on, forKey: key)
-            return .ok("\(key) \(on ? "on" : "off")", ["key": .string(key), "value": .bool(on), "previous": previous])
-        }
+        return .refused(consentRefusalCode, "\(key) is the user's choice: change this in Tower Settings",
+                        extra: ["key": .string(key)])
     }
 }
