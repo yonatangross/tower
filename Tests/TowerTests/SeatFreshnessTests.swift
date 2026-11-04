@@ -89,7 +89,7 @@ final class SeatFreshnessTests: XCTestCase {
         let display = SeatUsagePresentation(account: old, now: now)
 
         XCTAssertEqual(display.roomText, "20%")
-        XCTAssertEqual(display.stateText, "stale cache 4h 40m")
+        XCTAssertEqual(display.stateText, "read 4h 40m ago")
         XCTAssertFalse(display.isLive)
         XCTAssertFalse(old.isRecommendable(now: now), "Cached room must not rank a stale seat")
     }
@@ -123,7 +123,7 @@ final class SeatFreshnessTests: XCTestCase {
 
         XCTAssertEqual(
             SeatUsagePresentation.restLabel(reason, account: oldCap, now: now),
-            "cap · stale cache 3d 0h"
+            "cap · read 3d 0h ago"
         )
     }
 
@@ -132,7 +132,7 @@ final class SeatFreshnessTests: XCTestCase {
         let display = SeatUsagePresentation(account: future, now: now)
 
         XCTAssertEqual(display.roomText, "20%")
-        XCTAssertEqual(display.stateText, "stale cache clock skew")
+        XCTAssertEqual(display.stateText, "read time ahead of this clock (clock skew)")
         XCTAssertFalse(display.isLive)
         XCTAssertFalse(future.isRecommendable(now: now))
     }
