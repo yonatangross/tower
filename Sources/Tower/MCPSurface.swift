@@ -807,15 +807,29 @@ struct TowerMCPService: MCPService {
 
     /// The mirror's bytes when it exists, else the authoritative file's, else an empty
     /// object. Both files carry identical bytes on every save, so either is the cache.
+    /// Rows of providers that are OFF are dropped on the way out (b87 on #31); the file on
+    /// disk stays whole, because the hooks read it. With nothing hidden the bytes go out
+    /// exactly as stored.
     func quotaCacheText() -> String {
+        let raw: Data
         if let data = try? Data(contentsOf: env.mirrorPath), !data.isEmpty {
-            return String(decoding: data, as: UTF8.self)
+            raw = data
+        } else if let data = try? Data(contentsOf: env.supportDirectory.appendingPathComponent("accounts.json")),
+                  !data.isEmpty {
+            raw = data
+        } else {
+            return "{}"
         }
-        let authoritative = env.supportDirectory.appendingPathComponent("accounts.json")
-        if let data = try? Data(contentsOf: authoritative), !data.isEmpty {
-            return String(decoding: data, as: UTF8.self)
+        let hidden = Set(env.store.load().keys).subtracting(visibleAccounts().keys)
+        guard !hidden.isEmpty else { return String(decoding: raw, as: UTF8.self) }
+        guard var object = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else {
+            // Never hand out rows that may be OFF when the file cannot be filtered.
+            return "{}"
         }
-        return "{}"
+        for key in hidden { object.removeValue(forKey: key) }
+        guard let filtered = try? JSONSerialization.data(
+            withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else { return "{}" }
+        return String(decoding: filtered, as: UTF8.self)
     }
 
     func surfaceMarkdown() -> String {

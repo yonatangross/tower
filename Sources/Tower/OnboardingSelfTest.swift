@@ -137,6 +137,13 @@ enum OnboardingSelfTest {
                         offService.account("cx"), offService.resets(), offService.freshness()]
         let offLeaked = offReads.filter { "\($0.content) \(String(describing: $0.structuredContent))".contains("cx@example.com") }
         let claudeShown = "\(offService.accounts(provider: nil).structuredContent.map { "\($0)" } ?? "")".contains("cc@example.com")
+        // b87 on #31: the tower://quota-cache resource is filtered on read; the file on disk
+        // stays whole for the hooks.
+        let cacheText = offService.quotaCacheText()
+        let fileText = (try? String(contentsOf: offDir.appendingPathComponent("accounts.json"), encoding: .utf8)) ?? ""
+        check("tower://quota-cache hides OFF rows from agents, the file keeps them for hooks",
+              !cacheText.contains("cx@example.com") && cacheText.contains("cc@example.com")
+                  && fileText.contains("cx@example.com"), cacheText)
         check("MCP reads never return the stored rows of a provider that is OFF",
               offLeaked.isEmpty && claudeShown, "leaked in \(offLeaked.count) of \(offReads.count), claude shown \(claudeShown)")
 
