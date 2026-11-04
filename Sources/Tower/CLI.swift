@@ -1737,17 +1737,6 @@ enum CLI {
         check("cursor store key is namespaced",
               AccountSnapshot.storeKey(email: "a@b", provider: .cursor) == "cursor:a@b")
 
-        // The session cookie is `<url-encoded sub>::<jwt>`. Verified live against
-        // cursor.com 2026-08-18; the "::" separator is percent-encoded, the sub is not
-        // left raw (its "|" would be illegal in a header value).
-        let cursorID = CursorAuth.Identity(
-            email: "a@b", plan: "pro", subscriptionStatus: "active",
-            accessToken: "jwt.body.sig", subject: "google-oauth2|user_01ABC")
-        let cookie = CursorAuth.sessionCookie(cursorID)
-        check("cursor cookie encodes the pipe in the subject",
-              cookie == "WorkosCursorSessionToken=google-oauth2%7Cuser_01ABC%3A%3Ajwt.body.sig",
-              "got \(cookie)")
-
         // Cursor's dashboard owns the two readings and the reset, so neither needs a
         // plan-price denominator inferred by Tower.
         let cursorReading = CursorUsage.Reading(
@@ -1798,11 +1787,169 @@ enum CLI {
               && CursorUsage.Outcome.unavailable != CursorUsage.Outcome.notConfigured)
 
         // No Cursor install must be silence, not a broken row.
-        check("no cursor install yields no identity",
-              CursorAuth.identity(home: URL(fileURLWithPath: "/nonexistent")) == nil)
+        check("no cursor install yields no label",
+              CursorAuth.label(home: URL(fileURLWithPath: "/nonexistent")) == nil)
         check("a missing state db reads as nil, not as an empty string",
               CursorAuth.read("cursorAuth/accessToken",
                               db: URL(fileURLWithPath: "/nonexistent/state.vscdb")) == nil)
+
+        // --- Tower's own Cursor sign-in ---------------------------------------------------
+        // Cursor's app now stores an opaque value that the usage route refuses, so Tower keeps
+        // its own sign-in (PKCE browser login, a JWT in a Tower-owned Keychain item) and never
+        // sends anything it reads from the Cursor app. Every reply below is invented.
+        do {
+            // RFC 7636 appendix B vector.
+            check("cursor sign-in PKCE challenge is S256 of the verifier",
+                  CursorSignIn.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+                      == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+            let pair = CursorSignIn.pkce(random: Array(0..<32))
+            check("cursor sign-in PKCE pair is base64url and its challenge matches",
+                  pair.verifier.count == 43 && !pair.verifier.contains("=") && !pair.verifier.contains("+")
+                      && pair.challenge == CursorSignIn.challenge(for: pair.verifier))
+            let authorize = URLComponents(url: CursorSignIn.authorizeURL(challenge: pair.challenge, uuid: "u-1"),
+                                          resolvingAgainstBaseURL: false)
+            let q = Dictionary(uniqueKeysWithValues: (authorize?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            check("cursor sign-in opens loginDeepControl with challenge, uuid, mode and target",
+                  authorize?.host == "cursor.com" && authorize?.path == "/loginDeepControl"
+                      && q == ["challenge": pair.challenge, "uuid": "u-1", "mode": "login", "redirectTarget": "cli"])
+            let pollURL = URLComponents(url: CursorSignIn.pollRequest(uuid: "u-1", verifier: pair.verifier).url!,
+                                        resolvingAgainstBaseURL: false)
+            check("cursor sign-in polls auth/poll with uuid and verifier",
+                  pollURL?.host == "api2.cursor.sh" && pollURL?.path == "/auth/poll"
+                      && Set((pollURL?.queryItems ?? []).map { "\($0.name)=\($0.value ?? "")" })
+                          == ["uuid=u-1", "verifier=\(pair.verifier)"])
+            let pairJSON = #"{"accessToken":"acc-FAKE","refreshToken":"ref-FAKE"}"#
+            check("cursor sign-in poll: 404 and 202 wait, 200 with both tokens completes, others fail",
+                  CursorSignIn.pollStep(status: 404, body: Data()) == .pending
+                      && CursorSignIn.pollStep(status: 202, body: Data()) == .pending
+                      && CursorSignIn.pollStep(status: 200, body: Data(pairJSON.utf8))
+                          == .complete(.init(accessToken: "acc-FAKE", refreshToken: "ref-FAKE"))
+                      && CursorSignIn.pollStep(status: 200, body: Data(#"{"accessToken":"acc-FAKE"}"#.utf8)) != .pending
+                      && CursorSignIn.pollStep(status: 500, body: Data()) != .pending)
+            let pollHTTP = ScriptedCursorHTTP([(404, ""), (202, ""), (200, pairJSON)])
+            let signed = AsyncBlock.run {
+                await CursorSignIn.poll(uuid: "u-1", verifier: pair.verifier, http: pollHTTP, sleep: { _ in })
+            }
+            check("cursor sign-in poll completes after pending answers",
+                  signed == .signedIn(.init(accessToken: "acc-FAKE", refreshToken: "ref-FAKE"))
+                      && pollHTTP.requests.count == 3)
+            final class FakeClock: @unchecked Sendable { var t = Date(timeIntervalSince1970: 1_000_000) }
+            let clock = FakeClock()
+            let foreverPending = ScriptedCursorHTTP(Array(repeating: (404, ""), count: 400))
+            let timedOut = AsyncBlock.run {
+                await CursorSignIn.poll(uuid: "u-1", verifier: pair.verifier, http: foreverPending,
+                                        now: { clock.t }, sleep: { s in clock.t = clock.t.addingTimeInterval(s) })
+            }
+            check("cursor sign-in poll gives up after 300 s", timedOut == .timedOut
+                  && foreverPending.requests.count >= 150 && foreverPending.requests.count <= 151,
+                  "\(timedOut) after \(foreverPending.requests.count) polls")
+
+            // Renewal a week before the 60 day JWT expires; shouldLogout ends the sign-in.
+            let renewNow = Date(timeIntervalSince1970: 2_000_000_000)
+            let soon = FakeJWT.make(["sub": "user_FAKE", "exp": renewNow.timeIntervalSince1970 + 3 * 86_400])
+            let later = FakeJWT.make(["sub": "user_FAKE", "exp": renewNow.timeIntervalSince1970 + 30 * 86_400])
+            check("cursor sign-in renews a JWT that expires within 7 days, not one with 30 left",
+                  CursorSignIn.needsRenewal(.init(accessToken: soon, refreshToken: soon), now: renewNow)
+                      && !CursorSignIn.needsRenewal(.init(accessToken: later, refreshToken: later), now: renewNow)
+                      && !CursorSignIn.needsRenewal(.init(accessToken: "opaque", refreshToken: "opaque"), now: renewNow))
+            let renew = CursorSignIn.renewRequest(refreshToken: "ref-FAKE")
+            let renewBody = (try? JSONSerialization.jsonObject(with: renew.httpBody ?? Data())) as? [String: String]
+            check("cursor sign-in renewal posts the refresh token to oauth/token",
+                  renew.url == CursorSignIn.tokenURL && renew.httpMethod == "POST"
+                      && renewBody?["grant_type"] == "refresh_token" && renewBody?["refresh_token"] == "ref-FAKE"
+                      && renewBody?["client_id"] == CursorSignIn.clientID && !CursorSignIn.clientID.contains("__"))
+            check("cursor sign-in renewal: a new access token also becomes the refresh token; shouldLogout ends it",
+                  CursorSignIn.renewResult(status: 200, body: Data(#"{"access_token":"acc-NEW"}"#.utf8))
+                      == .renewed(.init(accessToken: "acc-NEW", refreshToken: "acc-NEW"))
+                      && CursorSignIn.renewResult(status: 200, body: Data(#"{"shouldLogout":true}"#.utf8)) == .loggedOut
+                      && CursorSignIn.renewResult(status: 500, body: Data()) == .failed)
+
+            // The reader: Tower's own token, never the Cursor app's.
+            let cursorHome = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tower-selftest-cursor-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: cursorHome) }
+            let stateDB = CursorAuth.stateDB(home: cursorHome)
+            try? FileManager.default.createDirectory(at: stateDB.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let seedDB = Process()
+            seedDB.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+            seedDB.arguments = [stateDB.path,
+                "create table ItemTable (key text unique on conflict replace, value blob);"
+                + "insert into ItemTable values ('cursorAuth/accessToken','cur_STATE_ONLY_FAKE');"
+                + "insert into ItemTable values ('cursorAuth/refreshToken','cur_STATE_ONLY_FAKE');"
+                + "insert into ItemTable values ('cursorAuth/cachedEmail','cursor@example.test');"
+                + "insert into ItemTable values ('cursorAuth/stripeMembershipType','ultra');"]
+            try? seedDB.run()
+            seedDB.waitUntilExit()
+            let noOwnHTTP = ScriptedCursorHTTP([(200, "{}")])
+            let noOwn = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: MemoryCursorTokenStore(), http: noOwnHTTP)
+            }
+            check("cursor with no Tower sign-in asks to connect and sends nothing",
+                  noOwn == .connectNeeded(CursorUsage.connectReason) && noOwnHTTP.requests.isEmpty,
+                  "\(noOwn), \(noOwnHTTP.requests.count) requests")
+            check("cursor connect text names Tower, never the Cursor app's sign-in",
+                  CursorUsage.connectReason.contains("Connect Cursor in Tower")
+                      && !CursorUsage.connectReason.lowercased().contains("sign in again in cursor"))
+            let usageJSON = #"{"planUsage":{"autoPercentUsed":12,"apiPercentUsed":100},"billingCycleEnd":"2033-05-25T00:00:00.000Z"}"#
+            let ownStore = MemoryCursorTokenStore(.init(accessToken: later, refreshToken: later))
+            let ownHTTP = ScriptedCursorHTTP([(200, usageJSON)])
+            let own = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: ownStore, http: ownHTTP)
+            }
+            let sent = ownHTTP.requests.map { $0.value(forHTTPHeaderField: "Authorization") ?? "" }
+            if case .ok(let r) = own {
+                check("cursor reads with Tower's own token, never the Cursor app's",
+                      sent == ["Bearer \(later)"] && !sent.joined().contains("cur_STATE_ONLY_FAKE")
+                          && r.validOtherModelsPct == 100 && r.validCursorModelsPct == 12 && r.email == "cursor@example.test",
+                      "\(sent.count) requests")
+            } else {
+                check("cursor reads with Tower's own token, never the Cursor app's", false, "\(own)")
+            }
+            let renewStore = MemoryCursorTokenStore(.init(accessToken: soon, refreshToken: soon))
+            let renewHTTP = ScriptedCursorHTTP([(200, #"{"access_token":"\#(later)"}"#), (200, usageJSON)])
+            let renewed = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: renewStore, http: renewHTTP)
+            }
+            check("cursor renews a near-expiry own token first, saves it, then reads with it",
+                  { if case .ok = renewed { return true }; return false }()
+                      && renewHTTP.requests.first?.url == CursorSignIn.tokenURL
+                      && renewHTTP.requests.last?.value(forHTTPHeaderField: "Authorization") == "Bearer \(later)"
+                      && renewStore.load()?.accessToken == later, "\(renewed)")
+            let logoutStore = MemoryCursorTokenStore(.init(accessToken: soon, refreshToken: soon))
+            let logout = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: logoutStore,
+                                        http: ScriptedCursorHTTP([(200, #"{"shouldLogout":true}"#)]))
+            }
+            check("cursor shouldLogout clears Tower's sign-in and asks to connect again",
+                  logout == .connectNeeded(CursorUsage.signedOutReason) && logoutStore.load() == nil, "\(logout)")
+            let refusedStore = MemoryCursorTokenStore(.init(accessToken: later, refreshToken: later))
+            let refused = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: refusedStore,
+                                        http: ScriptedCursorHTTP([(401, "")]))
+            }
+            check("cursor 401 with Tower's own token asks to connect again",
+                  refused == .connectNeeded(CursorUsage.refusedOwnReason(code: 401))
+                      && CursorUsage.refusedOwnReason(code: 401).contains("Connect Cursor in Tower"), "\(refused)")
+            check("cursor app label is email and plan only",
+                  CursorAuth.label(home: cursorHome) == CursorAuth.Label(email: "cursor@example.test", plan: "ultra"))
+            check("every read of the Cursor app's database is -readonly",
+                  CursorAuth.sqliteArguments(db: stateDB, key: "cursorAuth/cachedEmail").first == "-readonly")
+            let seedStore = Store(dir: cursorHome.appendingPathComponent("support"), now: { renewNow })
+            _ = seedStore.mutate { accounts in
+                _ = seedStore.seedCursorAccount(into: &accounts, outcome: noOwn, home: cursorHome, now: renewNow)
+            }
+            let cursorRow = seedStore.load()[AccountSnapshot.storeKey(email: "cursor@example.test", provider: .cursor)]
+            check("the Connect Cursor action shows for every reason a sign-in fixes, and only those",
+                  CursorUsage.needsConnect(CursorUsage.connectReason)
+                      && CursorUsage.needsConnect(CursorUsage.signedOutReason)
+                      && CursorUsage.needsConnect(CursorUsage.refusedOwnReason(code: 401))
+                      && !CursorUsage.needsConnect(nil)
+                      && !CursorUsage.needsConnect("could not read Cursor usage (network, or the response did not parse)"))
+            check("cursor row without a Tower sign-in reads Connect Cursor in Tower",
+                  cursorRow?.lastError?.contains("Connect Cursor in Tower") == true
+                      && cursorRow?.lastError?.contains("Sign in again in Cursor") == false,
+                  cursorRow?.lastError ?? "no row")
+        }
 
         // A threshold alert names the window a human will read. "Cursor at 95% of 7d"
         // promises relief in a week for credits that refill on the invoice boundary.

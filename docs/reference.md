@@ -176,7 +176,7 @@ permission on first launch.
 | Pi lane | Read from Pi's own directory, `~/.pi/agent` (override with `TOWER_PI_DIR`, which tests and demos use so the real directory is never read). `settings.json` gives `defaultProvider` and `defaultModel`. Spend is summed from `sessions/<project>/<session>.jsonl`: assistant `message` entries, `message.usage.cost.total` in USD, placed in time by the entry's ISO `timestamp` (the message's epoch ms `timestamp` is the fallback), each entry id counted once across files so a forked session's copied history is not double counted. Bounded: only files modified this calendar month (local time), at most 2000 of them, at most the last 64 MB of each, streamed line by line; a partial read marks the sums as a floor ("at least"). `auth.json` holds Pi's secrets and is never opened. When the provider is `openrouter`, the row shows Pi's month spend as a percent of the OpenRouter credit Tower already reads (lifetime top-ups) and the dollars left on the key; otherwise, or when the balance is unreadable, it shows spend only with the reason. No `~/.pi/agent` directory hides the row. Pi has no row in `accounts.json` or the mirror: money is not a quota. |
 | Claude seat retention | On by default. After Tower verifies a Claude identity, it stores that seat's access token and nonsecret metadata in a Tower-owned Keychain item. Turn off **Remember Claude seats** to delete those items, or choose **Forget** to delete them while keeping future retention on. A remembered seat reads needs login once its access token expires; Tower never renews it. Seat items are read from the Keychain once per launch and kept in memory. An owned item a rebuilt (ad-hoc signed) Tower cannot read is skipped, named on its row, and re-created once from the CLI credential when it is the active seat, or at that seat's next login otherwise; see "Signing" below. The panel, `tower status` and `tower mcp` read this switch from one settings domain, the app's bundle id, even when `tower` runs through its PATH symlink (#121); `tower_config_get` reports it as `identity.settingsDomain`. |
 | Text size | The panel footer's **Text size** picker (S 100 %, M 115 %, L 130 %, XL 150 %) scales every font and text column; a fresh install starts at M. When the boards outgrow the screen they scroll under a fixed header and footer. `TOWER_TEXT_SIZE` (s, m, l or xl) overrides it for one run, which is how `panelshot` renders a given size (#121). |
-| Cursor | Identity from Cursor's own state (`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`, an unencrypted SQLite key/value table read via `sqlite3 -readonly`), so nothing is pasted and nothing goes stale behind you. The two monthly model pools from `GET /api/usage-summary` on cursor.com, authenticated by the session cookie composed from that state. Nothing is written and no Keychain prompt is raised. |
+| Cursor | Tower's own sign-in: a one-time **Connect Cursor** on the row opens `cursor.com/loginDeepControl` with a PKCE challenge, Tower polls `api2.cursor.sh/auth/poll` for the token pair and keeps it in its own Keychain item (`ai.yonyon.tower.cursor-signin`), renewed at `api2.cursor.sh/oauth/token` about a week before the JWT expires. The two monthly model pools come from `DashboardService/GetCurrentPeriodUsage` with that token. From the Cursor app's state (`state.vscdb`, read with `sqlite3 -readonly`) Tower reads only the row's label: the cached email and the plan. It never reads, sends or changes the Cursor app's sign-in, so it cannot sign you out of Cursor. The flow follows OpenUsage (MIT). |
 | Poll rate | On menu open (debounced: skipped if the last *attempt* was under 20 seconds ago, so an offline machine does not re-run request timeouts on every open), every 300 seconds on a timer, and on wake from sleep (`NSWorkspace.didWakeNotification`). The timer sits well inside the 15 minute freshness TTL, so the active account stays live with margin. |
 
 ### The one real constraint
@@ -371,18 +371,19 @@ When Tower cannot verify which seat the CLI holds, `tower_advice` keeps `kind`
 - `/api/oauth/usage` is an **undocumented** endpoint used by the Claude Code client. It
   can change or disappear on any release. If the app goes blank, that is the first
   suspect.
-- Cursor's `GET /api/usage-summary` route is **undocumented** and can change with the
-  dashboard. Tower reads `autoPercentUsed` as **Cursor Models** and `apiPercentUsed` as
-  **Other Models**, with the reset from `billingCycleEnd`. Missing readings stay unknown.
+- Cursor's `DashboardService/GetCurrentPeriodUsage` route and its sign-in routes are
+  **undocumented** and can change with any Cursor release. Tower reads `autoPercentUsed` as
+  **Cursor Models** and `apiPercentUsed` as **Other Models**, with the reset from
+  `billingCycleEnd`. Missing readings stay unknown, never zero.
 - Cursor's aggregate `totalCostCents` is model-rate usage cost in cents, not the amount
   billed or the fraction of either model pool. Tower does not divide it by the subscription
   price or show it as credits consumed. The old `cursor.monthlyCreditsUSD` override is no
   longer used.
-- A **Cursor session token expires**, and when it does the row does not vanish and does not
-  read zero: its last capture ages into `unknown since <age>` after the freshness TTL,
-  with `Cursor session refused (HTTP <code>)` on the row. Signing in again in Cursor
-  clears it. An unauthenticated call is answered with a `307` redirect to the login page
-  rather than a `401`, so `307` is treated as a refusal here.
+- **Tower's Cursor sign-in ends or is refused**, and when it does the row does not vanish
+  and does not read zero: its last capture ages into `unknown since <age>` after the
+  freshness TTL, with `Connect Cursor in Tower` on the row and a **Connect Cursor** button.
+  A `401`, `403` or `307` from the usage route, or `shouldLogout` from a renewal, all lead
+  there. Signing in again in the Cursor app does not change it: Tower keeps its own sign-in.
 - Cursor has two independent pools per **billing month**. Both appear by name in its row;
   ranking uses the more-used pool only when both readings are known. The mirror's
   `weeklyPct` stores that monthly maximum for compatibility, and `scoped` carries both
