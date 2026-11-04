@@ -800,6 +800,13 @@ enum CLI {
               viaNewKey.isError != true && newKeyEntry?.usd == 6.50
                   && viaOldKey.isError != true && TypeSafe.entry(model: .clef, defaults: typeSafeDefaults)?.usd == 7.25,
               "\(viaNewKey.content) \(viaOldKey.content)")
+        let emptyClefSuite = "tower-selftest-clef-empty-\(UUID().uuidString)"
+        let emptyClefDefaults = UserDefaults(suiteName: emptyClefSuite)!
+        defer { emptyClefDefaults.removePersistentDomain(forName: emptyClefSuite) }
+        check("an unentered clef names the cloudflare key, not the old typesafe one",
+              TypeSafe.statusRowText(model: .clef, now: typeSafeLate, defaults: emptyClefDefaults)
+                  == "no balance entered (tower_config_set cloudflare.clef.balanceUSD <usd>)",
+              TypeSafe.statusRowText(model: .clef, now: typeSafeLate, defaults: emptyClefDefaults))
         check("the MCP group names each model's vendor",
               TowerMCPService.typesafeJSON(now: typeSafeLate, defaults: typeSafeDefaults)["models"]["clef"]["vendor"]
                   == .string("Cloudflare"))

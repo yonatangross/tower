@@ -1131,7 +1131,7 @@ enum TypeSafe {
     static func statusRowText(model: Model = .jev, now: Date = Date(),
                               defaults: UserDefaults = TowerPreferences.shared) -> String {
         guard let usd = entry(model: model, defaults: defaults)?.usd else {
-            return "no balance entered (tower_config_set \(model.balanceKey) <usd>)"
+            return "no balance entered (tower_config_set \(model.configKey) <usd>)"
         }
         let staleMark = balanceIsStale(model: model, now: now, defaults: defaults) ? ", stale" : ""
         return "balance \(money(usd)) (\(enteredLabel(model: model, now: now, defaults: defaults)))\(staleMark), not live"
