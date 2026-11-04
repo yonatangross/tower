@@ -22,6 +22,10 @@ let args = Set(CommandLine.arguments.dropFirst())
 // both read this value, so the gate always judges the verb that actually runs.
 let verb = DemoMode.dispatched(args: args)
 
+// Before any Keychain call in any mode (app, CLI, MCP): no dialog unless the operator's
+// Re-trust opens one (KeychainDialogGate, measured 2026-11-04).
+KeychainDialogGate.shared.closeForProcess()
+
 if verb == .selftest {
     exit(CLI.selftest())
 }

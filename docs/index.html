@@ -88,7 +88,8 @@
 <pre>gh release download --repo yonatangross/tower --pattern 'Tower.app.zip*'
 shasum -a 256 -c Tower.app.zip.sha256 &amp;&amp; ditto -x -k Tower.app.zip ~/Applications
 open ~/Applications/Tower.app</pre>
-  <p>Then run <code>/login</code> once per Claude Code account. Blocked on first launch? See the troubleshooting playbook.</p>
+  <p><strong>First launch.</strong> Tower is not notarized by Apple, so macOS may block it once with "Apple could not verify Tower is free of malware". Press Done, open System Settings, Privacy &amp; Security, scroll to Security and press <strong>Open Anyway</strong> next to Tower, then Open Anyway again (enter your login password if asked). macOS does not ask again for this copy.</p>
+  <p>Then run <code>/login</code> once per Claude Code account. More help: the troubleshooting playbook.</p>
 
   <h2>Playbooks</h2>
   <div class="pb">

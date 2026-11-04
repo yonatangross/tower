@@ -732,6 +732,8 @@ struct ClaudeSeatVault {
     private let log: (String) -> Void
     private let now: () -> Date
     private let mayPrompt: () -> Bool
+    /// The process switch the legacy keychain honours (KeychainDialogGate).
+    private let dialogGate: KeychainDialogGate
 
     init(
         keychain: any ClaudeSeatKeychain = BundledClaudeSeatKeychain(),
@@ -741,9 +743,11 @@ struct ClaudeSeatVault {
         setRetentionEnabled: @escaping (Bool) -> Void = { ClaudeSeatRetention.setEnabled($0) },
         log: @escaping (String) -> Void = ClaudeSeatVault.defaultLog,
         now: @escaping () -> Date = { Date() },
-        mayPrompt: @escaping () -> Bool = { TowerSeatKeychainAccess.runningFromSignedBundle() }
+        mayPrompt: @escaping () -> Bool = { TowerSeatKeychainAccess.runningFromSignedBundle() },
+        dialogGate: KeychainDialogGate = .shared
     ) {
         self.mayPrompt = mayPrompt
+        self.dialogGate = dialogGate
         self.keychain = keychain
         let directory = Self.defaultDirectory()
         self.lockURL = lockURL ?? directory.appendingPathComponent(".seat-keychain.lock")
@@ -1060,7 +1064,19 @@ struct ClaudeSeatVault {
                 "Re-trust needs the signed Tower app; a bare build never reads seat items with the Keychain dialog"))
         }
         launch.requestInteractiveRead()
-        switch keychain.readSeats(interaction: launch.interactionForNextAttempt) {
+        // Under the vault lock like every other vault operation: a refresh tick in this or
+        // another Tower process waits for the operator's dialog instead of racing it.
+        let locked = withLock {
+            dialogGate.withDialogAllowed {
+                keychain.readSeats(interaction: launch.interactionForNextAttempt)
+            }
+        }
+        let result: Result<ClaudeSeatKeychainReadout, ClaudeSeatVaultError>
+        switch locked {
+        case .success(let read): result = read
+        case .failure(let error): result = .failure(error)
+        }
+        switch result {
         case .failure(let error):
             launch.noteFailure(error, now: now(), interaction: .allowed)
             return .failure(error)
@@ -1076,7 +1092,11 @@ struct ClaudeSeatVault {
             return .failure(launch.failureForLaunch ?? ClaudeSeatVaultError("Keychain read failed"))
         }
         let interaction = fresh ? .suppressed : launch.interactionForNextAttempt
-        switch keychain.readSeats(interaction: interaction) {
+        // The LAContext the read attaches does not stop a legacy keychain dialog; the
+        // process switch does. The read holds the Re-trust window, so it neither switches
+        // dialogs off under an operator read nor runs while one has them on.
+        let result = dialogGate.withDialogsOff { keychain.readSeats(interaction: interaction) }
+        switch result {
         case .failure(let error):
             launch.noteFailure(error, now: now(), interaction: interaction)
             if !fresh, let kept = launch.readoutForLaunch { return .success(kept) }
