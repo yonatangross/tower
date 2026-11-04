@@ -1064,8 +1064,17 @@ struct ClaudeSeatVault {
                 "Re-trust needs the signed Tower app; a bare build never reads seat items with the Keychain dialog"))
         }
         launch.requestInteractiveRead()
-        let result = dialogGate.withDialogAllowed {
-            keychain.readSeats(interaction: launch.interactionForNextAttempt)
+        // Under the vault lock like every other vault operation: a refresh tick in this or
+        // another Tower process waits for the operator's dialog instead of racing it.
+        let locked = withLock {
+            dialogGate.withDialogAllowed {
+                keychain.readSeats(interaction: launch.interactionForNextAttempt)
+            }
+        }
+        let result: Result<ClaudeSeatKeychainReadout, ClaudeSeatVaultError>
+        switch locked {
+        case .success(let read): result = read
+        case .failure(let error): result = .failure(error)
         }
         switch result {
         case .failure(let error):
@@ -1084,9 +1093,10 @@ struct ClaudeSeatVault {
         }
         let interaction = fresh ? .suppressed : launch.interactionForNextAttempt
         // The LAContext the read attaches does not stop a legacy keychain dialog; the
-        // process switch does. Idempotent, so a process that skipped main is covered too.
-        dialogGate.closeForProcess()
-        switch keychain.readSeats(interaction: interaction) {
+        // process switch does. The read holds the Re-trust window, so it neither switches
+        // dialogs off under an operator read nor runs while one has them on.
+        let result = dialogGate.withDialogsOff { keychain.readSeats(interaction: interaction) }
+        switch result {
         case .failure(let error):
             launch.noteFailure(error, now: now(), interaction: interaction)
             if !fresh, let kept = launch.readoutForLaunch { return .success(kept) }

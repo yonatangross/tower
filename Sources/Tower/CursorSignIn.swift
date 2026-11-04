@@ -236,8 +236,8 @@ struct KeychainCursorTokenStore: CursorTokenStore {
         context.interactionNotAllowed = true
         query[kSecUseAuthenticationContext as String] = context
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
+        let status = gate.withDialogsOff { ops.read(query, &item) }
+        guard status == errSecSuccess, let data = item as? Data else { return nil }
         return try? JSONDecoder().decode(CursorSignIn.Tokens.self, from: data)
     }
 
@@ -249,6 +249,9 @@ struct KeychainCursorTokenStore: CursorTokenStore {
         var delete: ([String: Any]) -> OSStatus
         var add: ([String: Any]) -> OSStatus
         var makeAccess: () -> SecAccess?
+        var read: ([String: Any], UnsafeMutablePointer<CFTypeRef?>) -> OSStatus = { query, out in
+            SecItemCopyMatching(query as CFDictionary, out)
+        }
 
         static let live = Ops(
             delete: { SecItemDelete($0 as CFDictionary) },
@@ -262,6 +265,10 @@ struct KeychainCursorTokenStore: CursorTokenStore {
     }
 
     var ops: Ops = .live
+    /// Every call on this item runs with Keychain dialogs off, inside the same window as a
+    /// seat Re-trust (KeychainDialogGate). The LAContext on `load` alone does not stop a
+    /// legacy keychain dialog.
+    var gate: KeychainDialogGate = .shared
 
     /// Delete any item under this name, whoever made it, then add a fresh one whose access
     /// list trusts Tower only. No Tower access list (a bare development binary) fails
@@ -269,17 +276,19 @@ struct KeychainCursorTokenStore: CursorTokenStore {
     func save(_ tokens: CursorSignIn.Tokens) -> Bool {
         guard let data = try? JSONEncoder().encode(tokens),
               let access = ops.makeAccess() else { return false }
-        let deleted = ops.delete(baseQuery())
-        guard deleted == errSecSuccess || deleted == errSecItemNotFound else { return false }
-        var add = baseQuery()
-        add[kSecValueData as String] = data
-        add[kSecAttrLabel as String] = "Tower Cursor sign-in"
-        add[kSecAttrAccess as String] = access
-        return ops.add(add) == errSecSuccess
+        return gate.withDialogsOff {
+            let deleted = ops.delete(baseQuery())
+            guard deleted == errSecSuccess || deleted == errSecItemNotFound else { return false }
+            var add = baseQuery()
+            add[kSecValueData as String] = data
+            add[kSecAttrLabel as String] = "Tower Cursor sign-in"
+            add[kSecAttrAccess as String] = access
+            return ops.add(add) == errSecSuccess
+        }
     }
 
     func clear() {
-        SecItemDelete(baseQuery() as CFDictionary)
+        _ = gate.withDialogsOff { ops.delete(baseQuery()) }
     }
 }
 

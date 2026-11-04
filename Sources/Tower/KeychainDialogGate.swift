@@ -33,13 +33,32 @@ final class KeychainDialogGate: @unchecked Sendable {
 
     /// Idempotent. Called at process start and again before every background read, so a
     /// path that skipped main (a test host, a future entry point) is still covered.
+    /// Waits for a Re-trust in progress, like every background read.
     @discardableResult
     func closeForProcess() -> OSStatus {
+        window.lock()
+        defer { window.unlock() }
+        return closeLocked()
+    }
+
+    /// Caller holds `window`.
+    @discardableResult
+    private func closeLocked() -> OSStatus {
         lock.withLock {
             let status = set(false)
             if status == errSecSuccess { allowed = false }
             return status
         }
+    }
+
+    /// Runs a background Keychain call with dialogs off. It takes the same window as
+    /// Re-trust, so it waits for an operator read in progress instead of switching dialogs
+    /// off under it, and a Re-trust cannot switch them on while it runs.
+    func withDialogsOff<T>(_ body: () -> T) -> T {
+        window.lock()
+        defer { window.unlock() }
+        closeLocked()
+        return body()
     }
 
     /// The only way to show the dialog: runs `body` with interaction allowed and switches it

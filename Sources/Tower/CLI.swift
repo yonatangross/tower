@@ -2497,6 +2497,87 @@ enum CLI {
             let failingGate = KeychainDialogGate(set: { _ in errSecParam })
             failingGate.closeForProcess()
             check("a failed switch is never reported as dialogs off", failingGate.dialogsAllowed)
+            // b87 should-fix on #24: a background read on another thread during Re-trust must
+            // neither switch dialogs off under the operator's read nor run while they are on.
+            let overlapGate = KeychainDialogGate(set: { _ in errSecSuccess })
+            let retrustStarted = DispatchSemaphore(value: 0)
+            let releaseRetrust = DispatchSemaphore(value: 0)
+            let backgroundDone = DispatchSemaphore(value: 0)
+            let overlapBox = NSLock()
+            var allowedAtRetrustEnd = false
+            var backgroundSawDialogs = true
+            DispatchQueue.global().async {
+                overlapGate.withDialogAllowed {
+                    retrustStarted.signal()
+                    _ = releaseRetrust.wait(timeout: .now() + 2)
+                    overlapBox.withLock { allowedAtRetrustEnd = overlapGate.dialogsAllowed }
+                }
+            }
+            retrustStarted.wait()
+            DispatchQueue.global().async {
+                overlapGate.withDialogsOff {
+                    overlapBox.withLock { backgroundSawDialogs = overlapGate.dialogsAllowed }
+                }
+                backgroundDone.signal()
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+            releaseRetrust.signal()
+            _ = backgroundDone.wait(timeout: .now() + 5)
+            // b88 SEC HOLD on #24, must 1: Re-trust holds the vault flock like every other vault
+            // operation, so a refresh tick in this or another process waits for the dialog.
+            final class FlockProbe: ClaudeSeatKeychain {
+                let gate: KeychainDialogGate
+                let lockPath: String
+                var flockFreeDuringAllowedRead: Bool?
+                var allowedAtBackgroundRead: [Bool] = []
+                init(gate: KeychainDialogGate, lockPath: String) { self.gate = gate; self.lockPath = lockPath }
+                func readSeats(interaction: ClaudeSeatReadInteraction) -> Result<ClaudeSeatKeychainReadout, ClaudeSeatVaultError> {
+                    if interaction == .allowed {
+                        let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
+                        defer { close(fd) }
+                        let got = flock(fd, LOCK_EX | LOCK_NB) == 0
+                        if got { flock(fd, LOCK_UN) }
+                        flockFreeDuringAllowedRead = got
+                    } else {
+                        allowedAtBackgroundRead.append(gate.dialogsAllowed)
+                    }
+                    return .success(ClaudeSeatKeychainReadout())
+                }
+                func writeSeat(service: String, account: String, label: String, data: Data) -> String? { nil }
+                func removeSeat(service: String, account: String, label: String) -> String? { nil }
+                func purgeAll() -> String? { nil }
+            }
+            let flockPath = demoDir.appendingPathComponent("flock-probe.lock")
+            let flockSpy = FlockProbe(gate: KeychainDialogGate(set: { _ in errSecSuccess }), lockPath: flockPath.path)
+            let flockVault = ClaudeSeatVault(keychain: flockSpy, lockURL: flockPath,
+                                             stateURL: demoDir.appendingPathComponent("flock-state.plist"),
+                                             retentionEnabled: { true }, setRetentionEnabled: { _ in },
+                                             log: { _ in }, mayPrompt: { true }, dialogGate: flockSpy.gate)
+            _ = flockVault.retrust()
+            _ = flockVault.credentials(active: nil)
+            check("Re-trust holds the vault lock, so a refresh tick waits and still reads with dialogs off",
+                  flockSpy.flockFreeDuringAllowedRead == false && !flockSpy.allowedAtBackgroundRead.contains(true),
+                  "lock free during Re-trust \(String(describing: flockSpy.flockFreeDuringAllowedRead)), background \(flockSpy.allowedAtBackgroundRead)")
+            // must 2: the Cursor sign-in item's reads, deletes and adds run inside the window too.
+            let cursorGate = KeychainDialogGate(set: { _ in errSecSuccess })
+            var cursorSeen: [String] = []
+            var cursorStore = KeychainCursorTokenStore()
+            cursorStore.gate = cursorGate
+            cursorStore.ops = .init(
+                delete: { _ in cursorSeen.append("delete \(cursorGate.dialogsAllowed)"); return errSecItemNotFound },
+                add: { _ in cursorSeen.append("add \(cursorGate.dialogsAllowed)"); return errSecSuccess },
+                makeAccess: { var a: SecAccess?; _ = SecAccessCreate("tower-selftest" as CFString, nil, &a); return a },
+                read: { _, _ in cursorSeen.append("read \(cursorGate.dialogsAllowed)"); return errSecItemNotFound })
+            _ = cursorStore.load()
+            _ = cursorStore.save(CursorSignIn.Tokens(accessToken: "a", refreshToken: "r"))
+            cursorStore.clear()
+            check("Cursor sign-in Keychain reads and writes run with dialogs off",
+                  cursorSeen == ["read false", "delete false", "add false", "delete false"], "\(cursorSeen)")
+            overlapBox.withLock {
+                check("a background read during Re-trust waits, never switching dialogs off under it",
+                      allowedAtRetrustEnd && !backgroundSawDialogs,
+                      "retrust end allowed \(allowedAtRetrustEnd), background saw \(backgroundSawDialogs)")
+            }
             let retrustSpec = TowerMCPService.tools.first { $0.name == "tower_retrust" }
             check("tower_retrust is listed as a user-interactive write, not idempotent",
                   retrustSpec?.annotations.readOnlyHint == false && retrustSpec?.annotations.idempotentHint == false
