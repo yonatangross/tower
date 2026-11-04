@@ -588,9 +588,10 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.balanceKey))
         XCTAssertNil(fixture.defaults.object(forKey: TypeSafe.balanceAsOfKey))
 
-        // Clef is TypeSafe's second decision model: its own key, its own day, reported
-        // beside Jev under `models` and never written into Jev's keys.
-        let clef = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": 8])
+        // Clef is Cloudflare's decision model (not TypeSafe's): its own key, its own day,
+        // reported beside Jev under `models` with its vendor, never written into Jev's keys.
+        // cloudflare.clef.balanceUSD is the key; typesafe.clef.balanceUSD stays an alias.
+        let clef = try await call("tower_config_set", ["key": "cloudflare.clef.balanceUSD", "value": 8])
         XCTAssertEqual(clef.structuredContent?["value"], 8)
         XCTAssertEqual(clef.structuredContent?["previous"], .null)
         XCTAssertEqual(clef.structuredContent?["asOf"], .string(asOf))
@@ -600,10 +601,12 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(clefConfig["typesafe"]["entered"], false)
         XCTAssertEqual(clefConfig["typesafe"]["models"]["clef"]["balanceUSD"], 8)
         XCTAssertEqual(clefConfig["typesafe"]["models"]["clef"]["level"], "amber")
+        XCTAssertEqual(clefConfig["typesafe"]["models"]["clef"]["vendor"], "Cloudflare")
+        XCTAssertEqual(clefConfig["typesafe"]["models"]["jev"]["vendor"], "TypeSafe")
         let clefStatus = try await call("tower_status").structuredContent!
         XCTAssertEqual(clefStatus["typesafe"]["models"]["clef"]["entered"], true)
         XCTAssertEqual(clefStatus["typesafe"]["models"]["jev"]["entered"], false)
-        let clefNegative = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": -1])
+        let clefNegative = try await call("tower_config_set", ["key": "cloudflare.clef.balanceUSD", "value": -1])
         XCTAssertEqual(clefNegative.structuredContent?["error"]["code"], "BadValue")
         let clefCleared = try await call("tower_config_set", ["key": "typesafe.clef.balanceUSD", "value": .null])
         XCTAssertEqual(clefCleared.structuredContent?["previous"], 8)

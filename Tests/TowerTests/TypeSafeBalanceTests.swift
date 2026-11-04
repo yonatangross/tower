@@ -82,8 +82,8 @@ final class TypeSafeBalanceTests: XCTestCase {
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
         let lines = CLI.typeSafeStatusRowLines(now: Self.day("2026-09-20"), defaults: defaults)
         XCTAssertEqual(lines, [
-            "  typesafe    BALANCE",
-            "      jev   balance $12.00 (entered 09-18 · 2d ago), not live",
+            "  credits     BALANCE",
+            "      jev   TypeSafe   balance $12.00 (entered 09-18 · 2d ago), not live",
         ])
         XCTAssertFalse(lines.joined(separator: "\n").contains("7d"))
     }
@@ -100,8 +100,8 @@ final class TypeSafeBalanceTests: XCTestCase {
         XCTAssertEqual(
             CLI.typeSafeStatusRowLines(now: Self.day("2026-09-27"), defaults: defaults),
             [
-                "  typesafe    BALANCE",
-                "      jev   balance $12.00 (entered 09-18 · 9d ago), stale, not live",
+                "  credits     BALANCE",
+                "      jev   TypeSafe   balance $12.00 (entered 09-18 · 9d ago), stale, not live",
                 "            read TypeSafe console Billing, then tower_config_set typesafe.balanceUSD <usd>",
             ])
         let json = TowerMCPService.typesafeJSON(now: Self.day("2026-09-27"), defaults: defaults)
@@ -173,12 +173,12 @@ final class TypeSafeBalanceTests: XCTestCase {
         XCTAssertNil(TypeSafe.reenterHint(model: .clef, now: Self.day("2026-09-20"), defaults: defaults))
         XCTAssertEqual(
             TypeSafe.reenterHint(model: .clef, now: Self.day("2026-09-27"), defaults: defaults),
-            "read TypeSafe console Billing, then tower_config_set typesafe.clef.balanceUSD <usd>")
+            "read the Cloudflare dashboard (Workers AI), then tower_config_set cloudflare.clef.balanceUSD <usd>")
         XCTAssertEqual(
             CLI.typeSafeStatusRowLines(now: Self.day("2026-09-20"), defaults: defaults),
             [
-                "  typesafe    BALANCE",
-                "      clef  balance $4.20 (entered 09-18 · 2d ago), not live",
+                "  credits     BALANCE",
+                "      clef  Cloudflare balance $4.20 (entered 09-18 · 2d ago), not live",
             ])
         let json = TowerMCPService.typesafeJSON(now: Self.day("2026-09-20"), defaults: defaults)
         XCTAssertEqual(json["entered"], .bool(false), "the top-level figures stay Jev's")
@@ -202,17 +202,17 @@ final class TypeSafeBalanceTests: XCTestCase {
         XCTAssertEqual(
             CLI.typeSafeStatusRowLines(now: Self.day("2026-09-27"), defaults: defaults),
             [
-                "  typesafe    BALANCE",
-                "      jev   balance $18.40 (entered 09-27 · 0d ago), not live",
-                "      clef  balance $7.50 (entered 09-20 · 7d ago), stale, not live",
-                "            read TypeSafe console Billing, then tower_config_set typesafe.clef.balanceUSD <usd>",
+                "  credits     BALANCE",
+                "      jev   TypeSafe   balance $18.40 (entered 09-27 · 0d ago), not live",
+                "      clef  Cloudflare balance $7.50 (entered 09-20 · 7d ago), stale, not live",
+                "            read the Cloudflare dashboard (Workers AI), then tower_config_set cloudflare.clef.balanceUSD <usd>",
             ])
         XCTAssertEqual(
             TypeSafeCreditRow.foldedLine(model: .clef, now: Self.day("2026-09-27"), open: false, defaults: defaults),
-            "+ clef credits $7.50 stale")
+            "+ clef · Cloudflare credits $7.50 stale")
         XCTAssertEqual(
             TypeSafeCreditRow.foldedLine(model: .jev, now: Self.day("2026-09-27"), open: true, defaults: defaults),
-            "- jev credits $18.40 ok")
+            "- jev · TypeSafe credits $18.40 ok")
         XCTAssertEqual(MoneyBoard.disclosureID(.jev), "money.jev", "an open Jev fold survives the upgrade")
         XCTAssertEqual(MoneyBoard.disclosureID(.clef), "money.clef")
     }
