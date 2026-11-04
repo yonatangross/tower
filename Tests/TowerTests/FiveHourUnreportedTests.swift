@@ -45,8 +45,9 @@ final class FiveHourUnreportedTests: XCTestCase {
         XCTAssertEqual(SeatUsagePresentation.restLabel(rest, account: eve, now: now), "5h not reported")
         XCTAssertEqual(RestingDrawer.state(eve, rest, now: now), "5h not reported")
         let old = claude("old", age: 3 * 3_600, fiveHour: 10, weekly: 8)
-        XCTAssertTrue(SeatUsagePresentation.restLabel(.stale(3 * 3_600), account: old, now: now).hasPrefix("stale"),
-                      "a real stale row keeps its words")
+        // A real stale row says how old its reading is, not the bare word "stale".
+        XCTAssertTrue(SeatUsagePresentation.restLabel(.stale(3 * 3_600), account: old, now: now).hasPrefix("read "),
+                      "a real stale row names the age of its reading")
     }
 
     func testTheRowIsShownNotFoldedIntoStale() {

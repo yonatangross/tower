@@ -151,6 +151,8 @@ final class LimitsModel: ObservableObject {
     @Published var lastRefresh: Date?
     @Published var refreshError: String?
     @Published var refreshing = false
+    /// Tower's own Cursor sign-in, while it runs: idle, waiting on the browser, or failed.
+    @Published var cursorConnect: CursorConnectState = .idle
     @Published var launchAtLogin = LaunchAtLogin.isEnabled
     @Published var loginError: String?
     @Published var retainClaudeSeats = ClaudeSeatRetention.isEnabled()
@@ -242,7 +244,7 @@ final class LimitsModel: ObservableObject {
 
     /// Refresh the configured roster every five minutes; login changes also fetch the
     /// affected profile promptly without repeating other providers.
-    private static let pollInterval: TimeInterval = 300
+    static let pollInterval: TimeInterval = 300
     /// `/login` writes profile Keychain items independently of Tower.  A short
     /// local poll makes the just-signed-in seat visible before the next five-minute cadence.
     private static let loginPollInterval: TimeInterval = 5
@@ -507,6 +509,36 @@ final class LimitsModel: ObservableObject {
     }
 
     /// Refreshes usage, sessions, and derived panel state from one coordinated observation.
+    /// Opens Cursor's sign-in page in the browser and polls for the token pair, then
+    /// stores it in Tower's own Keychain item and refreshes. Never touches the Cursor app.
+    func connectCursor() {
+        guard cursorConnect != .waiting else { return }
+        guard let pkce = CursorSignIn.newPKCE() else {
+            cursorConnect = .failed("could not start the Cursor sign-in: the system random source failed")
+            return
+        }
+        let uuid = UUID().uuidString
+        cursorConnect = .waiting
+        NSWorkspace.shared.open(CursorSignIn.authorizeURL(challenge: pkce.challenge, uuid: uuid))
+        Task {
+            let result = await CursorSignIn.poll(uuid: uuid, verifier: pkce.verifier,
+                                                 http: URLSessionCursorHTTP())
+            switch result {
+            case .signedIn(let tokens):
+                if KeychainCursorTokenStore.shared.save(tokens) {
+                    cursorConnect = .idle
+                    await refresh()
+                } else {
+                    cursorConnect = .failed("could not save the Cursor sign-in to the Keychain")
+                }
+            case .failed(let why):
+                cursorConnect = .failed(why)
+            case .timedOut:
+                cursorConnect = .failed("Cursor sign-in timed out after 5 minutes")
+            }
+        }
+    }
+
     func refresh() async {
         guard !refreshing else { return }
         refreshing = true
@@ -1936,6 +1968,21 @@ struct MenuContent: View {
             if let e = model.refreshError {
                 Text("⚠️ refresh failed: \(e)")
                     .font(TowerType.font(.small)).foregroundStyle(.red).lineLimit(2)
+            }
+            // Nothing refreshed for two intervals (the app was stopped, or every refresh
+            // failed): one line says so, with the fix beside it, so the rows' ages read as
+            // a Tower problem rather than eight separate provider problems.
+            if !model.refreshing,
+               let health = RefreshHealth.line(lastRefresh: model.lastRefresh,
+                                               newestReading: RefreshHealth.newestReading(model.accounts),
+                                               now: Date(), interval: LimitsModel.pollInterval) {
+                HStack(spacing: 6) {
+                    Text(health)
+                        .font(TowerType.font(.small)).foregroundStyle(.orange).lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button("Refresh") { Task { await model.refresh() } }
+                        .font(TowerType.font(.small))
+                }
             }
             Divider()
 

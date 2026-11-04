@@ -149,6 +149,20 @@ enum CLI {
     }
 
     /// Prints an advisory manual-login plan without changing the active Claude credential.
+    /// What `tower retrust` prints and its exit code: the counts on success (exit 0), the
+    /// vault's own refusal on failure (exit 1), for example an unsigned build that may
+    /// never show the Keychain dialog. The running app picks the seats up by itself: it
+    /// re-reads an unreadable seat silently every `ClaudeSeatVault.readRetryBackoff`.
+    static func retrustReport(_ result: Result<(readable: Int, unreadable: Int), ClaudeSeatVaultError>)
+        -> (code: Int32, lines: [String]) {
+        switch result {
+        case .success(let counts):
+            return (0, ["Re-trust: \(counts.readable) remembered seats readable, \(counts.unreadable) still unreadable. macOS asks Always Allow once per seat."])
+        case .failure(let error):
+            return (1, ["Re-trust failed: \(error.message)"])
+        }
+    }
+
     static func rotate() -> Int32 {
         let now = Date()
         let report = rotateReport(
@@ -374,6 +388,38 @@ enum CLI {
         check("stale account has no trusted usage", stale.trustedUsedPct(now: now) == nil)
         check("stale account still exposes the raw number", stale.usedPct(now: now) == 40)
         check("stale account worstTrust is stale", stale.worstTrust(now: now) == .stale)
+
+        // A stale reading says how old it is and where it came from, never a bare
+        // "stale": the user needs to know whether to wait, refresh or fix a source.
+        var oldRead = AccountSnapshot(email: "r@r", nickname: "r", plan: "max")
+        oldRead.capturedAt = now.addingTimeInterval(-(2 * 3600 + 2 * 60))
+        oldRead.weeklyPct = 30
+        oldRead.weeklyResetsAt = upcoming
+        check("a stale row says how long ago it was read",
+              SeatUsagePresentation(account: oldRead, now: now).stateText == "read 2h 2m ago",
+              SeatUsagePresentation(account: oldRead, now: now).stateText)
+        check("every quota provider names where its reading comes from",
+              Provider.claude.readingSource == "Claude usage API"
+                  && Provider.codex.readingSource == "Codex CLI"
+                  && Provider.cursor.readingSource == "Cursor usage API"
+                  && Provider.devin.readingSource == "Devin CLI cache"
+                  && Provider.muse.readingSource == "muse usage")
+        // The panel says so when Tower itself stopped refreshing (or only shows readings
+        // saved by an earlier run), instead of leaving every row to read "stale".
+        let lastGood = now.addingTimeInterval(-20 * 60)
+        check("panel says Tower is not refreshing after two missed intervals",
+              RefreshHealth.line(lastRefresh: lastGood, newestReading: lastGood, now: now, interval: 300)
+                  == "Tower is not refreshing: last refresh \(CLI.clock(lastGood)), 20m ago",
+              RefreshHealth.line(lastRefresh: lastGood, newestReading: lastGood, now: now, interval: 300) ?? "nil")
+        let savedOnly = now.addingTimeInterval(-52 * 60)
+        check("panel with no refresh yet says it shows saved readings and how old",
+              RefreshHealth.line(lastRefresh: nil, newestReading: savedOnly, now: now, interval: 300)
+                  == "Saved readings only: newest from \(CLI.clock(savedOnly)), 52m ago",
+              RefreshHealth.line(lastRefresh: nil, newestReading: savedOnly, now: now, interval: 300) ?? "nil")
+        check("panel says nothing while refreshes are on time",
+              RefreshHealth.line(lastRefresh: now.addingTimeInterval(-240), newestReading: now, now: now, interval: 300) == nil
+                  && RefreshHealth.line(lastRefresh: nil, newestReading: now.addingTimeInterval(-120), now: now, interval: 300) == nil
+                  && RefreshHealth.line(lastRefresh: nil, newestReading: nil, now: now, interval: 300) == nil)
 
         var mixed = AccountSnapshot(email: "m@m", nickname: "m", plan: "max")
         mixed.capturedAt = ancient
@@ -1755,17 +1801,6 @@ enum CLI {
         check("cursor store key is namespaced",
               AccountSnapshot.storeKey(email: "a@b", provider: .cursor) == "cursor:a@b")
 
-        // The session cookie is `<url-encoded sub>::<jwt>`. Verified live against
-        // cursor.com 2026-08-18; the "::" separator is percent-encoded, the sub is not
-        // left raw (its "|" would be illegal in a header value).
-        let cursorID = CursorAuth.Identity(
-            email: "a@b", plan: "pro", subscriptionStatus: "active",
-            accessToken: "jwt.body.sig", subject: "google-oauth2|user_01ABC")
-        let cookie = CursorAuth.sessionCookie(cursorID)
-        check("cursor cookie encodes the pipe in the subject",
-              cookie == "WorkosCursorSessionToken=google-oauth2%7Cuser_01ABC%3A%3Ajwt.body.sig",
-              "got \(cookie)")
-
         // Cursor's dashboard owns the two readings and the reset, so neither needs a
         // plan-price denominator inferred by Tower.
         let cursorReading = CursorUsage.Reading(
@@ -1816,11 +1851,199 @@ enum CLI {
               && CursorUsage.Outcome.unavailable != CursorUsage.Outcome.notConfigured)
 
         // No Cursor install must be silence, not a broken row.
-        check("no cursor install yields no identity",
-              CursorAuth.identity(home: URL(fileURLWithPath: "/nonexistent")) == nil)
+        check("no cursor install yields no label",
+              CursorAuth.label(home: URL(fileURLWithPath: "/nonexistent")) == nil)
         check("a missing state db reads as nil, not as an empty string",
               CursorAuth.read("cursorAuth/accessToken",
                               db: URL(fileURLWithPath: "/nonexistent/state.vscdb")) == nil)
+
+        // --- Tower's own Cursor sign-in ---------------------------------------------------
+        // The token item is never written into an existing item (another app could have
+        // created it first with an access list it controls): delete, then add a fresh one
+        // whose access list trusts Tower only; no access list means nothing is written.
+        do {
+            final class KeychainLog: @unchecked Sendable { var calls: [String] = []; var added: [String: Any] = [:] }
+            let log = KeychainLog()
+            var store = KeychainCursorTokenStore()
+            var dummyAccess: SecAccess?
+            _ = SecAccessCreate("tower-selftest" as CFString, nil, &dummyAccess)
+            store.ops = .init(delete: { _ in log.calls.append("delete"); return errSecItemNotFound },
+                              add: { q in log.calls.append("add"); log.added = q; return errSecSuccess },
+                              makeAccess: { dummyAccess })
+            let saved = store.save(CursorSignIn.Tokens(accessToken: "cur_FAKE", refreshToken: "cur_FAKE"))
+            check("cursor token save deletes any existing item, then adds a fresh one",
+                  saved && log.calls == ["delete", "add"], "\(log.calls)")
+            check("cursor token item is added with Tower's own access list",
+                  log.added[kSecAttrAccess as String] != nil)
+            let blocked = KeychainLog()
+            var noAccess = KeychainCursorTokenStore()
+            noAccess.ops = .init(delete: { _ in blocked.calls.append("delete"); return errSecSuccess },
+                                 add: { _ in blocked.calls.append("add"); return errSecSuccess },
+                                 makeAccess: { nil })
+            check("a failed random draw makes no PKCE pair (never a zero-byte verifier)",
+                  CursorSignIn.newPKCE(fill: { _ in errSecAllocate }) == nil
+                      && CursorSignIn.newPKCE(fill: { bytes in
+                          for i in bytes.indices { bytes[i] = UInt8(i) }; return errSecSuccess }) != nil)
+            check("cursor token save writes nothing without a Tower access list (fails closed)",
+                  !noAccess.save(CursorSignIn.Tokens(accessToken: "cur_FAKE", refreshToken: "cur_FAKE"))
+                      && blocked.calls.isEmpty, "\(blocked.calls)")
+        }
+        // Cursor's app now stores an opaque value that the usage route refuses, so Tower keeps
+        // its own sign-in (PKCE browser login, a JWT in a Tower-owned Keychain item) and never
+        // sends anything it reads from the Cursor app. Every reply below is invented.
+        do {
+            // RFC 7636 appendix B vector.
+            check("cursor sign-in PKCE challenge is S256 of the verifier",
+                  CursorSignIn.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+                      == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+            let pair = CursorSignIn.pkce(random: Array(0..<32))
+            check("cursor sign-in PKCE pair is base64url and its challenge matches",
+                  pair.verifier.count == 43 && !pair.verifier.contains("=") && !pair.verifier.contains("+")
+                      && pair.challenge == CursorSignIn.challenge(for: pair.verifier))
+            let authorize = URLComponents(url: CursorSignIn.authorizeURL(challenge: pair.challenge, uuid: "u-1"),
+                                          resolvingAgainstBaseURL: false)
+            let q = Dictionary(uniqueKeysWithValues: (authorize?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            check("cursor sign-in opens loginDeepControl with challenge, uuid, mode and target",
+                  authorize?.host == "cursor.com" && authorize?.path == "/loginDeepControl"
+                      && q == ["challenge": pair.challenge, "uuid": "u-1", "mode": "login", "redirectTarget": "cli"])
+            let pollURL = URLComponents(url: CursorSignIn.pollRequest(uuid: "u-1", verifier: pair.verifier).url!,
+                                        resolvingAgainstBaseURL: false)
+            check("cursor sign-in polls auth/poll with uuid and verifier",
+                  pollURL?.host == "api2.cursor.sh" && pollURL?.path == "/auth/poll"
+                      && Set((pollURL?.queryItems ?? []).map { "\($0.name)=\($0.value ?? "")" })
+                          == ["uuid=u-1", "verifier=\(pair.verifier)"])
+            let pairJSON = #"{"accessToken":"acc-FAKE","refreshToken":"ref-FAKE"}"#
+            check("cursor sign-in poll: 404 and 202 wait, 200 with both tokens completes, others fail",
+                  CursorSignIn.pollStep(status: 404, body: Data()) == .pending
+                      && CursorSignIn.pollStep(status: 202, body: Data()) == .pending
+                      && CursorSignIn.pollStep(status: 200, body: Data(pairJSON.utf8))
+                          == .complete(.init(accessToken: "acc-FAKE", refreshToken: "ref-FAKE"))
+                      && CursorSignIn.pollStep(status: 200, body: Data(#"{"accessToken":"acc-FAKE"}"#.utf8)) != .pending
+                      && CursorSignIn.pollStep(status: 500, body: Data()) != .pending)
+            let pollHTTP = ScriptedCursorHTTP([(404, ""), (202, ""), (200, pairJSON)])
+            let signed = AsyncBlock.run {
+                await CursorSignIn.poll(uuid: "u-1", verifier: pair.verifier, http: pollHTTP, sleep: { _ in })
+            }
+            check("cursor sign-in poll completes after pending answers",
+                  signed == .signedIn(.init(accessToken: "acc-FAKE", refreshToken: "ref-FAKE"))
+                      && pollHTTP.requests.count == 3)
+            final class FakeClock: @unchecked Sendable { var t = Date(timeIntervalSince1970: 1_000_000) }
+            let clock = FakeClock()
+            let foreverPending = ScriptedCursorHTTP(Array(repeating: (404, ""), count: 400))
+            let timedOut = AsyncBlock.run {
+                await CursorSignIn.poll(uuid: "u-1", verifier: pair.verifier, http: foreverPending,
+                                        now: { clock.t }, sleep: { s in clock.t = clock.t.addingTimeInterval(s) })
+            }
+            check("cursor sign-in poll gives up after 300 s", timedOut == .timedOut
+                  && foreverPending.requests.count >= 150 && foreverPending.requests.count <= 151,
+                  "\(timedOut) after \(foreverPending.requests.count) polls")
+
+            // Renewal a week before the 60 day JWT expires; shouldLogout ends the sign-in.
+            let renewNow = Date(timeIntervalSince1970: 2_000_000_000)
+            let soon = FakeJWT.make(["sub": "user_FAKE", "exp": renewNow.timeIntervalSince1970 + 3 * 86_400])
+            let later = FakeJWT.make(["sub": "user_FAKE", "exp": renewNow.timeIntervalSince1970 + 30 * 86_400])
+            check("cursor sign-in renews a JWT that expires within 7 days, not one with 30 left",
+                  CursorSignIn.needsRenewal(.init(accessToken: soon, refreshToken: soon), now: renewNow)
+                      && !CursorSignIn.needsRenewal(.init(accessToken: later, refreshToken: later), now: renewNow)
+                      && !CursorSignIn.needsRenewal(.init(accessToken: "opaque", refreshToken: "opaque"), now: renewNow))
+            let renew = CursorSignIn.renewRequest(refreshToken: "ref-FAKE")
+            let renewBody = (try? JSONSerialization.jsonObject(with: renew.httpBody ?? Data())) as? [String: String]
+            check("cursor sign-in renewal posts the refresh token to oauth/token",
+                  renew.url == CursorSignIn.tokenURL && renew.httpMethod == "POST"
+                      && renewBody?["grant_type"] == "refresh_token" && renewBody?["refresh_token"] == "ref-FAKE"
+                      && renewBody?["client_id"] == CursorSignIn.clientID && !CursorSignIn.clientID.contains("__"))
+            check("cursor sign-in renewal: a new access token also becomes the refresh token; shouldLogout ends it",
+                  CursorSignIn.renewResult(status: 200, body: Data(#"{"access_token":"acc-NEW"}"#.utf8))
+                      == .renewed(.init(accessToken: "acc-NEW", refreshToken: "acc-NEW"))
+                      && CursorSignIn.renewResult(status: 200, body: Data(#"{"shouldLogout":true}"#.utf8)) == .loggedOut
+                      && CursorSignIn.renewResult(status: 500, body: Data()) == .failed)
+
+            // The reader: Tower's own token, never the Cursor app's.
+            let cursorHome = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tower-selftest-cursor-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: cursorHome) }
+            let stateDB = CursorAuth.stateDB(home: cursorHome)
+            try? FileManager.default.createDirectory(at: stateDB.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let seedDB = Process()
+            seedDB.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+            seedDB.arguments = [stateDB.path,
+                "create table ItemTable (key text unique on conflict replace, value blob);"
+                + "insert into ItemTable values ('cursorAuth/accessToken','cur_STATE_ONLY_FAKE');"
+                + "insert into ItemTable values ('cursorAuth/refreshToken','cur_STATE_ONLY_FAKE');"
+                + "insert into ItemTable values ('cursorAuth/cachedEmail','cursor@example.test');"
+                + "insert into ItemTable values ('cursorAuth/stripeMembershipType','ultra');"]
+            try? seedDB.run()
+            seedDB.waitUntilExit()
+            let noOwnHTTP = ScriptedCursorHTTP([(200, "{}")])
+            let noOwn = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: MemoryCursorTokenStore(), http: noOwnHTTP)
+            }
+            check("cursor with no Tower sign-in asks to connect and sends nothing",
+                  noOwn == .connectNeeded(CursorUsage.connectReason) && noOwnHTTP.requests.isEmpty,
+                  "\(noOwn), \(noOwnHTTP.requests.count) requests")
+            check("cursor connect text names Tower, never the Cursor app's sign-in",
+                  CursorUsage.connectReason.contains("Connect Cursor in Tower")
+                      && !CursorUsage.connectReason.lowercased().contains("sign in again in cursor"))
+            let usageJSON = #"{"planUsage":{"autoPercentUsed":12,"apiPercentUsed":100},"billingCycleEnd":"2033-05-25T00:00:00.000Z"}"#
+            let ownStore = MemoryCursorTokenStore(.init(accessToken: later, refreshToken: later))
+            let ownHTTP = ScriptedCursorHTTP([(200, usageJSON)])
+            let own = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: ownStore, http: ownHTTP)
+            }
+            let sent = ownHTTP.requests.map { $0.value(forHTTPHeaderField: "Authorization") ?? "" }
+            if case .ok(let r) = own {
+                check("cursor reads with Tower's own token, never the Cursor app's",
+                      sent == ["Bearer \(later)"] && !sent.joined().contains("cur_STATE_ONLY_FAKE")
+                          && r.validOtherModelsPct == 100 && r.validCursorModelsPct == 12 && r.email == "cursor@example.test",
+                      "\(sent.count) requests")
+            } else {
+                check("cursor reads with Tower's own token, never the Cursor app's", false, "\(own)")
+            }
+            let renewStore = MemoryCursorTokenStore(.init(accessToken: soon, refreshToken: soon))
+            let renewHTTP = ScriptedCursorHTTP([(200, #"{"access_token":"\#(later)"}"#), (200, usageJSON)])
+            let renewed = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: renewStore, http: renewHTTP)
+            }
+            check("cursor renews a near-expiry own token first, saves it, then reads with it",
+                  { if case .ok = renewed { return true }; return false }()
+                      && renewHTTP.requests.first?.url == CursorSignIn.tokenURL
+                      && renewHTTP.requests.last?.value(forHTTPHeaderField: "Authorization") == "Bearer \(later)"
+                      && renewStore.load()?.accessToken == later, "\(renewed)")
+            let logoutStore = MemoryCursorTokenStore(.init(accessToken: soon, refreshToken: soon))
+            let logout = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: logoutStore,
+                                        http: ScriptedCursorHTTP([(200, #"{"shouldLogout":true}"#)]))
+            }
+            check("cursor shouldLogout clears Tower's sign-in and asks to connect again",
+                  logout == .connectNeeded(CursorUsage.signedOutReason) && logoutStore.load() == nil, "\(logout)")
+            let refusedStore = MemoryCursorTokenStore(.init(accessToken: later, refreshToken: later))
+            let refused = AsyncBlock.run {
+                await CursorUsage.fetch(home: cursorHome, now: renewNow, store: refusedStore,
+                                        http: ScriptedCursorHTTP([(401, "")]))
+            }
+            check("cursor 401 with Tower's own token asks to connect again",
+                  refused == .connectNeeded(CursorUsage.refusedOwnReason(code: 401))
+                      && CursorUsage.refusedOwnReason(code: 401).contains("Connect Cursor in Tower"), "\(refused)")
+            check("cursor app label is email and plan only",
+                  CursorAuth.label(home: cursorHome) == CursorAuth.Label(email: "cursor@example.test", plan: "ultra"))
+            check("every read of the Cursor app's database is -readonly",
+                  CursorAuth.sqliteArguments(db: stateDB, key: "cursorAuth/cachedEmail").first == "-readonly")
+            let seedStore = Store(dir: cursorHome.appendingPathComponent("support"), now: { renewNow })
+            _ = seedStore.mutate { accounts in
+                _ = seedStore.seedCursorAccount(into: &accounts, outcome: noOwn, home: cursorHome, now: renewNow)
+            }
+            let cursorRow = seedStore.load()[AccountSnapshot.storeKey(email: "cursor@example.test", provider: .cursor)]
+            check("the Connect Cursor action shows for every reason a sign-in fixes, and only those",
+                  CursorUsage.needsConnect(CursorUsage.connectReason)
+                      && CursorUsage.needsConnect(CursorUsage.signedOutReason)
+                      && CursorUsage.needsConnect(CursorUsage.refusedOwnReason(code: 401))
+                      && !CursorUsage.needsConnect(nil)
+                      && !CursorUsage.needsConnect("could not read Cursor usage (network, or the response did not parse)"))
+            check("cursor row without a Tower sign-in reads Connect Cursor in Tower",
+                  cursorRow?.lastError?.contains("Connect Cursor in Tower") == true
+                      && cursorRow?.lastError?.contains("Sign in again in Cursor") == false,
+                  cursorRow?.lastError ?? "no row")
+        }
 
         // A threshold alert names the window a human will read. "Cursor at 95% of 7d"
         // promises relief in a week for credits that refill on the invoice boundary.
@@ -2221,6 +2444,38 @@ enum CLI {
                       && DemoMode.refusal(args: ["panelshot", "out.png"]) == nil)
             check("demo refuses the app and plain status", DemoMode.refusal(args: []) != nil
                       && DemoMode.refusal(args: ["status"]) != nil)
+            // `tower retrust`: an agent can start Re-trust; the user still approves each
+            // Keychain dialog. A demo has no real Keychain, so it refuses.
+            check("retrust dispatches to its own verb and a demo refuses it",
+                  DemoMode.dispatched(args: ["retrust"]) == .retrust
+                      && DemoMode.refusal(args: ["retrust"]) != nil)
+            let retrustOK = CLI.retrustReport(.success((readable: 6, unreadable: 1)))
+            check("tower retrust reports readable and unreadable seats and exits 0",
+                  retrustOK.code == 0
+                      && retrustOK.lines == ["Re-trust: 6 remembered seats readable, 1 still unreadable. macOS asks Always Allow once per seat."],
+                  "\(retrustOK)")
+            let retrustNo = CLI.retrustReport(.failure(ClaudeSeatVaultError("Re-trust needs the signed Tower app")))
+            check("tower retrust prints the refusal and exits 1",
+                  retrustNo.code == 1 && retrustNo.lines == ["Re-trust failed: Re-trust needs the signed Tower app"],
+                  "\(retrustNo)")
+            let demoRetrust = TowerMCPService(env: .demo(supportDirectory: demoDir)).retrust()
+            check("tower_retrust in a demo is refused, with no Keychain dialog",
+                  demoRetrust.isError && demoRetrust.structuredContent?["error"]["code"] == "RetrustRefused",
+                  "\(demoRetrust.content)")
+            let retrustSpec = TowerMCPService.tools.first { $0.name == "tower_retrust" }
+            check("tower_retrust is listed as a user-interactive write, not idempotent",
+                  retrustSpec?.annotations.readOnlyHint == false && retrustSpec?.annotations.idempotentHint == false
+                      && (retrustSpec?.description.contains("Always Allow") ?? false))
+            // After a CLI retrust grants access, the running app finds the seat by itself:
+            // while any seat is unreadable its silent read is due again after the backoff.
+            let pickup = ClaudeSeatLaunchCache()
+            let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+            pickup.keep(ClaudeSeatKeychainReadout(records: [], unreadable: [ClaudeSeatUnreadableItem(service: "s", account: "a", label: "l", status: -25293)]),
+                        now: t0, interaction: .suppressed)
+            check("the app re-reads an unreadable seat after the backoff, so a CLI retrust is picked up",
+                  !pickup.readDue(now: t0.addingTimeInterval(30), backoff: ClaudeSeatVault.readRetryBackoff)
+                      && pickup.readDue(now: t0.addingTimeInterval(ClaudeSeatVault.readRetryBackoff + 1),
+                                        backoff: ClaudeSeatVault.readRetryBackoff))
             // A demo panel shows the invented Pi lane only when the demo names its directory.
             check("demo shows no agent lanes without TOWER_PI_DIR", DemoMode.lanes(env: demoEnv).isEmpty)
             let demoPi = demoDir.appendingPathComponent("pi")
