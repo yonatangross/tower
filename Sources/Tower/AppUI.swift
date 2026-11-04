@@ -495,7 +495,10 @@ final class LimitsModel: ObservableObject {
     /// stores it in Tower's own Keychain item and refreshes. Never touches the Cursor app.
     func connectCursor() {
         guard cursorConnect != .waiting else { return }
-        let pkce = CursorSignIn.newPKCE()
+        guard let pkce = CursorSignIn.newPKCE() else {
+            cursorConnect = .failed("could not start the Cursor sign-in: the system random source failed")
+            return
+        }
         let uuid = UUID().uuidString
         cursorConnect = .waiting
         NSWorkspace.shared.open(CursorSignIn.authorizeURL(challenge: pkce.challenge, uuid: uuid))

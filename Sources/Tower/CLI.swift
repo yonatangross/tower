@@ -1794,6 +1794,36 @@ enum CLI {
                               db: URL(fileURLWithPath: "/nonexistent/state.vscdb")) == nil)
 
         // --- Tower's own Cursor sign-in ---------------------------------------------------
+        // The token item is never written into an existing item (another app could have
+        // created it first with an access list it controls): delete, then add a fresh one
+        // whose access list trusts Tower only; no access list means nothing is written.
+        do {
+            final class KeychainLog: @unchecked Sendable { var calls: [String] = []; var added: [String: Any] = [:] }
+            let log = KeychainLog()
+            var store = KeychainCursorTokenStore()
+            var dummyAccess: SecAccess?
+            _ = SecAccessCreate("tower-selftest" as CFString, nil, &dummyAccess)
+            store.ops = .init(delete: { _ in log.calls.append("delete"); return errSecItemNotFound },
+                              add: { q in log.calls.append("add"); log.added = q; return errSecSuccess },
+                              makeAccess: { dummyAccess })
+            let saved = store.save(CursorSignIn.Tokens(accessToken: "cur_FAKE", refreshToken: "cur_FAKE"))
+            check("cursor token save deletes any existing item, then adds a fresh one",
+                  saved && log.calls == ["delete", "add"], "\(log.calls)")
+            check("cursor token item is added with Tower's own access list",
+                  log.added[kSecAttrAccess as String] != nil)
+            let blocked = KeychainLog()
+            var noAccess = KeychainCursorTokenStore()
+            noAccess.ops = .init(delete: { _ in blocked.calls.append("delete"); return errSecSuccess },
+                                 add: { _ in blocked.calls.append("add"); return errSecSuccess },
+                                 makeAccess: { nil })
+            check("a failed random draw makes no PKCE pair (never a zero-byte verifier)",
+                  CursorSignIn.newPKCE(fill: { _ in errSecAllocate }) == nil
+                      && CursorSignIn.newPKCE(fill: { bytes in
+                          for i in bytes.indices { bytes[i] = UInt8(i) }; return errSecSuccess }) != nil)
+            check("cursor token save writes nothing without a Tower access list (fails closed)",
+                  !noAccess.save(CursorSignIn.Tokens(accessToken: "cur_FAKE", refreshToken: "cur_FAKE"))
+                      && blocked.calls.isEmpty, "\(blocked.calls)")
+        }
         // Cursor's app now stores an opaque value that the usage route refuses, so Tower keeps
         // its own sign-in (PKCE browser login, a JWT in a Tower-owned Keychain item) and never
         // sends anything it reads from the Cursor app. Every reply below is invented.

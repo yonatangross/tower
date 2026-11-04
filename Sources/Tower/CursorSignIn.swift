@@ -76,9 +76,13 @@ enum CursorSignIn {
         return PKCE(verifier: verifier, challenge: challenge(for: verifier))
     }
 
-    static func newPKCE() -> PKCE {
+    /// A fresh PKCE pair, or nil when the system random source fails: a verifier made of
+    /// zero bytes would be guessable, so a failed draw never becomes a sign-in.
+    static func newPKCE(fill: (inout [UInt8]) -> OSStatus = { bytes in
+        SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+    }) -> PKCE? {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard fill(&bytes) == errSecSuccess else { return nil }
         return pkce(random: bytes)
     }
 
@@ -237,16 +241,41 @@ struct KeychainCursorTokenStore: CursorTokenStore {
         return try? JSONDecoder().decode(CursorSignIn.Tokens.self, from: data)
     }
 
+    /// The Keychain calls `save` makes, injectable so a test can record them. There is no
+    /// update call on purpose: writing into an item that already exists would trust its
+    /// access list, and another app could have created that item first (item squatting)
+    /// to read the token Tower puts in it.
+    struct Ops: @unchecked Sendable {
+        var delete: ([String: Any]) -> OSStatus
+        var add: ([String: Any]) -> OSStatus
+        var makeAccess: () -> SecAccess?
+
+        static let live = Ops(
+            delete: { SecItemDelete($0 as CFDictionary) },
+            add: { SecItemAdd($0 as CFDictionary, nil) },
+            makeAccess: {
+                if case .success(let access) = TowerSeatKeychainAccess.make(descriptor: "Tower Cursor sign-in") {
+                    return access
+                }
+                return nil
+            })
+    }
+
+    var ops: Ops = .live
+
+    /// Delete any item under this name, whoever made it, then add a fresh one whose access
+    /// list trusts Tower only. No Tower access list (a bare development binary) fails
+    /// closed: nothing is written.
     func save(_ tokens: CursorSignIn.Tokens) -> Bool {
-        guard let data = try? JSONEncoder().encode(tokens) else { return false }
-        let update = [kSecValueData as String: data]
-        let status = SecItemUpdate(baseQuery() as CFDictionary, update as CFDictionary)
-        if status == errSecSuccess { return true }
-        guard status == errSecItemNotFound else { return false }
+        guard let data = try? JSONEncoder().encode(tokens),
+              let access = ops.makeAccess() else { return false }
+        let deleted = ops.delete(baseQuery())
+        guard deleted == errSecSuccess || deleted == errSecItemNotFound else { return false }
         var add = baseQuery()
         add[kSecValueData as String] = data
         add[kSecAttrLabel as String] = "Tower Cursor sign-in"
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        add[kSecAttrAccess as String] = access
+        return ops.add(add) == errSecSuccess
     }
 
     func clear() {
