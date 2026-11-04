@@ -1418,7 +1418,7 @@ enum DemoMode {
     /// Raw values are the CLI words, so tests can walk every verb (MCPSurfaceTests checks
     /// each one dispatches to itself and has an MCP tool). `app` is the no-argument mode.
     enum Verb: String, CaseIterable, Equatable {
-        case selftest, mcp, rotate, loginItem = "login-item", status, panelshot, app
+        case selftest, mcp, rotate, loginItem = "login-item", retrust, status, panelshot, app
     }
 
     static func dispatched(args: Set<String>) -> Verb {
@@ -1426,6 +1426,7 @@ enum DemoMode {
         if args.contains("mcp") { return .mcp }
         if args.contains("rotate") { return .rotate }
         if args.contains("login-item") { return .loginItem }
+        if args.contains("retrust") { return .retrust }
         if args.contains("status") { return .status }
         if args.contains("panelshot") { return .panelshot }
         return .app
@@ -1438,7 +1439,7 @@ enum DemoMode {
     static func refusal(args: Set<String>) -> String? {
         switch dispatched(args: args) {
         case .mcp, .panelshot, .selftest: return nil
-        case .rotate, .loginItem, .status, .app:
+        case .rotate, .loginItem, .retrust, .status, .app:
             return "TOWER_DEMO=1 runs only `tower mcp` and `tower panelshot`"
         }
     }
