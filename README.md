@@ -76,8 +76,24 @@ shasum -a 256 -c Tower.app.zip.sha256
 ditto -x -k Tower.app.zip ~/Applications
 ```
 
-Release builds are ad hoc signed, so macOS asks once before the first launch
-([what to do](docs/playbooks/troubleshooting.md#macos-blocks-the-first-launch)).
+### First launch: "Open Anyway"
+
+Tower is not notarized by Apple (release builds are ad hoc signed), so when the
+zip came through a browser, macOS blocks the first launch with "Apple could not
+verify Tower is free of malware". This happens once per install. Check the
+checksum first (the `shasum` line above prints `OK`), then:
+
+1. Open Tower once (double-click `~/Applications/Tower.app`) and press **Done**
+   on the warning.
+2. Open **System Settings**, then **Privacy & Security**.
+3. Scroll down to Security. Next to "Tower was blocked to protect your Mac",
+   press **Open Anyway**.
+4. Press **Open Anyway** again in the dialog and enter your login password if
+   macOS asks.
+
+Tower then starts normally and macOS does not ask again for this copy. The
+Terminal alternative is in
+[troubleshooting](docs/playbooks/troubleshooting.md#macos-blocks-the-first-launch).
 To remove Tower, follow [uninstall](docs/playbooks/uninstall.md).
 
 ### Upgrading from a build before v0.1
