@@ -1735,8 +1735,10 @@ enum AgentLane {
     /// A second usage line for a stale status, so a quota the CLI fetched hours ago is
     /// labelled as such rather than posed as live. Fresh statuses get no extra text.
     static func usageAgeLine(_ r: Reading, now: Date) -> String? {
-        guard case .quota(let q) = r.usage, let fetched = q.fetchedAt,
-              now.timeIntervalSince(fetched) > 3600 else { return nil }
+        guard case .quota(let q) = r.usage, let fetched = q.fetchedAt else { return nil }
+        // A reading the store kept from an earlier run is never posed as live, however recent.
+        if q.source == "saved" { return "saved reading, read \(CLI.age(fetched, now: now)), refreshing" }
+        guard now.timeIntervalSince(fetched) > 3600 else { return nil }
         return "status fetched \(CLI.age(fetched, now: now))"
     }
 
@@ -2533,5 +2535,47 @@ enum AgentLane {
         snap.source = quota.source
         snap.readAt = now
         snap.lastError = nil
+    }
+}
+
+extension AgentLane {
+    /// Muse is read only by a refresh (it spawns `muse usage`); hydration and panelshot
+    /// read it with no runner and get `.notExposed`. Before 2026-11-04 the panel showed
+    /// that as "usage not exposed" or "?", though Muse does expose usage and the store
+    /// already held its last reading. This puts the saved reading in (source "saved",
+    /// aged by its own capture time), or "not read yet, refreshing" when the store has
+    /// none. It spawns nothing.
+    static func withSavedReadings(_ outcomes: [Provider: Outcome],
+                                  accounts: [AccountSnapshot]) -> [Provider: Outcome] {
+        var out = outcomes
+        guard case .ok(let reading)? = outcomes[.muse], reading.usage == .notExposed else { return out }
+        let usage: UsageRead = savedQuota(.muse, accounts: accounts).map { .quota($0) }
+            ?? .notReadable("not read yet, refreshing")
+        out[.muse] = .ok(Reading(provider: reading.provider, configModel: reading.configModel,
+                                 lastDispatch: reading.lastDispatch, lastLimitHit: reading.lastLimitHit,
+                                 usage: usage))
+        return out
+    }
+
+    /// The lane's last published quota, rebuilt from its mirror row (the inverse of
+    /// `apply`), or nil when the store has no observation for it.
+    static func savedQuota(_ lane: Provider, accounts: [AccountSnapshot]) -> Quota? {
+        guard let snap = accounts.first(where: { $0.kind == lane && $0.email == mirrorEmail(lane) }),
+              let observed = snap.capturedAt,
+              snap.fiveHourPct != nil || snap.weeklyPct != nil else { return nil }
+        let short = snap.scoped.first(where: { $0.label != "Weekly" })?.label ?? "Daily"
+        return Quota(plan: snap.plan == "lane" ? nil : snap.plan,
+                     dailyRemainingPct: snap.fiveHourPct.map { max(0, min(100, 100 - $0)) },
+                     weeklyRemainingPct: snap.weeklyPct.map { max(0, min(100, 100 - $0)) },
+                     dailyResetsAt: snap.fiveHourResetsAt, weeklyResetsAt: snap.weeklyResetsAt,
+                     fetchedAt: observed, shortLabel: short, source: "saved")
+    }
+}
+
+extension PanelShotHydration {
+    /// The lanes a hydrated panel shows: what the files say, plus the saved Muse reading.
+    static func lanesFromStore(_ outcomes: [Provider: AgentLane.Outcome],
+                               accounts: [AccountSnapshot]) -> [Provider: AgentLane.Outcome] {
+        AgentLane.withSavedReadings(outcomes, accounts: accounts)
     }
 }
