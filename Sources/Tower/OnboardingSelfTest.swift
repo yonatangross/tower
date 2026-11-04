@@ -116,6 +116,30 @@ enum OnboardingSelfTest {
         check("tower_lanes lists only the lanes that are ON",
               listedProviders == [Provider.devin.rawValue], "\(listedProviders)")
 
+        // b88 should-fix on #26: the MCP read tools returned stored rows of OFF providers.
+        let offDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-off-rows-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: offDir) }
+        var claudeSeat = AccountSnapshot(email: "cc@example.com", nickname: "cc", plan: "max")
+        claudeSeat.weeklyPct = 10
+        var codexSeat = AccountSnapshot(email: "cx@example.com", nickname: "cx", plan: "pro")
+        codexSeat.provider = .codex
+        codexSeat.weeklyPct = 20
+        _ = Store(dir: offDir).save(["cc@example.com": claudeSeat, "codex:cx@example.com": codexSeat])
+        let (offDefaults, offID) = suite("off-rows")
+        defer { UserDefaults.standard.removePersistentDomain(forName: offID) }
+        offDefaults.set(false, forKey: ProviderToggles.setupPendingKey)
+        for p in WatchedProvider.allCases { ProviderToggles.set(p, p != .codex, defaults: offDefaults) }
+        var offEnv = TowerMCPService.Environment.demo(supportDirectory: offDir)
+        offEnv.defaults = offDefaults
+        let offService = TowerMCPService(env: offEnv)
+        let offReads = [offService.status(), offService.accounts(provider: nil),
+                        offService.account("cx"), offService.resets(), offService.freshness()]
+        let offLeaked = offReads.filter { "\($0.content) \(String(describing: $0.structuredContent))".contains("cx@example.com") }
+        let claudeShown = "\(offService.accounts(provider: nil).structuredContent.map { "\($0)" } ?? "")".contains("cc@example.com")
+        check("MCP reads never return the stored rows of a provider that is OFF",
+              offLeaked.isEmpty && claudeShown, "leaked in \(offLeaked.count) of \(offReads.count), claude shown \(claudeShown)")
+
         // 3 and 6. First launch: pending until answered, nothing read before Start watching,
         // and it opens once.
         let (fresh, freshID) = suite("fresh")

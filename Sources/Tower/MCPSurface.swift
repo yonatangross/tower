@@ -770,7 +770,7 @@ struct TowerMCPService: MCPService {
                 mimeType: "text/markdown"),
         ]
         let now = env.now()
-        for a in env.store.load().values.sorted(by: { AccountSnapshot.ranked($0, $1, now: now) }) {
+        for a in visibleAccounts().values.sorted(by: { AccountSnapshot.ranked($0, $1, now: now) }) {
             out.append(MCPResourceSpec(
                 uri: Self.accountURIPrefix + a.id, name: a.id,
                 title: "\(a.nickname) (\(a.kind.label))",
@@ -798,7 +798,7 @@ struct TowerMCPService: MCPService {
         default:
             guard uri.hasPrefix(Self.accountURIPrefix) else { throw MCPError.notFound("unknown resource \(uri)") }
             let id = String(uri.dropFirst(Self.accountURIPrefix.count))
-            let accounts = env.store.load()
+            let accounts = visibleAccounts()
             guard let a = accounts[id] else { throw MCPError.notFound("no account \(id)") }
             let json = Self.accountJSON(a, activeEmail: activeEmail(accounts), now: env.now())
             return [MCPResourceContent(uri: uri, mimeType: "application/json", text: json.prettyText)]
@@ -936,7 +936,7 @@ struct TowerMCPService: MCPService {
         }
         if refType == "ref/prompt", argument == "lane_class" { return filter(Self.laneClasses) }
         if refType == "ref/resource", argument == "id" {
-            return filter(env.store.load().keys.sorted())
+            return filter(visibleAccounts().keys.sorted())
         }
         return []
     }
@@ -1220,9 +1220,15 @@ struct TowerMCPService: MCPService {
 
     // MARK: Read tools
 
+    /// The stored rows an agent may see: only providers the operator turned ON in Settings
+    /// (b88 on #26). Every MCP read goes through this, never through `env.store.load()`.
+    func visibleAccounts() -> [String: AccountSnapshot] {
+        env.store.load().filter { ProviderToggles.isRowVisible($0.value, defaults: env.defaults) }
+    }
+
     func status() -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         let active = activeEmail(map)
         let all = Array(map.values)
         let sorted = all.sorted { AccountSnapshot.ranked($0, $1, now: now) }
@@ -1285,7 +1291,7 @@ struct TowerMCPService: MCPService {
 
     func accounts(provider: String?) -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         let active = activeEmail(map)
         var rows = map.values.sorted { AccountSnapshot.ranked($0, $1, now: now) }
         if let provider {
@@ -1301,7 +1307,7 @@ struct TowerMCPService: MCPService {
 
     func account(_ ref: String) -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         guard let a = Self.resolve(ref, in: map) else {
             return .refused("UnknownAccount", "no account matches \(ref)", extra: ["known": .array(map.keys.sorted().map { .string($0) })])
         }
@@ -1312,7 +1318,7 @@ struct TowerMCPService: MCPService {
 
     func room(provider: String?, minimumRoom: Double?) -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         let active = activeEmail(map)
         var all = Array(map.values)
         if let provider {
@@ -1364,7 +1370,7 @@ struct TowerMCPService: MCPService {
 
     func advice() -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         // Advice is a decision, so it needs the bound identity: a persisted record
         // that no longer matches the live token is a stale rumour, not "known".
         let active = SeatCacheHydration.activeEmail(
@@ -1406,7 +1412,7 @@ struct TowerMCPService: MCPService {
     func rotate() -> MCPToolResult {
         let now = env.now()
         let profiles = env.switchProfiles()
-        let report = CLI.rotateReport(accounts: Array(env.store.load().values), switchProfiles: profiles, now: now)
+        let report = CLI.rotateReport(accounts: Array(visibleAccounts().values), switchProfiles: profiles, now: now)
         let payload: JSON = [
             "generatedAt": .date(now),
             "exitCode": .int(Int(report.code)),
@@ -1421,7 +1427,7 @@ struct TowerMCPService: MCPService {
 
     func resets() -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         let rows = map.values.sorted { AccountSnapshot.ranked($0, $1, now: now) }
         let payload: JSON = [
             "generatedAt": .date(now),
@@ -1448,7 +1454,7 @@ struct TowerMCPService: MCPService {
 
     func alerts() -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         let rows = map.values.sorted { AccountSnapshot.ranked($0, $1, now: now) }
         var pendingTotal = 0
         let accounts: [JSON] = rows.map { a in
@@ -1488,7 +1494,7 @@ struct TowerMCPService: MCPService {
 
     func freshness() -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         let rows = map.values.sorted { AccountSnapshot.ranked($0, $1, now: now) }
         let payload: JSON = [
             "generatedAt": .date(now),
@@ -1570,7 +1576,7 @@ struct TowerMCPService: MCPService {
                 // The Cursor CLI lane spends the Cursor seat, so its header carries that
                 // seat's pools; the other lanes never read a seat.
                 let seat = provider == .cursor
-                    ? env.store.load().values.first { $0.kind == .cursor } : nil
+                    ? visibleAccounts().values.first { $0.kind == .cursor } : nil
                 row["headerDetail"] = .string(AgentLane.headerDetail(r, cursorSeat: seat, now: now))
                 row["modelPin"] = .string(r.modelPin)
                 row["configModel"] = .string(r.configModel)
@@ -1602,7 +1608,7 @@ struct TowerMCPService: MCPService {
                     // The share uses the persisted OpenRouter row, the same one the panel's
                     // MONEY band shows, so this tool never polls OpenRouter itself.
                     let share = PiLane.share(s, openRouter: OpenRouter.persistedOutcome(
-                        from: Array(env.store.load().values), lastSuccessAt: nil))
+                        from: Array(visibleAccounts().values), lastSuccessAt: nil))
                     var usage: [String: JSON] = [
                         "kind": "spend", "provider": .string(s.provider), "model": .string(s.model),
                         "monthUSD": .number(s.monthUSD), "todayUSD": .number(s.todayUSD),
@@ -1637,7 +1643,7 @@ struct TowerMCPService: MCPService {
                 "blastRadius": .null,
             ])
         }
-        let map = env.store.load()
+        let map = visibleAccounts()
         let activeKey = activeEmail(map)
         let blast = BlastRadius.evaluate(
             active: map.values.first { $0.email == activeKey && $0.kind == .claude },
@@ -1822,7 +1828,7 @@ struct TowerMCPService: MCPService {
     // MARK: Write tools
 
     func refresh(account: String?) async -> MCPToolResult {
-        let before = env.store.load()
+        let before = visibleAccounts()
         var wanted: AccountSnapshot?
         if let account {
             guard let a = Self.resolve(account, in: before) else {
@@ -1852,7 +1858,9 @@ struct TowerMCPService: MCPService {
         let calls = KeychainCallCounter.shared.total - start
         let now = env.now()
         let active = result.activeEmail ?? activeEmail(result.accounts)
-        var rows = result.accounts.values.sorted { AccountSnapshot.ranked($0, $1, now: now) }
+        var rows = result.accounts.values
+            .filter { ProviderToggles.isRowVisible($0, defaults: env.defaults) }
+            .sorted { AccountSnapshot.ranked($0, $1, now: now) }
         if let wanted { rows = rows.filter { $0.id == wanted.id } }
         var pending: [JSON] = []
         for a in rows {
@@ -2010,7 +2018,7 @@ struct TowerMCPService: MCPService {
 
     func alertAck(_ ref: String, window: String, level: Double) -> MCPToolResult {
         let now = env.now()
-        let map = env.store.load()
+        let map = visibleAccounts()
         guard let a = Self.resolve(ref, in: map) else { return .refused("UnknownAccount", "no account matches \(ref)") }
         guard Thresholds.levels.contains(level)
                 || AlertSettings.current(defaults: env.defaults).levels(forWindow: window).contains(level) else {
