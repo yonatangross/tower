@@ -732,6 +732,8 @@ struct ClaudeSeatVault {
     private let log: (String) -> Void
     private let now: () -> Date
     private let mayPrompt: () -> Bool
+    /// The process switch the legacy keychain honours (KeychainDialogGate).
+    private let dialogGate: KeychainDialogGate
 
     init(
         keychain: any ClaudeSeatKeychain = BundledClaudeSeatKeychain(),
@@ -741,9 +743,11 @@ struct ClaudeSeatVault {
         setRetentionEnabled: @escaping (Bool) -> Void = { ClaudeSeatRetention.setEnabled($0) },
         log: @escaping (String) -> Void = ClaudeSeatVault.defaultLog,
         now: @escaping () -> Date = { Date() },
-        mayPrompt: @escaping () -> Bool = { TowerSeatKeychainAccess.runningFromSignedBundle() }
+        mayPrompt: @escaping () -> Bool = { TowerSeatKeychainAccess.runningFromSignedBundle() },
+        dialogGate: KeychainDialogGate = .shared
     ) {
         self.mayPrompt = mayPrompt
+        self.dialogGate = dialogGate
         self.keychain = keychain
         let directory = Self.defaultDirectory()
         self.lockURL = lockURL ?? directory.appendingPathComponent(".seat-keychain.lock")
@@ -1060,7 +1064,10 @@ struct ClaudeSeatVault {
                 "Re-trust needs the signed Tower app; a bare build never reads seat items with the Keychain dialog"))
         }
         launch.requestInteractiveRead()
-        switch keychain.readSeats(interaction: launch.interactionForNextAttempt) {
+        let result = dialogGate.withDialogAllowed {
+            keychain.readSeats(interaction: launch.interactionForNextAttempt)
+        }
+        switch result {
         case .failure(let error):
             launch.noteFailure(error, now: now(), interaction: .allowed)
             return .failure(error)
@@ -1076,6 +1083,9 @@ struct ClaudeSeatVault {
             return .failure(launch.failureForLaunch ?? ClaudeSeatVaultError("Keychain read failed"))
         }
         let interaction = fresh ? .suppressed : launch.interactionForNextAttempt
+        // The LAContext the read attaches does not stop a legacy keychain dialog; the
+        // process switch does. Idempotent, so a process that skipped main is covered too.
+        dialogGate.closeForProcess()
         switch keychain.readSeats(interaction: interaction) {
         case .failure(let error):
             launch.noteFailure(error, now: now(), interaction: interaction)

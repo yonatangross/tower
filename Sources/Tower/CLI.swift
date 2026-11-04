@@ -2462,6 +2462,41 @@ enum CLI {
             check("tower_retrust in a demo is refused, with no Keychain dialog",
                   demoRetrust.isError && demoRetrust.structuredContent?["error"]["code"] == "RetrustRefused",
                   "\(demoRetrust.content)")
+            // 2026-11-04: LAContext.interactionNotAllowed did not stop a legacy keychain
+            // dialog (measured); the process switch did. Background reads run with it off,
+            // Re-trust alone turns it on and off again.
+            final class GateSpy: ClaudeSeatKeychain {
+                let gate: KeychainDialogGate
+                var allowedAtRead: [Bool] = []
+                init(gate: KeychainDialogGate) { self.gate = gate }
+                func readSeats(interaction: ClaudeSeatReadInteraction) -> Result<ClaudeSeatKeychainReadout, ClaudeSeatVaultError> {
+                    allowedAtRead.append(gate.dialogsAllowed)
+                    return .success(ClaudeSeatKeychainReadout())
+                }
+                func writeSeat(service: String, account: String, label: String, data: Data) -> String? { nil }
+                func removeSeat(service: String, account: String, label: String) -> String? { nil }
+                func purgeAll() -> String? { nil }
+            }
+            func gateVault(_ spy: GateSpy) -> ClaudeSeatVault {
+                ClaudeSeatVault(keychain: spy,
+                                lockURL: demoDir.appendingPathComponent("gate.lock"),
+                                stateURL: demoDir.appendingPathComponent("gate-state.plist"),
+                                retentionEnabled: { true }, setRetentionEnabled: { _ in },
+                                log: { _ in }, mayPrompt: { true }, dialogGate: spy.gate)
+            }
+            let backgroundSpy = GateSpy(gate: KeychainDialogGate(set: { _ in errSecSuccess }))
+            _ = gateVault(backgroundSpy).credentials(active: nil)
+            check("a background seat read runs with Keychain dialogs switched off",
+                  backgroundSpy.allowedAtRead == [false], "\(backgroundSpy.allowedAtRead)")
+            var switches: [Bool] = []
+            let retrustSpy = GateSpy(gate: KeychainDialogGate(set: { switches.append($0); return errSecSuccess }))
+            _ = gateVault(retrustSpy).retrust()
+            check("Re-trust reads with dialogs on, then switches them off again",
+                  retrustSpy.allowedAtRead == [true] && switches.last == false
+                      && !retrustSpy.gate.dialogsAllowed, "\(retrustSpy.allowedAtRead) \(switches)")
+            let failingGate = KeychainDialogGate(set: { _ in errSecParam })
+            failingGate.closeForProcess()
+            check("a failed switch is never reported as dialogs off", failingGate.dialogsAllowed)
             let retrustSpec = TowerMCPService.tools.first { $0.name == "tower_retrust" }
             check("tower_retrust is listed as a user-interactive write, not idempotent",
                   retrustSpec?.annotations.readOnlyHint == false && retrustSpec?.annotations.idempotentHint == false
