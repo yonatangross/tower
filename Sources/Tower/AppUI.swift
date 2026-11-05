@@ -750,7 +750,7 @@ enum PanelShotHydration {
         switchProfiles: () -> [String: ChromeProfileHint],
         diskIdentityHint: () -> String?,
         openRouterLastSuccess: () -> Date? = { OpenRouter.lastSuccessTime() },
-        lanes: () -> [Provider: AgentLane.Outcome] = { AgentLane.readAll() }
+        lanes: () -> [Provider: AgentLane.Outcome] = { PanelShotHydration.liveLanes() }
     ) -> State {
         let accounts = SeatCacheHydration.rows(from: store)
         return State(
@@ -760,7 +760,7 @@ enum PanelShotHydration {
                 hint: diskIdentityHint(), accounts: accounts),
             openRouter: OpenRouter.persistedOutcome(
                 from: accounts, lastSuccessAt: openRouterLastSuccess()),
-            laneOutcomes: lanes())
+            laneOutcomes: lanesFromStore(lanes(), accounts: accounts))
     }
 }
 

@@ -2367,6 +2367,44 @@ enum CLI {
               PiLane.share(piSpend, openRouter: .notConfigured) == .spendOnly("no OpenRouter key in Tower"))
         let piHome = FileManager.default.temporaryDirectory
             .appendingPathComponent("tower-selftest-pi-\(UUID().uuidString)")
+        // Muse is spawned only on a refresh (its runner); hydration and panelshot read it
+        // with no runner. They show the last reading the store kept, or "not read yet",
+        // never "usage not exposed": Muse does expose usage (seen 2026-11-04, Muse 1.4.14).
+        let museSeen = Date().addingTimeInterval(-40 * 60)
+        let museQuota = AgentLane.Quota(plan: "Muse Pro", dailyRemainingPct: 99, weeklyRemainingPct: 98,
+                                        dailyResetsAt: museSeen.addingTimeInterval(3600),
+                                        weeklyResetsAt: museSeen.addingTimeInterval(5 * 86_400),
+                                        fetchedAt: museSeen, shortLabel: "Window", source: "live")
+        var museMirror = AccountSnapshot(email: AgentLane.mirrorEmail(.muse), nickname: "muse", plan: "lane")
+        museMirror.provider = .muse
+        AgentLane.apply(museQuota, observedAt: museSeen, to: &museMirror, now: museSeen)
+        let noRunner: [Provider: AgentLane.Outcome] = [
+            .muse: .ok(AgentLane.Reading(provider: .muse, configModel: "m", lastDispatch: nil, lastLimitHit: nil)),
+        ]
+        let hydratedMuse = AgentLane.withSavedReadings(noRunner, accounts: [museMirror])
+        if case .ok(let r)? = hydratedMuse[.muse], case .quota(let q) = r.usage {
+            check("hydration shows Muse's saved reading, not 'not exposed'",
+                  q.dailyRemainingPct == 99 && q.weeklyRemainingPct == 98 && q.fetchedAt == museSeen
+                      && q.source == "saved" && q.shortLabel == "Window", "\(q)")
+        } else {
+            check("hydration shows Muse's saved reading, not 'not exposed'", false, "\(String(describing: hydratedMuse[.muse]))")
+        }
+        let hydratedEmpty = AgentLane.withSavedReadings(noRunner, accounts: [])
+        if case .ok(let r)? = hydratedEmpty[.muse] {
+            check("hydration with no saved Muse reading says not read yet",
+                  r.usage == .notReadable("not read yet, refreshing"), "\(r.usage)")
+        } else {
+            check("hydration with no saved Muse reading says not read yet", false)
+        }
+        if case .ok(let r)? = hydratedMuse[.muse] {
+            check("a saved Muse reading always says it is saved, even when recent",
+                  AgentLane.usageAgeLine(r, now: museSeen.addingTimeInterval(60))?.hasPrefix("saved reading, read ") == true,
+                  AgentLane.usageAgeLine(r, now: museSeen.addingTimeInterval(60)) ?? "nil")
+        }
+        check("panelshot hydration fills Muse from the store",
+              PanelShotHydration.lanesFromStore(noRunner, accounts: [museMirror])[.muse]
+                  == hydratedMuse[.muse])
+
         check("pi row is hidden when the Pi directory does not exist",
               PiLane.read(home: piHome, env: [PiLane.rootEnvKey: piHome.appendingPathComponent("absent").path])
                   == .notConfigured)
