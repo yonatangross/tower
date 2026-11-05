@@ -781,17 +781,24 @@ enum CLI {
             (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
         }
         let descriptorsBefore = openDescriptors()
-        let escaped = OpenRouter.runKeyCommand(
-            ["/bin/sh", "-c",
-             "/usr/bin/perl -MPOSIX -e 'if (!fork) { POSIX::setsid(); exec \"sleep\", \"5\" }'; echo key"],
-            timeout: 5)
+        // The child must have left the group BEFORE the command ends, or the final group
+        // kill reaches it first, the pipe closes and the command succeeds. So the child
+        // touches a marker after setsid, and the wrapper waits for it before it prints.
+        // The delay before setsid keeps the proof deterministic: without the wait it fails.
+        let escapedMarker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-escaped-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: escapedMarker) }
+        let escapeScript = "/usr/bin/perl -MPOSIX -e 'if (!fork) { select(undef,undef,undef,0.3); POSIX::setsid(); "
+            + "open(F, \">\", $ARGV[0]); close(F); exec \"sleep\", \"5\" }' '\(escapedMarker)'; "
+            + "for n in $(seq 1 100); do [ -e '\(escapedMarker)' ] && break; sleep 0.05; done; echo key"
+        let escaped = OpenRouter.runKeyCommand(["/bin/sh", "-c", escapeScript], timeout: 5)
         var descriptorsAfter = openDescriptors()
         for _ in 0..<40 where descriptorsAfter > descriptorsBefore {
             usleep(50_000)
             descriptorsAfter = openDescriptors()
         }
         check("a key command whose descendant escaped the group does not leak the pipe",
-              escaped == nil && descriptorsBefore >= 0 && descriptorsAfter <= descriptorsBefore,
+              escaped == nil && FileManager.default.fileExists(atPath: escapedMarker) && descriptorsBefore >= 0 && descriptorsAfter <= descriptorsBefore,
               "result \(String(describing: escaped)), descriptors \(descriptorsBefore) to \(descriptorsAfter)")
         check("a key command that finishes in time still returns its output",
               OpenRouter.runKeyCommand(["/bin/echo", "sk-test"], timeout: 5)?
