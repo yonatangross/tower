@@ -810,9 +810,10 @@ struct TowerMCPService: MCPService {
 
     /// The mirror's bytes when it exists, else the authoritative file's, else an empty
     /// object. Both files carry identical bytes on every save, so either is the cache.
-    /// Rows of providers that are OFF are dropped on the way out (b87 on #31); the file on
-    /// disk stays whole, because the hooks read it. With nothing hidden the bytes go out
-    /// exactly as stored.
+    /// Only rows known to be visible go out (an allowlist, so a row the store does not hold
+    /// is dropped too); the file on disk stays whole, because the hooks read it. When every
+    /// row is visible the bytes go out exactly as stored; a file that is not a JSON object
+    /// answers {}.
     func quotaCacheText() -> String {
         let raw: Data
         if let data = try? Data(contentsOf: env.mirrorPath), !data.isEmpty {
@@ -823,15 +824,15 @@ struct TowerMCPService: MCPService {
         } else {
             return "{}"
         }
-        let hidden = Set(env.store.load().keys).subtracting(visibleAccounts().keys)
-        guard !hidden.isEmpty else { return String(decoding: raw, as: UTF8.self) }
-        guard var object = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else {
-            // Never hand out rows that may be OFF when the file cannot be filtered.
+        // Never hand out rows that may be OFF when the file cannot be filtered.
+        guard let object = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else {
             return "{}"
         }
-        for key in hidden { object.removeValue(forKey: key) }
+        let allowed = Set(visibleAccounts().keys)
+        guard !Set(object.keys).isSubset(of: allowed) else { return String(decoding: raw, as: UTF8.self) }
+        let kept = object.filter { allowed.contains($0.key) }
         guard let filtered = try? JSONSerialization.data(
-            withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else { return "{}" }
+            withJSONObject: kept, options: [.prettyPrinted, .sortedKeys]) else { return "{}" }
         return String(decoding: filtered, as: UTF8.self)
     }
 
@@ -1193,6 +1194,14 @@ struct TowerMCPService: MCPService {
     /// One decision model's entered credit, the shape `typesafeModelProperties` declares.
     static func typesafeModelJSON(_ model: TypeSafe.Model, now: Date = Date(),
                                   defaults: UserDefaults = TowerPreferences.shared) -> JSON {
+        // A model the operator turned OFF in Settings shows no figure to an agent.
+        guard ProviderToggles.isEnabled(model.watched, defaults: defaults) else {
+            return [
+                "entered": false, "balanceUSD": .null, "asOf": .null, "level": .null,
+                "text": .string("\(model.name) is off in Tower Settings"), "live": false, "ageDays": .null,
+                "stale": false, "reenter": .null,
+            ]
+        }
         let text = JSON.string(TypeSafe.statusRowText(model: model, now: now, defaults: defaults))
         guard let entry = TypeSafe.entry(model: model, defaults: defaults) else {
             return [
@@ -1242,6 +1251,10 @@ struct TowerMCPService: MCPService {
     func visibleAccounts() -> [String: AccountSnapshot] {
         env.store.load().filter { ProviderToggles.isRowVisible($0.value, defaults: env.defaults) }
     }
+
+    /// Claude Code seats, remembered seats and Claude sessions reach agents only while the
+    /// operator has Claude Code ON in Settings.
+    var claudeOn: Bool { ProviderToggles.isEnabled(.claude, defaults: env.defaults) }
 
     func status() -> MCPToolResult {
         let now = env.now()
@@ -1540,6 +1553,9 @@ struct TowerMCPService: MCPService {
     }
 
     func seats() -> MCPToolResult {
+        guard claudeOn else {
+            return .refused("ProviderOff", "Claude Code is off in Tower Settings, so no seat is read or shown")
+        }
         let now = env.now()
         let active = env.activeCredential()
         let roster: ClaudeSeatRoster
@@ -1654,6 +1670,13 @@ struct TowerMCPService: MCPService {
 
     func sessions() async -> MCPToolResult {
         let now = env.now()
+        // Claude OFF: the probe (`claude agents --json`) does not run at all.
+        guard claudeOn else {
+            return .ok("Claude Code is off in Tower Settings; sessions are not read", [
+                "generatedAt": .date(now), "available": false, "interactive": [], "groups": [], "backgroundCount": 0,
+                "blastRadius": .null,
+            ])
+        }
         guard let summary = await env.sessions() else {
             return .ok("session probe unavailable", [
                 "generatedAt": .date(now), "available": false, "interactive": [], "groups": [], "backgroundCount": 0,
@@ -1690,6 +1713,9 @@ struct TowerMCPService: MCPService {
 
     func openRouterHistory() -> MCPToolResult {
         let now = env.now()
+        guard ProviderToggles.isEnabled(.openrouter, defaults: env.defaults) else {
+            return .ok("OpenRouter is off in Tower Settings", ["generatedAt": .date(now), "samples": [], "trend": .null])
+        }
         let samples = OpenRouter.History.load(defaults: env.defaults)
         let trend = OpenRouter.History.trend(samples)
         func sample(_ s: OpenRouter.History.Sample) -> JSON {
@@ -1722,8 +1748,9 @@ struct TowerMCPService: MCPService {
                 "retainClaudeSeats": .bool(env.vault.isRetentionEnabled()),
                 "launchAtLogin": .bool(env.launchAtLogin()),
                 "expandedSections": .array((env.defaults.stringArray(forKey: "expandedSections") ?? []).map { .string($0) }),
-                "knownAccounts": .array(knownAccounts().map { .string($0) }),
-                "retiredAccounts": .array(env.store.retiredEmails.sorted().map { .string($0) }),
+                // Claude seat emails; empty while Claude Code is OFF in Settings.
+                "knownAccounts": .array(claudeOn ? knownAccounts().map { .string($0) } : []),
+                "retiredAccounts": .array(claudeOn ? env.store.retiredEmails.sorted().map { .string($0) } : []),
                 "watch": SettingsConfig.json(defaults: env.defaults),
             ],
             "paths": [
@@ -1893,9 +1920,14 @@ struct TowerMCPService: MCPService {
         let result = await env.refresh()
         let calls = KeychainCallCounter.shared.total - start
         let now = env.now()
-        let active = result.activeEmail ?? activeEmail(result.accounts)
-        var rows = result.accounts.values
-            .filter { ProviderToggles.isRowVisible($0, defaults: env.defaults) }
+        let visible = result.accounts.filter { ProviderToggles.isRowVisible($0.value, defaults: env.defaults) }
+        // The refresher's active login counts only when a visible Claude row has it: a
+        // provider that is OFF never shows its identity to an agent.
+        let reported = result.activeEmail.flatMap { email in
+            visible.values.contains { $0.email == email && $0.kind == .claude } ? email : nil
+        }
+        let active = reported ?? activeEmail(visible)
+        var rows = visible.values
             .sorted { AccountSnapshot.ranked($0, $1, now: now) }
         if let wanted { rows = rows.filter { $0.id == wanted.id } }
         var pending: [JSON] = []
