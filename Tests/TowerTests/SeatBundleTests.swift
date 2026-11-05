@@ -70,6 +70,23 @@ final class SeatBundleTests: XCTestCase {
         XCTAssertTrue(fake.setAccesses.isEmpty)
     }
 
+    /// 2026-11-05: the bundle at this build's own name answered -25293 and the whole refresh
+    /// failed with "Keychain read failed (-25293)". A refusal is a login fact: every seat reads
+    /// as unreadable, the readout says the bundle was refused, and nothing is deleted.
+    func testRefusedOwnBundleIsUnreadableNotAFailedRefresh() throws {
+        let fake = FakeSecItemStore()
+        var bundle = try bundleItem(tag: "new", emails: ["a@example.test"])
+        bundle.readStatus = errSecAuthFailed
+        fake.items = [bundle, legacyItem("a@example.test")]
+        let readout = try adapter(fake, tag: "new").readSeats(interaction: .suppressed).get()
+        XCTAssertTrue(readout.bundleRefused)
+        XCTAssertTrue(readout.records.isEmpty)
+        XCTAssertEqual(readout.unreadable.map(\.account), ["a@example.test"])
+        XCTAssertEqual(readout.unreadable.map(\.status), [errSecAuthFailed])
+        XCTAssertEqual(readout.signerRefusals, 1)
+        XCTAssertTrue(fake.deletes.isEmpty, "a refused item is never deleted by a background read")
+    }
+
     func testBackgroundReadNeverTouchesAnotherIdentitysBundle() throws {
         let fake = FakeSecItemStore()
         fake.items = [try bundleItem(tag: "old", emails: ["a@example.test"])]

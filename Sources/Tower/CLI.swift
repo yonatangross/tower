@@ -1596,6 +1596,53 @@ enum CLI {
         check("opening Tower.app while the panel is up keeps it up",
               PanelOpenPolicy.showOnReopen(panelVisible: true))
 
+        // One Tower per login session. A dead pid that Launch Services still lists (a temp
+        // build that exited with children alive) is not an instance to hand off to.
+        check("a second launch finds the live instance",
+              SingleInstance.liveOther(pids: [111, 222], selfPid: 222, alive: { $0 == 111 }) == 111)
+        check("a dead Launch Services record is not an instance",
+              SingleInstance.liveOther(pids: [16867, 222], selfPid: 222, alive: { _ in false }) == nil)
+        check("the only instance is itself",
+              SingleInstance.liveOther(pids: [222], selfPid: 222, alive: { _ in true }) == nil)
+
+        // A Keychain refusal is a login fact with a button, never a bare status in red.
+        check("a refused seat read names the Re-trust button",
+              KeychainRefusal.headerLine(refusedSeats: 3)
+                == "🔑 3 remembered seats are locked to an older Tower build: press Re-trust, then Always Allow")
+        check("no refused seat, no Keychain line", KeychainRefusal.headerLine(refusedSeats: 0) == nil)
+        check("errSecAuthFailed is a signer refusal",
+              ClaudeSeatVaultError("x", status: errSecAuthFailed).isSignerRefusal)
+        check("errSecInvalidOwnerEdit is a signer refusal",
+              ClaudeSeatVaultError("x", status: errSecInvalidOwnerEdit).isSignerRefusal)
+        check("a decode failure is not a signer refusal",
+              !ClaudeSeatVaultError("x", status: errSecDecode).isSignerRefusal
+              && !ClaudeSeatVaultError("x").isSignerRefusal)
+        check("a vault that writes beside legacy items never deletes them",
+              ClaudeSeatVault.recreateSteps(writesBesideLegacyItems: true) == [.write])
+        check("a per-item vault still replaces the refused item",
+              ClaudeSeatVault.recreateSteps(writesBesideLegacyItems: false) == [.delete, .write])
+
+        // The header age never says "never" over rows that carry readings.
+        check("failed first refresh over cached rows reads cached",
+              PanelHeaderAge.text(lastRefresh: nil, probed: true, failed: true, hasRows: true, now: t0) == "cached")
+        check("failed first refresh with no rows reads never",
+              PanelHeaderAge.text(lastRefresh: nil, probed: true, failed: true, hasRows: false, now: t0) == "never")
+
+        // The blast dot follows the meter colours: 73 % is amber on the meter, so not green.
+        check("blast radius at 73 % is amber", CLI.blastIcon(level: .clear, percent: 73) == "🟠")
+        check("blast radius at 30 % is green", CLI.blastIcon(level: .clear, percent: 30) == "🟢")
+        check("blast radius warn keeps its warning", CLI.blastIcon(level: .warn, percent: 88) == "⚠️")
+        check("blast radius with no reading is unknown", CLI.blastIcon(level: .unknown, percent: nil) == "❔")
+
+        // The stale fold is a control with words, not a "- 7" that reads as a stray row.
+        check("folded stale seats read as a control",
+              SeatBoard.staleLine(count: 7, open: false) == "▸ Show 7 stale seats")
+        check("open stale seats read as a control",
+              SeatBoard.staleLine(count: 7, open: true) == "▾ Hide 7 stale seats")
+
+        // One unknown state: every seat Tower cannot judge now says "unknown" and why.
+        check("one unknown wording", SeatUsagePresentation.unknownText("5h not reported") == "unknown · 5h not reported")
+
         let rHealthy = acct("ok", five: 32, week: 91, agoHours: 0)
         let rCapped  = acct("cap", five: 99, week: 40, agoHours: 0)
         let rStale   = acct("old", five: 10, week: 10, agoHours: 120)
@@ -3039,17 +3086,28 @@ enum CLI {
     /// panelshot) nothing was attempted, so "unavailable" and "could not be read" would
     /// report failures that never happened. After a refresh, a nil blast radius is
     /// either a probe that did not answer or no active Claude login to measure.
+    /// The blast radius mark. Below the warn mark it takes the meter's own colour, so a seat
+    /// the meter shows amber at 73 % is not called green beside it (2026-11-05).
+    static func blastIcon(level: BlastRadius.Level, percent: Double?) -> String {
+        switch level {
+        case .warn: return "⚠️"
+        case .stopped: return "⛔"
+        case .unknown: return "❔"
+        case .clear:
+            guard let percent else { return "🟢" }
+            switch BrailleMeterMath.level(usedPercent: percent) {
+            case .high: return "🔴"
+            case .watch: return "🟠"
+            case .ok: return "🟢"
+            }
+        }
+    }
+
     static func fleetLines(blast: BlastRadius?, machine: MachineLoad?,
                            read: FleetRead = .done(sessions: false)) -> [String] {
         var lines: [String] = []
         if let blast {
-            let icon: String
-            switch blast.level {
-            case .clear: icon = "🟢"
-            case .warn: icon = "⚠️"
-            case .stopped: icon = "⛔"
-            case .unknown: icon = "❔"
-            }
+            let icon = blastIcon(level: blast.level, percent: blast.percentUsed)
             lines.append("  \(icon) Blast radius: " + blast.line)
             if blast.level == .warn || blast.level == .stopped,
                let moves = blast.moveFirstLine {

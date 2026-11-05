@@ -42,11 +42,11 @@ final class FiveHourUnreportedTests: XCTestCase {
     func testTheRowSaysFiveHourNotReported() {
         let eve = claude("eve", age: 30, fiveHour: nil, weekly: 8)
         let rest = AccountSnapshot.RestReason.stale(30)
-        XCTAssertEqual(SeatUsagePresentation.restLabel(rest, account: eve, now: now), "5h not reported")
-        XCTAssertEqual(RestingDrawer.state(eve, rest, now: now), "5h not reported")
+        XCTAssertEqual(SeatUsagePresentation.restLabel(rest, account: eve, now: now), "unknown · 5h not reported")
+        XCTAssertEqual(RestingDrawer.state(eve, rest, now: now), "unknown · 5h not reported")
         let old = claude("old", age: 3 * 3_600, fiveHour: 10, weekly: 8)
         // A real stale row says how old its reading is, not the bare word "stale".
-        XCTAssertTrue(SeatUsagePresentation.restLabel(.stale(3 * 3_600), account: old, now: now).hasPrefix("read "),
+        XCTAssertTrue(SeatUsagePresentation.restLabel(.stale(3 * 3_600), account: old, now: now).hasPrefix("unknown · read "),
                       "a real stale row names the age of its reading")
     }
 

@@ -213,7 +213,9 @@ mutate unreadable-needs-login "$core" \
   testUnreadableOwnedItemFallsBackToCLICredentialAndNamesItself 'unreadable seat cannot rank'
 
 mutate unreadable-recreate "$vault" \
-  'if let error = removeSeat(
+  'if Self.recreateSteps(writesBesideLegacyItems: keychain.writesBesideLegacyItems)
+                    .contains(.delete),
+                   let error = removeSeat(
                     service: unreadable.service, account: unreadable.account, label: unreadable.label) {
                     log(unreadable.recreateFailedLogLine(error))
                     return error

@@ -98,13 +98,34 @@ struct ClaudeSeatRoster {
 struct ClaudeSeatKeychainReadout {
     var records: [ClaudeSeatKeychainRecord] = []
     var unreadable: [ClaudeSeatUnreadableItem] = []
+    /// The Keychain refused this build its own seat bundle (another build owns the item).
+    /// Nothing is written to it this launch: a write would delete an item this build cannot
+    /// own (-25244). Re-trust is the way back.
+    var bundleRefused = false
+
+    /// Seats the operator can get back with Re-trust; the refused bundle counts as one.
+    var signerRefusals: Int {
+        max(unreadable.filter(\.isSignerRefusal).count, bundleRefused ? 1 : 0)
+    }
 }
 
 struct ClaudeSeatVaultError: Error, LocalizedError, Equatable {
     let message: String
+    /// The Keychain status behind the message, when one exists.
+    let status: OSStatus?
 
-    init(_ message: String) {
+    init(_ message: String, status: OSStatus? = nil) {
         self.message = message
+        self.status = status
+    }
+
+    /// The Keychain refused this build an item another build owns: errSecAuthFailed or
+    /// errSecInteractionNotAllowed on a read, errSecInvalidOwnerEdit on a delete. A login
+    /// fact the operator settles with Re-trust, never a refresh failure.
+    var isSignerRefusal: Bool {
+        guard let status else { return false }
+        return status == errSecAuthFailed || status == errSecInteractionNotAllowed
+            || status == errSecInvalidOwnerEdit
     }
 
     var errorDescription: String? { message }
@@ -128,11 +149,27 @@ protocol ClaudeSeatKeychain {
     /// Forget and disable: remove every Tower-owned seat store, including ones another
     /// signing identity wrote, so a forgotten seat cannot return at a later Re-trust.
     func purgeAll() -> String?
+    /// True when `writeSeat` stores the seat somewhere other than the per-seat legacy item
+    /// (the bundle vault), so re-creating a refused seat never has to delete that item.
+    var writesBesideLegacyItems: Bool { get }
 }
 
 extension ClaudeSeatKeychain {
     /// One item per seat: the per-seat removals Forget already makes are the whole job.
     func purgeAll() -> String? { nil }
+    var writesBesideLegacyItems: Bool { false }
+}
+
+extension ClaudeSeatVault {
+    enum RecreateStep: Equatable { case delete, write }
+
+    /// How a seat refused to this build is re-created from the verified CLI credential. A
+    /// vault that writes beside the legacy item leaves that item alone: it belongs to the
+    /// build that wrote it, and deleting it is refused (-25244). Forget and Re-trust, both
+    /// operator actions, are the only paths that remove it.
+    static func recreateSteps(writesBesideLegacyItems: Bool) -> [RecreateStep] {
+        writesBesideLegacyItems ? [.write] : [.delete, .write]
+    }
 }
 
 /// Counts the `SecItemCopyMatching` calls the seat adapter makes (#68), so the Keychain cost
@@ -845,6 +882,9 @@ struct ClaudeSeatVault {
             case .success(let value): readout = value
             case .failure(let error): return error.message
             }
+            // A bundle another build owns is not written: the write deletes it first, which the
+            // Keychain refuses (-25244). The seat waits for Re-trust; the panel says so.
+            guard !readout.bundleRefused else { return nil }
             let previous = readout.records.first { record in
                 record.service == service && record.account == email
                     && record.label == Self.ownershipMarker
@@ -878,7 +918,9 @@ struct ClaudeSeatVault {
             }) {
                 guard unreadable.isSignerRefusal else { return nil }
                 launch.claimRecreate(service: service, tokenDigest: digest)
-                if let error = removeSeat(
+                if Self.recreateSteps(writesBesideLegacyItems: keychain.writesBesideLegacyItems)
+                    .contains(.delete),
+                   let error = removeSeat(
                     service: unreadable.service, account: unreadable.account, label: unreadable.label) {
                     log(unreadable.recreateFailedLogLine(error))
                     return error
@@ -1085,6 +1127,10 @@ struct ClaudeSeatVault {
             return .success((readout.records.count, readout.unreadable.count))
         }
     }
+
+    /// Remembered seats the Keychain refused this build at the last read, for the panel's
+    /// Re-trust line. Reads this launch's copy only; never touches the Keychain.
+    var signerRefusals: Int { launch.readoutForLaunch?.signerRefusals ?? 0 }
 
     private func launchReadout(fresh: Bool = false) -> Result<ClaudeSeatKeychainReadout, ClaudeSeatVaultError> {
         if !fresh && !launch.readDue(now: now(), backoff: Self.readRetryBackoff) {
