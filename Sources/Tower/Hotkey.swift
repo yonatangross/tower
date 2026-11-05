@@ -21,11 +21,31 @@ enum PanelHotkey {
     /// Hotkey id inside the shared handler: 1 = panel toggle.
     private static let panelHotkeyID: UInt32 = 1
 
+    // Carbon status values (CarbonEventsCore.h); Swift does not import these constants.
+    private static let hotKeyExists: OSStatus = -9878
+    private static let hotKeyInvalid: OSStatus = -9879
+    private static let handlerAlreadyInstalled: OSStatus = -9866
+
+    static func isRegistered(status: OSStatus) -> Bool { status == noErr }
+
+    /// A registration result in words. Carbon returns only a number, and the call's result
+    /// used to be discarded, so a key another app already held (hotKeyExistsErr) failed
+    /// with no trace anywhere.
+    static func describe(status: OSStatus) -> String {
+        switch status {
+        case noErr: return "registered"
+        case hotKeyExists: return "not registered: another app already holds this hotkey (\(status))"
+        case hotKeyInvalid: return "not registered: the system refused this key combination (\(status))"
+        case handlerAlreadyInstalled: return "handler already installed (\(status))"
+        default: return "not registered: Carbon status \(status)"
+        }
+    }
+
     static func register() {
         os_log("PanelHotkey.register reached", log: hotkeyLog, type: .default)
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+        let installStatus = InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
             var id = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject),
                               EventParamType(typeEventHotKeyID), nil,
@@ -37,9 +57,13 @@ enum PanelHotkey {
         }, 1, &eventType, nil, nil)
 
         let sig = OSType(0x484C_4D54) // "HLMT"
-        RegisterEventHotKey(keyCode, modifiers,
-                            EventHotKeyID(signature: sig, id: panelHotkeyID),
-                            GetApplicationEventTarget(), 0, &hotKeyRef)
+        os_log("PanelHotkey event handler: %{public}@", log: hotkeyLog, type: .default,
+               installStatus == noErr ? "installed" : "failed, status \(installStatus)")
+        let status = RegisterEventHotKey(keyCode, modifiers,
+                                         EventHotKeyID(signature: sig, id: panelHotkeyID),
+                                         GetApplicationEventTarget(), 0, &hotKeyRef)
+        os_log("PanelHotkey cmd+period: %{public}@", log: hotkeyLog,
+               type: isRegistered(status: status) ? .default : .error, describe(status: status))
         // Esc closes an open panel. Local monitor: only fires while THIS app
         // has key focus, so it cannot eat Esc anywhere else.
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
