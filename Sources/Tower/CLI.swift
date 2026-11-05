@@ -798,7 +798,7 @@ enum CLI {
             descriptorsAfter = openDescriptors()
         }
         check("a key command whose descendant escaped the group does not leak the pipe",
-              escaped == nil && descriptorsBefore >= 0 && descriptorsAfter <= descriptorsBefore,
+              escaped == nil && FileManager.default.fileExists(atPath: escapedMarker) && descriptorsBefore >= 0 && descriptorsAfter <= descriptorsBefore,
               "result \(String(describing: escaped)), descriptors \(descriptorsBefore) to \(descriptorsAfter)")
         check("a key command that finishes in time still returns its output",
               OpenRouter.runKeyCommand(["/bin/echo", "sk-test"], timeout: 5)?
