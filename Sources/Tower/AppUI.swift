@@ -330,6 +330,8 @@ final class LimitsModel: ObservableObject {
     /// what is on.
     func applyProviderToggles() {
         accounts = ProviderToggles.visible(SeatCacheHydration.rows(from: Store.shared))
+        // The money band and Pi's share of it leave at once too, not at the next refresh.
+        (orOutcome, orHistory) = ProviderToggles.money(orOutcome: orOutcome, orHistory: orHistory)
     }
 
     private func pollForLoginChange() {
@@ -750,16 +752,21 @@ enum PanelShotHydration {
         switchProfiles: () -> [String: ChromeProfileHint],
         diskIdentityHint: () -> String?,
         openRouterLastSuccess: () -> Date? = { OpenRouter.lastSuccessTime() },
-        lanes: () -> [Provider: AgentLane.Outcome] = { PanelShotHydration.liveLanes() }
+        lanes: () -> [Provider: AgentLane.Outcome] = { PanelShotHydration.liveLanes() },
+        defaults: UserDefaults = TowerPreferences.shared
     ) -> State {
-        let accounts = SeatCacheHydration.rows(from: store)
+        // Only rows of providers the operator turned ON, and OpenRouter money only while
+        // OpenRouter is ON (b90 on #41): the shot draws what the live panel draws.
+        let accounts = ProviderToggles.visible(SeatCacheHydration.rows(from: store), defaults: defaults)
+        let money = ProviderToggles.isEnabled(.openrouter, defaults: defaults)
+            ? OpenRouter.persistedOutcome(from: accounts, lastSuccessAt: openRouterLastSuccess())
+            : .notConfigured
         return State(
             accounts: accounts,
             switchProfiles: switchProfiles(),
             activeEmail: SeatCacheHydration.activeEmail(
                 hint: diskIdentityHint(), accounts: accounts),
-            openRouter: OpenRouter.persistedOutcome(
-                from: accounts, lastSuccessAt: openRouterLastSuccess()),
+            openRouter: money,
             laneOutcomes: lanesFromStore(lanes(), accounts: accounts))
     }
 }
