@@ -1,14 +1,15 @@
 import Foundation
 import AppKit
 
-// Single-instance guard: if another Tower is running, activate it and exit.
+// The one single-instance gate, before NSApplication exists. A LIVE other Tower (by pid, so a
+// dead Launch Services record such as the 2026-11-05 temp build 16867 never counts) is asked
+// to show its panel and brought forward; this launch then exits without a menu bar item.
 func enforceSingleInstance() {
-    let bundleID = ProductIdentity.bundleIdentifier
-    let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-    guard let first = others.first else { return }
+    guard let other = MainActor.assumeIsolated({ SingleInstance.otherLiveInstance() }) else { return }
+    DistributedNotificationCenter.default().postNotificationName(
+        SingleInstance.showPanelNotification, object: nil, userInfo: nil, deliverImmediately: true)
     // activate() without options is the macOS 14+ replacement for activateIgnoringOtherApps
-    first.activate()
+    NSRunningApplication(processIdentifier: other)?.activate()
     exit(0)
 }
 

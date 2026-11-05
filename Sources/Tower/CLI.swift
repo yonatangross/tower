@@ -1621,6 +1621,16 @@ enum CLI {
               ClaudeSeatVault.recreateSteps(writesBesideLegacyItems: true) == [.write])
         check("a per-item vault still replaces the refused item",
               ClaudeSeatVault.recreateSteps(writesBesideLegacyItems: false) == [.delete, .write])
+        // Codex review of 1216598: a refused bundle with no legacy items left an empty
+        // unreadable list, so the launch cache never asked again.
+        var refusedOnly = ClaudeSeatKeychainReadout()
+        refusedOnly.bundleRefused = true
+        check("a refused bundle stays unanswered, so the launch cache retries it",
+              refusedOnly.isUnanswered)
+        check("a clean readout is answered", !ClaudeSeatKeychainReadout().isUnanswered)
+        check("a Re-trust that is refused again names the dialog answer",
+              ClaudeSeatVault.retrustRefusalMessage
+                == "The Keychain still refuses this Tower build: press Re-trust and choose Always Allow")
 
         // The header age never says "never" over rows that carry readings.
         check("failed first refresh over cached rows reads cached",

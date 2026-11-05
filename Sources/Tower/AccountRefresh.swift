@@ -103,6 +103,10 @@ struct ClaudeSeatKeychainReadout {
     /// own (-25244). Re-trust is the way back.
     var bundleRefused = false
 
+    /// Something in this readout still waits on the Keychain: an unreadable item, or the own
+    /// bundle refused. The launch cache retries an unanswered readout after its backoff.
+    var isUnanswered: Bool { !unreadable.isEmpty || bundleRefused }
+
     /// Seats the operator can get back with Re-trust; the refused bundle counts as one.
     var signerRefusals: Int {
         max(unreadable.filter(\.isSignerRefusal).count, bundleRefused ? 1 : 0)
@@ -170,6 +174,11 @@ extension ClaudeSeatVault {
     static func recreateSteps(writesBesideLegacyItems: Bool) -> [RecreateStep] {
         writesBesideLegacyItems ? [.write] : [.delete, .write]
     }
+
+    /// What the panel says when Re-trust ran and the Keychain still refused (Deny, or the
+    /// dialog dismissed): the one answer that recovers the seats.
+    static let retrustRefusalMessage =
+        "The Keychain still refuses this Tower build: press Re-trust and choose Always Allow"
 }
 
 /// Counts the `SecItemCopyMatching` calls the seat adapter makes (#68), so the Keychain cost
@@ -681,7 +690,7 @@ final class ClaudeSeatLaunchCache {
     /// unreadable item, or a failed read that left nothing cached at all.
     func readDue(now: Date, backoff: TimeInterval) -> Bool {
         lock.withLock {
-            let unanswered = readout == nil || !(readout?.unreadable.isEmpty ?? true)
+            let unanswered = readout?.isUnanswered ?? true
             guard unanswered else { return false }
             guard let lastAttemptAt else { return true }
             return now.timeIntervalSince(lastAttemptAt) >= backoff

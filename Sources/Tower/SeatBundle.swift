@@ -153,7 +153,18 @@ struct BundledClaudeSeatKeychain: ClaudeSeatKeychain {
             }))
         }
         var entries: [Entry]
-        switch readBundle(account: tag, suppressed: true) {
+        var own = readBundle(account: tag, suppressed: true)
+        // Re-trust only, and only after a refusal: one more read of this build's own bundle
+        // with the dialog allowed (the process gate is open then), so the operator can answer
+        // Always Allow. Background reads never get here (Codex review of 1216598).
+        if interaction == .allowed, case .failure(let error) = own, error.isSignerRefusal {
+            own = readBundle(account: tag, suppressed: false)
+        }
+        switch own {
+        case .failure(let error) where error.isSignerRefusal && interaction == .allowed:
+            // Refused even with the dialog: Re-trust did not recover anything. A failure, so
+            // Re-trust never reports success while the bundle stays locked (Codex, 1216598).
+            return .failure(error)
         case .failure(let error) where error.isSignerRefusal:
             // The bundle at this build's own name answers to another build. A login fact, not
             // a failed refresh: every seat reads as unreadable, the roster falls back to the

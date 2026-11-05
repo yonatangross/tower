@@ -87,6 +87,21 @@ final class SeatBundleTests: XCTestCase {
         XCTAssertTrue(fake.deletes.isEmpty, "a refused item is never deleted by a background read")
     }
 
+    /// Codex review of 1216598: Re-trust must read the own bundle with the dialog allowed,
+    /// and a refusal that survives it is a failure, never a successful recovery.
+    func testRetrustReadsTheRefusedBundleWithTheDialogAndFailsIfStillRefused() throws {
+        let fake = FakeSecItemStore()
+        var bundle = try bundleItem(tag: "new", emails: ["a@example.test"])
+        bundle.readStatus = errSecAuthFailed
+        fake.items = [bundle]
+        let result = adapter(fake, tag: "new").readSeats(interaction: .allowed)
+        XCTAssertEqual(fake.itemReads.filter { $0.account == "new" }.map(\.suppressed), [true, false],
+                       "suppressed first, then one read that may show the dialog")
+        guard case .failure(let error) = result else { return XCTFail("a refusal after Re-trust is not success") }
+        XCTAssertTrue(error.isSignerRefusal)
+        XCTAssertTrue(fake.deletes.isEmpty)
+    }
+
     func testBackgroundReadNeverTouchesAnotherIdentitysBundle() throws {
         let fake = FakeSecItemStore()
         fake.items = [try bundleItem(tag: "old", emails: ["a@example.test"])]
