@@ -821,16 +821,19 @@ enum OpenRouter {
         var attributes: posix_spawnattr_t? = nil
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        // CLOEXEC_DEFAULT: the command is the user's own program, so it gets the three
+        // streams set up below and none of Tower's other descriptors.
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT))
         posix_spawnattr_setpgroup(&attributes, 0)
 
         var actions: posix_spawn_file_actions_t? = nil
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
+        // stdin is /dev/null: a command that asks a question must fail, not wait on a
+        // terminal for the whole timeout.
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_adddup2(&actions, writeFD, STDOUT_FILENO)
         posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
-        posix_spawn_file_actions_addclose(&actions, readFD)
-        posix_spawn_file_actions_addclose(&actions, writeFD)
 
         let arguments = [path] + argv.dropFirst()
         let cArguments: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
