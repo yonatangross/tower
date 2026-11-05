@@ -30,15 +30,22 @@ enum PanelHotkey {
     /// A registration result in words. Carbon returns only a number, and the call's result
     /// used to be discarded, so a failed registration left no trace anywhere.
     ///
-    /// What this log can and cannot show. Per CarbonEventsCore.h, -9878 (eventHotKeyExistsErr)
-    /// means the hotkey is already registered in THIS process, and registering the same key
-    /// in several processes is not an error. Tower registers with options 0, so another app
-    /// holding cmd+period does not make this call fail: it reports "registered" even then.
-    /// Catching that conflict would need kEventHotKeyExclusive, a behaviour change.
+    /// What this log can and cannot show. Tower registers with kEventHotKeyExclusive, so
+    /// -9878 (eventHotKeyExistsErr) now has two causes: the key is already registered in
+    /// THIS process, or another process holds it. The status does not say which one, and
+    /// nothing in it identifies the other process.
+    ///
+    /// The SDK headers disagree on how far the second cause reaches. CarbonEventsCore.h and
+    /// RegisterEventHotKey's result note require the holder to be exclusive too; the
+    /// kEventHotKeyExclusive note says any existing registration for the key is enough. The
+    /// wording here holds under both, so "registered" does not prove nobody else had the key:
+    /// under the first reading a non-exclusive registrant elsewhere goes undetected.
+    /// A non-exclusive app that registers after Tower is never reported on either reading;
+    /// its registration succeeds and it receives no events while Tower holds the key.
     static func describe(status: OSStatus) -> String {
         switch status {
         case noErr: return "registered"
-        case hotKeyExists: return "not registered: this process already registered this hotkey (\(status))"
+        case hotKeyExists: return "not registered: already registered in this process, or another process holds it (\(status))"
         case handlerAlreadyInstalled: return "handler already installed (\(status))"
         default: return "not registered: Carbon status \(status)"
         }
@@ -62,9 +69,12 @@ enum PanelHotkey {
         let sig = OSType(0x484C_4D54) // "HLMT"
         os_log("PanelHotkey event handler: %{public}@", log: hotkeyLog, type: .default,
                installStatus == noErr ? "installed" : "failed, status \(installStatus)")
+        // Exclusive because with options 0 another process holding the key is not an error,
+        // so a conflict would be logged as "registered" and stay invisible.
         let status = RegisterEventHotKey(keyCode, modifiers,
                                          EventHotKeyID(signature: sig, id: panelHotkeyID),
-                                         GetApplicationEventTarget(), 0, &hotKeyRef)
+                                         GetApplicationEventTarget(), OptionBits(kEventHotKeyExclusive),
+                                         &hotKeyRef)
         os_log("PanelHotkey cmd+period: %{public}@", log: hotkeyLog,
                type: isRegistered(status: status) ? .default : .error, describe(status: status))
         // Esc closes an open panel. Local monitor: only fires while THIS app
