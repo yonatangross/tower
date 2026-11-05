@@ -800,6 +800,16 @@ enum CLI {
         check("a key command whose descendant escaped the group does not leak the pipe",
               escaped == nil && FileManager.default.fileExists(atPath: escapedMarker) && descriptorsBefore >= 0 && descriptorsAfter <= descriptorsBefore,
               "result \(String(describing: escaped)), descriptors \(descriptorsBefore) to \(descriptorsAfter)")
+        // The key command is a user's own program: it inherits nothing of Tower's but the
+        // three standard streams. A descriptor opened without close-on-exec proves it.
+        let inheritable = open("/dev/null", O_RDONLY)
+        let countAboveStderr = OpenRouter.runKeyCommand(
+            ["/usr/bin/perl", "-MPOSIX", "-e",
+             "print scalar(grep { my @s = POSIX::fstat($_); @s } 3..255)"], timeout: 5)
+        if inheritable >= 0 { close(inheritable) }
+        check("a key command inherits no descriptor beyond stdin, stdout and stderr",
+              inheritable >= 0 && countAboveStderr == "0",
+              "descriptor \(inheritable), the command saw \(String(describing: countAboveStderr)) above stderr")
         check("a key command that finishes in time still returns its output",
               OpenRouter.runKeyCommand(["/bin/echo", "sk-test"], timeout: 5)?
                   .trimmingCharacters(in: .whitespacesAndNewlines) == "sk-test")
