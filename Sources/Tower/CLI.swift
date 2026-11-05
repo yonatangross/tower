@@ -763,6 +763,57 @@ enum CLI {
               openRouterAccounts[openRouterKey]?.balanceUSD == 53.82
               && openRouterAccounts[openRouterKey]?.availablePct == orBudget.availablePct
               && openRouterAccounts[openRouterKey]?.capturedAt == openRouterCapturedAt)
+        // the key command runs on every refresh; one that never finishes (a
+        // dialog, a fingerprint wait) must not hold the refresh.
+        let keyStart = Date()
+        let slowKey = OpenRouter.runKeyCommand(["/bin/sleep", "5"], timeout: 0.5)
+        let keyElapsed = Date().timeIntervalSince(keyStart)
+        check("an OpenRouter key command that does not finish is stopped at its timeout",
+              slowKey == nil && keyElapsed < 2, "result \(String(describing: slowKey)), \(keyElapsed) s")
+        // the timeout stops the whole process tree, not only the direct child.
+        let grandchildPidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-grandchild-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: grandchildPidFile) }
+        let wrapperResult = OpenRouter.runKeyCommand(
+            ["/bin/sh", "-c", "sleep 60 & echo $! > '\(grandchildPidFile)'; wait"], timeout: 0.7)
+        let grandchildPid = (try? String(contentsOfFile: grandchildPidFile, encoding: .utf8))
+            .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        var grandchildGone = false
+        if let grandchildPid {
+            for _ in 0..<60 where kill(grandchildPid, 0) == 0 { usleep(50_000) }
+            grandchildGone = kill(grandchildPid, 0) != 0
+        }
+        check("a key command's grandchild is killed with its group on timeout",
+              wrapperResult == nil && grandchildPid != nil && grandchildGone,
+              "result \(String(describing: wrapperResult)), grandchild \(String(describing: grandchildPid)), gone \(grandchildGone)")
+        // A descendant in a NEW session escapes the group kill and keeps stdout open. The
+        // drain then times out, and the read end of the pipe must still be closed.
+        func openDescriptors() -> Int {
+            (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
+        }
+        let descriptorsBefore = openDescriptors()
+        // The child must have left the group BEFORE the command ends, or the final group
+        // kill reaches it first, the pipe closes and the command succeeds. So the child
+        // touches a marker after setsid, and the wrapper waits for it before it prints.
+        // The delay before setsid keeps the proof deterministic: without the wait it fails.
+        let escapedMarker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-escaped-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: escapedMarker) }
+        let escapeScript = "/usr/bin/perl -MPOSIX -e 'if (!fork) { select(undef,undef,undef,0.3); POSIX::setsid(); "
+            + "open(F, \">\", $ARGV[0]); close(F); exec \"sleep\", \"5\" }' '\(escapedMarker)'; "
+            + "for n in $(seq 1 100); do [ -e '\(escapedMarker)' ] && break; sleep 0.05; done; echo key"
+        let escaped = OpenRouter.runKeyCommand(["/bin/sh", "-c", escapeScript], timeout: 5)
+        var descriptorsAfter = openDescriptors()
+        for _ in 0..<40 where descriptorsAfter > descriptorsBefore {
+            usleep(50_000)
+            descriptorsAfter = openDescriptors()
+        }
+        check("a key command whose descendant escaped the group does not leak the pipe",
+              escaped == nil && FileManager.default.fileExists(atPath: escapedMarker) && descriptorsBefore >= 0 && descriptorsAfter <= descriptorsBefore,
+              "result \(String(describing: escaped)), descriptors \(descriptorsBefore) to \(descriptorsAfter)")
+        check("a key command that finishes in time still returns its output",
+              OpenRouter.runKeyCommand(["/bin/echo", "sk-test"], timeout: 5)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines) == "sk-test")
         openRouterStore.seedOpenRouterAccount(
             into: &openRouterAccounts, outcome: .rejected(401, keyFingerprint: "9f3c", lastSuccessAt: nil),
             now: openRouterCapturedAt.addingTimeInterval(600))
