@@ -89,6 +89,24 @@ enum ProviderToggles {
     static func visible(_ accounts: [AccountSnapshot], defaults: UserDefaults = TowerPreferences.shared) -> [AccountSnapshot] {
         accounts.filter { isRowVisible($0, defaults: defaults) }
     }
+
+    /// The OpenRouter money the panel may draw: nothing while OpenRouter is OFF, so a
+    /// balance already on screen leaves when the toggle goes off (b90 on #41).
+    static func money(orOutcome: OpenRouter.Outcome, orHistory: [OpenRouter.History.Sample],
+                      defaults: UserDefaults = TowerPreferences.shared)
+        -> (OpenRouter.Outcome, [OpenRouter.History.Sample]) {
+        isEnabled(.openrouter, defaults: defaults) ? (orOutcome, orHistory) : (.notConfigured, [])
+    }
+}
+
+extension TypeSafe.Model {
+    /// The Settings toggle that governs this decision model's credit row.
+    var watched: WatchedProvider {
+        switch self {
+        case .jev: return .jev
+        case .clef: return .clef
+        }
+    }
 }
 
 /// The toggles frozen for one refresh, so a reader is either called or not, never half.

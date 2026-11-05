@@ -1090,8 +1090,11 @@ enum TypeSafe {
 
     /// The models with an entered figure, in panel order. Empty means the whole TypeSafe
     /// group is hidden, exactly as the single Jev row was before.
+    /// The models the credits group draws: entered, and ON in Settings (b90 on #41).
     static func enteredModels(defaults: UserDefaults = TowerPreferences.shared) -> [Model] {
-        Model.allCases.filter { isEntered(model: $0, defaults: defaults) }
+        Model.allCases.filter {
+            isEntered(model: $0, defaults: defaults) && ProviderToggles.isEnabled($0.watched, defaults: defaults)
+        }
     }
 
     /// Records a figure read off the console now, dated today in local time.
