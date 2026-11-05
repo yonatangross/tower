@@ -399,7 +399,8 @@ struct SeatBoard: View {
     }
 
     nonisolated static func staleLine(count: Int, open: Bool) -> String {
-        "\(open ? "-" : "+") \(count) stale"
+        // Read as a control, not a row: "- 7 stale" under the last seat read as a stray line.
+        open ? "▾ Hide \(count) stale seats" : "▸ Show \(count) stale seats"
     }
 
     private func rows(for provider: Provider) -> [(AccountSnapshot, AccountSnapshot.RestReason?)] {

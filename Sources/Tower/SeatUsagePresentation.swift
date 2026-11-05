@@ -44,6 +44,12 @@ struct SeatUsagePresentation: Equatable {
     /// The words for `AccountSnapshot.fiveHourUnreported`, one string for every surface.
     static let fiveHourUnreportedText = "5h not reported"
 
+    /// One state for every seat Tower cannot judge right now (2026-11-05: "read 12h ago",
+    /// "5h not reported" and "no data" read as three different problems). The pill always
+    /// opens with "unknown", the room is "?", the reset column says switch in; only the
+    /// reason after the dot differs.
+    static func unknownText(_ why: String) -> String { "unknown · \(why)" }
+
     static func restLabel(_ rest: AccountSnapshot.RestReason,
                           account: AccountSnapshot,
                           now: Date) -> String {
@@ -57,9 +63,9 @@ struct SeatUsagePresentation: Equatable {
             return "cap · \(usage.stateText)"
         case .stale:
             // a seconds-old reply that only lacked the 5h window is not stale: say what is missing
-            return account.fiveHourUnreported(now: now) ? Self.fiveHourUnreportedText : usage.stateText
+            return unknownText(account.fiveHourUnreported(now: now) ? Self.fiveHourUnreportedText : usage.stateText)
         case .neverCaptured:
-            return "no data"
+            return unknownText("never read")
         }
     }
 

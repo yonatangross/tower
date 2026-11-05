@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import os
 import ServiceManagement
 import SwiftUI
 import UserNotifications
@@ -150,6 +151,8 @@ final class LimitsModel: ObservableObject {
     /// header becomes a lie about data that never arrived.
     @Published var lastRefresh: Date?
     @Published var refreshError: String?
+    /// Remembered seats the Keychain refused this build; the header names Re-trust for them.
+    @Published var seatSignerRefusals = 0
     @Published var refreshing = false
     /// Tower's own Cursor sign-in, while it runs: idle, waiting on the browser, or failed.
     @Published var cursorConnect: CursorConnectState = .idle
@@ -433,6 +436,7 @@ final class LimitsModel: ObservableObject {
             lastRefresh = Date()
             refreshError = nil
         }
+        seatSignerRefusals = ClaudeSeatVault.shared.signerRefusals
     }
 
     func toggleLaunchAtLogin(_ on: Bool) {
@@ -479,6 +483,8 @@ final class LimitsModel: ObservableObject {
     func retrustRetainedClaudeSeats() {
         seatRetentionError = nil
         switch ClaudeSeatVault.shared.retrust() {
+        case .failure(let error) where error.isSignerRefusal:
+            seatRetentionError = ClaudeSeatVault.retrustRefusalMessage
         case .failure(let error): seatRetentionError = error.message
         case .success(let counts) where counts.unreadable > 0:
             seatRetentionError = "\(counts.unreadable) remembered seat(s) still not readable"
@@ -627,6 +633,7 @@ final class LimitsModel: ObservableObject {
             refreshError = result.outcome.errorText
         }
         if let bookkeepingError { refreshError = bookkeepingError }
+        seatSignerRefusals = ClaudeSeatVault.shared.signerRefusals
 
         // Only announce if the "already announced" bookkeeping actually persisted. Posting
         // after a failed save would re-announce the same threshold on every poll until the
@@ -1502,9 +1509,16 @@ struct RestingDrawer: View {
         case .capped: return capState
         case .meteredCapped: return reason.text
         case .cappedAndStale, .stale:
-            if account.fiveHourUnreported(now: now) { return SeatUsagePresentation.fiveHourUnreportedText }
-            return "unknown since " + CLI.age(account.capturedAt, now: now)
-        case .neverCaptured: return "not checked"
+            // The same one unknown state the seat board uses: "unknown · <why>".
+            if account.fiveHourUnreported(now: now) {
+                return SeatUsagePresentation.unknownText(SeatUsagePresentation.fiveHourUnreportedText)
+            }
+            guard let capturedAt = account.capturedAt else {
+                return SeatUsagePresentation.unknownText("never read")
+            }
+            return SeatUsagePresentation.unknownText(
+                SeatUsagePresentation.readText(now.timeIntervalSince(capturedAt)))
+        case .neverCaptured: return SeatUsagePresentation.unknownText("never read")
         }
     }
 
@@ -1970,16 +1984,25 @@ struct MenuContent: View {
                 Spacer()
                 if model.refreshing {
                     ProgressView().controlSize(.small)
-                } else if let d = model.lastRefresh {
-                    Text(CLI.age(d)).font(TowerType.font(.small))
-                        .foregroundStyle(
-                            model.refreshError == nil ? TowerType.secondary : Color.orange)
-                } else if model.probed || model.refreshError != nil {
-                    Text("never").font(TowerType.font(.small)).foregroundStyle(.orange)
                 } else {
-                    // Rows hydrated from disk, no refresh attempted yet: each row
-                    // carries its own capture age, so the header only says so.
-                    Text("cached").font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
+                    // "never" only when nothing is on screen either: rows hydrated from disk
+                    // carry their own capture ages, so over them the header says "cached".
+                    let age = PanelHeaderAge.text(
+                        lastRefresh: model.lastRefresh, probed: model.probed,
+                        failed: model.refreshError != nil, hasRows: !model.accounts.isEmpty, now: Date())
+                    Text(age).font(TowerType.font(.small))
+                        .foregroundStyle(model.refreshError == nil && age != "never"
+                                         ? TowerType.secondary : Color.orange)
+                }
+            }
+            if let line = KeychainRefusal.headerLine(refusedSeats: model.seatSignerRefusals) {
+                HStack(spacing: 6) {
+                    Text(line)
+                        .font(TowerType.font(.small)).foregroundStyle(.orange).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Re-trust") { model.retrustRetainedClaudeSeats() }
+                        .controlSize(.small)
                 }
             }
             if let e = model.refreshError {
@@ -2209,9 +2232,39 @@ final class StatusPanel: NSPanel {
     }
 }
 
+/// When opening Tower.app shows the panel. Tower lives in the menu bar only, so a click on the
+/// app in Finder, Spotlight or the Dock used to answer with nothing visible: the item may sit
+/// behind the notch, and a second click (a reopen) had no handler at all. A start-at-login
+/// launch stays quiet; the operator did not ask to see anything then.
+enum PanelOpenPolicy {
+    static func showOnLaunch(asLoginItem: Bool) -> Bool { !asLoginItem }
+    /// A reopen never hides: opening the app again must not read as a toggle.
+    static func showOnReopen(panelVisible: Bool) -> Bool { true }
+
+    /// True when the launch Apple Event says macOS started Tower as a login item.
+    @MainActor
+    static func launchedAsLoginItem() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventID == kAEOpenApplication,
+              let prop = event.paramDescriptor(forKeyword: keyAEPropData) else { return false }
+        return prop.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static private(set) var shared: AppDelegate?
+    /// Read in applicationWillFinishLaunching, while the launch Apple Event is still current.
+    private var launchedAsLoginItem = false
+    /// Read with `log show --last 10m --predicate 'subsystem == "ai.yonyon.tower" AND category == "panel"'`.
+    static let panelLog = Logger(subsystem: ProductIdentity.bundleIdentifier, category: "panel")
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let visible = panel?.isVisible ?? false
+        Self.panelLog.notice("reopen: panel visible=\(visible, privacy: .public)")
+        if PanelOpenPolicy.showOnReopen(panelVisible: visible) { showPanel() }
+        return false
+    }
 
     private(set) var statusItem: NSStatusItem?
     private(set) var panel: StatusPanel?
@@ -2219,7 +2272,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var titleCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The single-instance gate runs in main.swift, before NSApplication; a second launch
+        // never gets here. The open-application Apple Event is current here, not in WillFinishLaunching
+        // (Codex review of #51): read too early, a login launch looked like a hand launch.
+        launchedAsLoginItem = PanelOpenPolicy.launchedAsLoginItem()
         Self.shared = self
+        DistributedNotificationCenter.default().addObserver(
+            forName: SingleInstance.showPanelNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                Self.panelLog.notice("handoff: a second launch asked this instance to show its panel")
+                AppDelegate.shared?.showPanel()
+            }
+        }
         // A fresh install answers the first run before anything is read: until then every
         // unset toggle reads OFF, so the first refresh below reads nothing.
         SetupWindows.shared.openFirstRunIfNeeded(model: LimitsModel.shared)
@@ -2229,6 +2293,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupPanel()
         installDismissMonitor()
         PanelHotkey.register()
+        let show = PanelOpenPolicy.showOnLaunch(asLoginItem: launchedAsLoginItem)
+        Self.panelLog.notice("launch: login item=\(self.launchedAsLoginItem, privacy: .public), show panel=\(show, privacy: .public)")
+        // After the first layout pass, so the status item has a window to anchor under.
+        if show { DispatchQueue.main.async { [weak self] in self?.showPanel() } }
     }
 
     private func setupStatusItem() {
@@ -2286,6 +2354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func statusItemClicked(_ sender: Any?) {
+        Self.panelLog.notice("status item clicked: panel visible=\(self.panel?.isVisible ?? false, privacy: .public)")
         togglePanel()
     }
 

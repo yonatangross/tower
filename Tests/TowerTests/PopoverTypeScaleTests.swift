@@ -71,8 +71,8 @@ final class PopoverTypeScaleTests: XCTestCase {
     }
 
     func testFoldLinesNameTheCountAndTheState() {
-        XCTAssertEqual(SeatBoard.staleLine(count: 2, open: false), "+ 2 stale")
-        XCTAssertEqual(SeatBoard.staleLine(count: 2, open: true), "- 2 stale")
+        XCTAssertEqual(SeatBoard.staleLine(count: 2, open: false), "▸ Show 2 stale seats")
+        XCTAssertEqual(SeatBoard.staleLine(count: 2, open: true), "▾ Hide 2 stale seats")
         XCTAssertEqual(SessionsBoard.idleLine(count: 3, open: false), "+ 3 idle")
         XCTAssertEqual(SessionsBoard.idleLine(count: 3, open: true), "- 3 idle")
     }

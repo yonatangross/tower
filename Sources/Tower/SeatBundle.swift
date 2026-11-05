@@ -91,6 +91,8 @@ extension TowerSeatKeychainAccess {
 }
 
 struct BundledClaudeSeatKeychain: ClaudeSeatKeychain {
+    /// Seats go into this build's bundle item, never into the per-seat legacy items.
+    var writesBesideLegacyItems: Bool { true }
     static let bundleService = "Tower-seats-v2"
     static let bundleLabel = "Tower-owned Claude seat bundle v2"
 
@@ -151,7 +153,28 @@ struct BundledClaudeSeatKeychain: ClaudeSeatKeychain {
             }))
         }
         var entries: [Entry]
-        switch readBundle(account: tag, suppressed: true) {
+        var own = readBundle(account: tag, suppressed: true)
+        // Re-trust only, and only after a refusal: one more read of this build's own bundle
+        // with the dialog allowed (the process gate is open then), so the operator can answer
+        // Always Allow. Background reads never get here (Codex review of 1216598).
+        if interaction == .allowed, case .failure(let error) = own, error.isSignerRefusal {
+            own = readBundle(account: tag, suppressed: false)
+        }
+        switch own {
+        case .failure(let error) where error.isSignerRefusal && interaction == .allowed:
+            // Refused even with the dialog: Re-trust did not recover anything. A failure, so
+            // Re-trust never reports success while the bundle stays locked (Codex, 1216598).
+            return .failure(error)
+        case .failure(let error) where error.isSignerRefusal:
+            // The bundle at this build's own name answers to another build. A login fact, not
+            // a failed refresh: every seat reads as unreadable, the roster falls back to the
+            // CLI credential, and the panel points at Re-trust. Nothing here deletes it.
+            var readout = ClaudeSeatKeychainReadout(records: [], unreadable: legacyRows.map {
+                ClaudeSeatUnreadableItem(service: $0.service, account: $0.account, label: $0.label,
+                                         status: error.status ?? errSecAuthFailed)
+            })
+            readout.bundleRefused = true
+            return .success(readout)
         case .failure(let error): return .failure(error)
         case .success(let own): entries = own ?? []
         }
@@ -309,7 +332,7 @@ struct BundledClaudeSeatKeychain: ClaudeSeatKeychain {
         counter.recordCopyMatching("list", status: status)
         if status == errSecItemNotFound { return .success([]) }
         guard status == errSecSuccess, let rows = result as? [[String: Any]] else {
-            return .failure(ClaudeSeatVaultError("Keychain read failed (\(status))"))
+            return .failure(ClaudeSeatVaultError("Keychain read failed (\(status))", status: status))
         }
         return .success(rows.compactMap { row in
             guard let service = row[kSecAttrService as String] as? String,
@@ -352,7 +375,7 @@ struct BundledClaudeSeatKeychain: ClaudeSeatKeychain {
                                                  label: Self.bundleLabel, suppressed: suppressed)
         if status == errSecItemNotFound { return .success(nil) }
         guard status == errSecSuccess, let data else {
-            return .failure(ClaudeSeatVaultError("Keychain read failed (\(status))"))
+            return .failure(ClaudeSeatVaultError("Keychain read failed (\(status))", status: status))
         }
         guard let reference, let own = ownRequirement(),
               case .success(let acl) = aclEntries(reference),
