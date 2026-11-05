@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import os
 import ServiceManagement
 import SwiftUI
 import UserNotifications
@@ -2209,9 +2210,43 @@ final class StatusPanel: NSPanel {
     }
 }
 
+/// When opening Tower.app shows the panel. Tower lives in the menu bar only, so a click on the
+/// app in Finder, Spotlight or the Dock used to answer with nothing visible: the item may sit
+/// behind the notch, and a second click (a reopen) had no handler at all. A start-at-login
+/// launch stays quiet; the operator did not ask to see anything then.
+enum PanelOpenPolicy {
+    static func showOnLaunch(asLoginItem: Bool) -> Bool { !asLoginItem }
+    /// A reopen never hides: opening the app again must not read as a toggle.
+    static func showOnReopen(panelVisible: Bool) -> Bool { true }
+
+    /// True when the launch Apple Event says macOS started Tower as a login item.
+    @MainActor
+    static func launchedAsLoginItem() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventID == kAEOpenApplication,
+              let prop = event.paramDescriptor(forKeyword: keyAEPropData) else { return false }
+        return prop.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static private(set) var shared: AppDelegate?
+    /// Read in applicationWillFinishLaunching, while the launch Apple Event is still current.
+    private var launchedAsLoginItem = false
+    /// Read with `log show --last 10m --predicate 'subsystem == "ai.yonyon.tower" AND category == "panel"'`.
+    static let panelLog = Logger(subsystem: ProductIdentity.bundleIdentifier, category: "panel")
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        launchedAsLoginItem = PanelOpenPolicy.launchedAsLoginItem()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let visible = panel?.isVisible ?? false
+        Self.panelLog.notice("reopen: panel visible=\(visible, privacy: .public)")
+        if PanelOpenPolicy.showOnReopen(panelVisible: visible) { showPanel() }
+        return false
+    }
 
     private(set) var statusItem: NSStatusItem?
     private(set) var panel: StatusPanel?
@@ -2229,6 +2264,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupPanel()
         installDismissMonitor()
         PanelHotkey.register()
+        let show = PanelOpenPolicy.showOnLaunch(asLoginItem: launchedAsLoginItem)
+        Self.panelLog.notice("launch: login item=\(self.launchedAsLoginItem, privacy: .public), show panel=\(show, privacy: .public)")
+        // After the first layout pass, so the status item has a window to anchor under.
+        if show { DispatchQueue.main.async { [weak self] in self?.showPanel() } }
     }
 
     private func setupStatusItem() {
@@ -2286,6 +2325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func statusItemClicked(_ sender: Any?) {
+        Self.panelLog.notice("status item clicked: panel visible=\(self.panel?.isVisible ?? false, privacy: .public)")
         togglePanel()
     }
 

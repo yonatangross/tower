@@ -1585,6 +1585,17 @@ enum CLI {
               SessionsBoard.heading(nil) == "SESSIONS · ?"
               && SessionsBoard.missingLine(probed: false) == "not read yet")
 
+        // Opening Tower.app is a request to see it: a menu-bar-only app that answers a click
+        // with nothing reads as broken, and the menu-bar item can sit behind the notch.
+        check("opening Tower.app by hand shows the panel",
+              PanelOpenPolicy.showOnLaunch(asLoginItem: false))
+        check("a start-at-login launch stays in the menu bar",
+              !PanelOpenPolicy.showOnLaunch(asLoginItem: true))
+        check("opening Tower.app while it runs shows the panel",
+              PanelOpenPolicy.showOnReopen(panelVisible: false))
+        check("opening Tower.app while the panel is up keeps it up",
+              PanelOpenPolicy.showOnReopen(panelVisible: true))
+
         let rHealthy = acct("ok", five: 32, week: 91, agoHours: 0)
         let rCapped  = acct("cap", five: 99, week: 40, agoHours: 0)
         let rStale   = acct("old", five: 10, week: 10, agoHours: 120)
