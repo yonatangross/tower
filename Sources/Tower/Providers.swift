@@ -848,14 +848,39 @@ enum OpenRouter {
             return nil
         }
 
-        final class Box: @unchecked Sendable { var data = Data() }
+        // Read on another thread: a command that never exits keeps the pipe open, and a
+        // blocking read would hold this refresh with it. The reader polls, so it can be
+        // cancelled, and it always closes the read end itself when it stops: a descendant
+        // that escaped the group (a new session) may hold the write end for as long as it
+        // likes, and neither the descriptor nor the thread may outlive the refresh.
+        final class Box: @unchecked Sendable {
+            private let lock = NSLock()
+            private var cancelledFlag = false
+            var data = Data()
+            var reachedEnd = false
+            var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelledFlag }
+            func cancel() { lock.lock(); cancelledFlag = true; lock.unlock() }
+        }
         let box = Box()
-        // Read on another thread: a command that never exits keeps the pipe open, and the
-        // read would block this refresh with it.
         let read = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .utility).async {
-            let handle = FileHandle(fileDescriptor: readFD, closeOnDealloc: false)
-            box.data = handle.readDataToEndOfFile()
+            var descriptor = pollfd(fd: readFD, events: Int16(POLLIN), revents: 0)
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while !box.cancelled {
+                let ready = poll(&descriptor, 1, 100)
+                if ready < 0 { if errno == EINTR { continue }; break }
+                if ready == 0 { continue }
+                let count = buffer.withUnsafeMutableBytes { Foundation.read(readFD, $0.baseAddress, $0.count) }
+                if count > 0 {
+                    box.data.append(contentsOf: buffer[0..<count])
+                } else if count == 0 {
+                    box.reachedEnd = true
+                    break
+                } else if errno != EINTR && errno != EAGAIN {
+                    break
+                }
+            }
+            close(readFD)
             read.signal()
         }
         // Wait for the direct child to exit WITHOUT reaping it (WNOWAIT), so its pid, and
@@ -881,9 +906,14 @@ enum OpenRouter {
         killpg(pid, SIGKILL)
         var reaped: Int32 = 0
         waitpid(pid, &reaped, 0)
-        let drained = read.wait(timeout: .now() + 1) == .success
-        if drained { close(readFD) }
-        guard finished, drained,
+        var drained = read.wait(timeout: .now() + 1) == .success
+        if !drained {
+            // Output never completed: stop the reader, which closes the descriptor.
+            box.cancel()
+            _ = read.wait(timeout: .now() + 1)
+            drained = false
+        }
+        guard finished, drained, box.reachedEnd,
               status.info.si_code == CLD_EXITED, status.info.si_status == 0 else { return nil }
         return String(data: box.data, encoding: .utf8)
     }

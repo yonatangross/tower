@@ -775,6 +775,24 @@ enum CLI {
         check("a key command's grandchild is killed with its group on timeout",
               wrapperResult == nil && grandchildPid != nil && grandchildGone,
               "result \(String(describing: wrapperResult)), grandchild \(String(describing: grandchildPid)), gone \(grandchildGone)")
+        // A descendant in a NEW session escapes the group kill and keeps stdout open. The
+        // drain then times out, and the read end of the pipe must still be closed.
+        func openDescriptors() -> Int {
+            (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
+        }
+        let descriptorsBefore = openDescriptors()
+        let escaped = OpenRouter.runKeyCommand(
+            ["/bin/sh", "-c",
+             "/usr/bin/perl -MPOSIX -e 'if (!fork) { POSIX::setsid(); exec \"sleep\", \"5\" }'; echo key"],
+            timeout: 5)
+        var descriptorsAfter = openDescriptors()
+        for _ in 0..<40 where descriptorsAfter > descriptorsBefore {
+            usleep(50_000)
+            descriptorsAfter = openDescriptors()
+        }
+        check("a key command whose descendant escaped the group does not leak the pipe",
+              escaped == nil && descriptorsBefore >= 0 && descriptorsAfter <= descriptorsBefore,
+              "result \(String(describing: escaped)), descriptors \(descriptorsBefore) to \(descriptorsAfter)")
         check("a key command that finishes in time still returns its output",
               OpenRouter.runKeyCommand(["/bin/echo", "sk-test"], timeout: 5)?
                   .trimmingCharacters(in: .whitespacesAndNewlines) == "sk-test")
