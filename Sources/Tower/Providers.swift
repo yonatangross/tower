@@ -806,37 +806,85 @@ enum OpenRouter {
 
     static func runKeyCommand(_ argv: [String], timeout: TimeInterval = keyCommandTimeout) -> String? {
         guard let executable = argv.first, !executable.isEmpty else { return nil }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: (executable as NSString).expandingTildeInPath)
-        process.arguments = Array(argv.dropFirst())
+        let path = (executable as NSString).expandingTildeInPath
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:"
             + (environment["PATH"] ?? "")
-        process.environment = environment
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        do { try process.run() } catch { return nil }
-        // Read on another thread: a child that never exits keeps the pipe open, and the
-        // read would block this refresh with it.
+
+        var fds: [Int32] = [0, 0]
+        guard pipe(&fds) == 0 else { return nil }
+        let readFD = fds[0], writeFD = fds[1]
+
+        // The child gets its own process group (POSIX_SPAWN_SETPGROUP, group 0 = its own
+        // pid), so a timeout can signal the whole tree. A wrapper command's child inherits
+        // the pipe; signalling only the direct child left it running (b93 on #33).
+        var attributes: posix_spawnattr_t? = nil
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        posix_spawnattr_setpgroup(&attributes, 0)
+
+        var actions: posix_spawn_file_actions_t? = nil
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_adddup2(&actions, writeFD, STDOUT_FILENO)
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addclose(&actions, readFD)
+        posix_spawn_file_actions_addclose(&actions, writeFD)
+
+        let arguments = [path] + argv.dropFirst()
+        let cArguments: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
+        let cEnvironment: [UnsafeMutablePointer<CChar>?] =
+            environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            cArguments.forEach { free($0) }
+            cEnvironment.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, path, &actions, &attributes, cArguments, cEnvironment)
+        close(writeFD)
+        guard spawned == 0 else {
+            close(readFD)
+            return nil
+        }
+
         final class Box: @unchecked Sendable { var data = Data() }
         let box = Box()
+        // Read on another thread: a command that never exits keeps the pipe open, and the
+        // read would block this refresh with it.
         let read = DispatchSemaphore(value: 0)
-        let handle = output.fileHandleForReading
         DispatchQueue.global(qos: .utility).async {
+            let handle = FileHandle(fileDescriptor: readFD, closeOnDealloc: false)
             box.data = handle.readDataToEndOfFile()
             read.signal()
         }
-        guard exited.wait(timeout: .now() + timeout) == .success else {
-            process.terminate()
-            _ = exited.wait(timeout: .now() + 1)
-            return nil
+        // Wait for the direct child to exit WITHOUT reaping it (WNOWAIT), so its pid, and
+        // with it the process group id, cannot be reused before the group is signalled.
+        let exited = DispatchSemaphore(value: 0)
+        final class Status: @unchecked Sendable { var info = siginfo_t() }
+        let status = Status()
+        DispatchQueue.global(qos: .utility).async {
+            _ = waitid(P_PID, id_t(pid), &status.info, WEXITED | WNOWAIT)
+            exited.signal()
         }
-        // The child exited; its output is complete unless a grandchild still holds the pipe.
-        guard read.wait(timeout: .now() + 1) == .success,
-              process.terminationStatus == 0 else { return nil }
+        let finished = exited.wait(timeout: .now() + timeout) == .success
+        if !finished {
+            // TERM the group, then KILL after a short grace.
+            killpg(pid, SIGTERM)
+            if exited.wait(timeout: .now() + 0.5) != .success {
+                killpg(pid, SIGKILL)
+                _ = exited.wait(timeout: .now() + 1)
+            }
+        }
+        // Whatever is left in the group (a grandchild that outlived the command, or one
+        // that ignored TERM) is killed now, so no process outlives the refresh.
+        killpg(pid, SIGKILL)
+        var reaped: Int32 = 0
+        waitpid(pid, &reaped, 0)
+        let drained = read.wait(timeout: .now() + 1) == .success
+        if drained { close(readFD) }
+        guard finished, drained,
+              status.info.si_code == CLD_EXITED, status.info.si_status == 0 else { return nil }
         return String(data: box.data, encoding: .utf8)
     }
 

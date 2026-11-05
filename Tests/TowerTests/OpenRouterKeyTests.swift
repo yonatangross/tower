@@ -88,6 +88,54 @@ final class OpenRouterKeyTests: XCTestCase {
         XCTAssertNil(OpenRouter.runKeyCommand([]))
     }
 
+    private func alive(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 }
+
+    private func waitUntilGone(_ pid: pid_t, seconds: TimeInterval = 3) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while alive(pid), Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        return !alive(pid)
+    }
+
+    /// A wrapper command starts a grandchild that holds the output pipe. The timeout must
+    /// stop the whole tree, not only the direct child (b93 on #33).
+    func testTimeoutKillsAWrapperCommandsGrandchild() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let pidFile = directory.appendingPathComponent("grandchild.pid")
+        let helper = directory.appendingPathComponent("wrapper")
+        try "#!/bin/sh\nsleep 60 &\necho $! > '\(pidFile.path)'\nwait\n"
+            .write(to: helper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+
+        let started = Date()
+        XCTAssertNil(OpenRouter.runKeyCommand([helper.path], timeout: 0.7))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 4, "the refresh is not held")
+
+        let text = try String(contentsOf: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let grandchild = try XCTUnwrap(pid_t(text))
+        XCTAssertTrue(waitUntilGone(grandchild), "the wrapper's grandchild is killed with the group")
+    }
+
+    /// A command that ignores TERM is killed after the grace period.
+    func testTimeoutEscalatesToKillForACommandThatIgnoresTerm() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let pidFile = directory.appendingPathComponent("child.pid")
+        let helper = directory.appendingPathComponent("stubborn")
+        try "#!/bin/sh\ntrap '' TERM\necho $$ > '\(pidFile.path)'\nwhile :; do sleep 1; done\n"
+            .write(to: helper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+
+        XCTAssertNil(OpenRouter.runKeyCommand([helper.path], timeout: 0.7))
+        let text = try String(contentsOf: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let child = try XCTUnwrap(pid_t(text))
+        XCTAssertTrue(waitUntilGone(child), "a command that ignores TERM is killed")
+    }
+
     func testOutcomeRejectedCarriesFingerprintAndLastSuccess() {
         // Test that rejected case carries key fingerprint and last-success time
         let fingerprint = "9f3c"

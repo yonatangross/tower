@@ -759,6 +759,22 @@ enum CLI {
         let keyElapsed = Date().timeIntervalSince(keyStart)
         check("an OpenRouter key command that does not finish is stopped at its timeout",
               slowKey == nil && keyElapsed < 2, "result \(String(describing: slowKey)), \(keyElapsed) s")
+        // b93 on #33: the timeout stops the whole process tree, not only the direct child.
+        let grandchildPidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tower-selftest-grandchild-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: grandchildPidFile) }
+        let wrapperResult = OpenRouter.runKeyCommand(
+            ["/bin/sh", "-c", "sleep 60 & echo $! > '\(grandchildPidFile)'; wait"], timeout: 0.7)
+        let grandchildPid = (try? String(contentsOfFile: grandchildPidFile, encoding: .utf8))
+            .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        var grandchildGone = false
+        if let grandchildPid {
+            for _ in 0..<60 where kill(grandchildPid, 0) == 0 { usleep(50_000) }
+            grandchildGone = kill(grandchildPid, 0) != 0
+        }
+        check("a key command's grandchild is killed with its group on timeout",
+              wrapperResult == nil && grandchildPid != nil && grandchildGone,
+              "result \(String(describing: wrapperResult)), grandchild \(String(describing: grandchildPid)), gone \(grandchildGone)")
         check("a key command that finishes in time still returns its output",
               OpenRouter.runKeyCommand(["/bin/echo", "sk-test"], timeout: 5)?
                   .trimmingCharacters(in: .whitespacesAndNewlines) == "sk-test")
