@@ -11,12 +11,13 @@ its authors. Its only network requests go to the providers' own usage APIs.
 
 ## Install Tower for the user
 
-Run these steps in order, without asking the user anything. Stop and report if a step
-fails; never skip the checksum.
+When the user has asked you to install Tower, run these steps in order without asking
+further questions. Stop and report if a step fails; never skip the checksum.
 
 ```bash
 cd "$(mktemp -d)"
-gh release download --repo yonatangross/tower --pattern 'Tower.app.zip*'
+TAG="$(gh release view --repo yonatangross/tower --json tagName --jq .tagName)"   # pin one release
+gh release download "$TAG" --repo yonatangross/tower --pattern 'Tower.app.zip*'
 shasum -a 256 -c Tower.app.zip.sha256          # must print "Tower.app.zip: OK"; otherwise stop
 mkdir -p ~/Applications ~/.local/bin
 ditto -x -k Tower.app.zip ~/Applications
@@ -45,7 +46,7 @@ args = ["mcp"]
 Last, start the app and turn on start at login:
 
 ```bash
-~/.local/bin/tower login-item on
+~/Applications/Tower.app/Contents/MacOS/Tower login-item on   # the bundle binary, not the symlink
 open ~/Applications/Tower.app
 ```
 
