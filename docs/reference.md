@@ -80,6 +80,26 @@ cd /tmp/tower-old && shasum -a 256 -c Tower.app.zip.sha256
 If you already have a local build, `./scripts/build-app.sh` followed by a bare
 `./scripts/install.sh` (no flags) installs `dist/Tower.app` directly.
 
+### Upgrading from a build before v0.1
+
+Only private builds predate v0.1. They installed as `ai.yonatan-hq.claude-limits`
+with the executable `HQClaudeLimits`; v0.1 is `ai.yonyon.tower` with the executable
+`Tower`. On its first launch Tower moves `~/Library/Application Support/HQClaudeLimits/`
+into `~/Library/Application Support/Tower/` and copies your settings to the new id,
+never overwriting anything the new install already has. `scripts/install.sh` also
+stops the old process, moves start-at-login to the new id when it was on, and repoints
+a `~/.local/bin/tower` link that named the old executable.
+
+What macOS ties to the old id and asks for once more:
+
+- **Keychain.** The first Re-trust after the upgrade asks **Always Allow** once per
+  remembered seat (macOS gives each old item its own access list). After that it is
+  one prompt per Re-trust, as for any release (README, "Keychain prompts").
+- **Privacy prompts.** Any permission macOS granted the old build (for example access
+  to another app's data) is asked for again the first time Tower needs it.
+- **Start at login**, if you installed by unzipping rather than with
+  `scripts/install.sh`: run `tower login-item on` once.
+
 ## Updating after a merge
 
 Nothing installs on its own when a PR merges: `release-app.yml` builds a fresh
@@ -173,7 +193,7 @@ permission on first launch while notifications are on.
 | Credential | Reads the active login via `/usr/bin/security find-generic-password -s "Claude Code-credentials"`. Shelling out to Apple-signed `security` avoids a Keychain prompt on every rebuild. |
 | Usage | `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer <accessToken>`. |
 | Identity | `GET /api/oauth/profile` for the account email, cached per access token since that binding never changes. |
-| Storage | `~/Library/Application Support/Tower/accounts.json`, guarded by a cross-process advisory lock (`flock`). The GUI app and `tower status` are separate processes doing read-modify-write on the same file. Before v0.1 the directory was `HQClaudeLimits`; the first launch of v0.1 moves its entries here (README, "Upgrading from a build before v0.1"). |
+| Storage | `~/Library/Application Support/Tower/accounts.json`, guarded by a cross-process advisory lock (`flock`). The GUI app and `tower status` are separate processes doing read-modify-write on the same file. Before v0.1 the directory was `HQClaudeLimits`; the first launch of v0.1 moves its entries here (Install, "Upgrading from a build before v0.1"). |
 | Window states on disk | `accounts.json` and its mirror `~/.claude/quota-cache.json` carry three states per window. A missing pct key means not measured. A pct with no flag is a capture. A pct of 0 with `fiveHourReset: true`, `weeklyReset: true`, or `reset: true` on a scoped limit is derived: that window's `resetsAt` passed after the capture, so Tower zeroed it. The flag is written only in that case and is recomputed on every save, so a new capture clears it. |
 | Lane rows on disk | Muse, Devin and Antigravity have rows in `accounts.json` and the mirror, keys `muse:muse@local`, `devin:devin@local`, `agy:agy@local`. They are never ranked (`isRankable` is false). Percentages are percent USED. `fiveHourPct` is the lane's SHORT window (Devin: a day, Muse: "window"), `weeklyPct` the weekly one, each with its own `...ResetsAt`; the names are in `scoped` labels. `capturedAt` is when the tool observed the numbers (Devin's cache fetch time, Muse's `asOfMs`), `readAt` is when Tower looked, `source` is `live` (`muse usage --json`, one bounded call per refresh) or `cache` (Devin's own `user_status` cache). A lane row exists ONLY when it has a real `capturedAt` and a valid percent: platform validates the whole mirror at once and requires `capturedAt` on every row, so one row without it would turn every account unknown. A lane Tower cannot read (not logged in, no cache, nothing exposed) has NO row, and a row it had before is removed so an older capture cannot outlive a failed read; its reason stays in `tower_lanes` over MCP. Antigravity exposes nothing readable, so it has no row today. |
 | Pi lane | Read from Pi's own directory, `~/.pi/agent` (override with `TOWER_PI_DIR`, which tests and demos use so the real directory is never read). `settings.json` gives `defaultProvider` and `defaultModel`. Spend is summed from `sessions/<project>/<session>.jsonl`: assistant `message` entries, `message.usage.cost.total` in USD, placed in time by the entry's ISO `timestamp` (the message's epoch ms `timestamp` is the fallback), each entry id counted once across files so a forked session's copied history is not double counted. Bounded: only files modified this calendar month (local time), at most 2000 of them, at most the last 64 MB of each, streamed line by line; a partial read marks the sums as a floor ("at least"). `auth.json` holds Pi's secrets and is never opened. When the provider is `openrouter`, the row shows Pi's month spend as a percent of the OpenRouter credit Tower already reads (lifetime top-ups) and the dollars left on the key; otherwise, or when the balance is unreadable, it shows spend only with the reason. No `~/.pi/agent` directory hides the row. Pi has no row in `accounts.json` or the mirror: money is not a quota. |
@@ -371,6 +391,12 @@ your own, write `nicknames.json` in the same directory, for example
 
 The OpenRouter key comes from `OPENROUTER_API_KEY`, or from a command you set
 (see the README, "Configuration").
+
+Agent lane dispatches (optional): a directory holding the `dispatch-worktrees.jsonl`
+and `lanes.jsonl` ledgers a dispatcher writes (for example a herdr plugin), named by
+`TOWER_DISPATCH_LEDGER_DIR`, herdr's `HERDR_PLUGIN_STATE_DIR`, or
+`defaults write ai.yonyon.tower dispatchLedgerDirectory <dir>`. Without one the lane
+rows show no dispatch.
 
 `TOWER_SUPPORT_DIR` points Tower at another store directory instead of
 `~/Library/Application Support/Tower`. `TOWER_DEMO=1`, honoured only together with
