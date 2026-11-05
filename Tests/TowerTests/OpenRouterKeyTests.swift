@@ -97,7 +97,7 @@ final class OpenRouterKeyTests: XCTestCase {
     }
 
     /// A wrapper command starts a grandchild that holds the output pipe. The timeout must
-    /// stop the whole tree, not only the direct child (b93 on #33).
+    /// stop the whole tree, not only the direct child.
     func testTimeoutKillsAWrapperCommandsGrandchild() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -801,7 +801,7 @@ enum OpenRouter {
 
     /// How long the key command may run. It runs on every refresh, in a child the
     /// Keychain dialog switch does not cover, so a command that prompts must not stall
-    /// the refresh (b88 on #32).
+    /// the refresh.
     static let keyCommandTimeout: TimeInterval = 10
 
     static func runKeyCommand(_ argv: [String], timeout: TimeInterval = keyCommandTimeout) -> String? {
@@ -817,7 +817,7 @@ enum OpenRouter {
 
         // The child gets its own process group (POSIX_SPAWN_SETPGROUP, group 0 = its own
         // pid), so a timeout can signal the whole tree. A wrapper command's child inherits
-        // the pipe; signalling only the direct child left it running (b93 on #33).
+        // the pipe; signalling only the direct child left it running.
         var attributes: posix_spawnattr_t? = nil
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }

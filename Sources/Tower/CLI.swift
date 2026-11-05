@@ -752,14 +752,14 @@ enum CLI {
               openRouterAccounts[openRouterKey]?.balanceUSD == 53.82
               && openRouterAccounts[openRouterKey]?.availablePct == orBudget.availablePct
               && openRouterAccounts[openRouterKey]?.capturedAt == openRouterCapturedAt)
-        // b88 on #32: the key command runs on every refresh; one that never finishes (a
+        // the key command runs on every refresh; one that never finishes (a
         // dialog, a fingerprint wait) must not hold the refresh.
         let keyStart = Date()
         let slowKey = OpenRouter.runKeyCommand(["/bin/sleep", "5"], timeout: 0.5)
         let keyElapsed = Date().timeIntervalSince(keyStart)
         check("an OpenRouter key command that does not finish is stopped at its timeout",
               slowKey == nil && keyElapsed < 2, "result \(String(describing: slowKey)), \(keyElapsed) s")
-        // b93 on #33: the timeout stops the whole process tree, not only the direct child.
+        // the timeout stops the whole process tree, not only the direct child.
         let grandchildPidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("tower-selftest-grandchild-\(UUID().uuidString)").path
         defer { try? FileManager.default.removeItem(atPath: grandchildPidFile) }
