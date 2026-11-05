@@ -23,19 +23,22 @@ enum PanelHotkey {
 
     // Carbon status values (CarbonEventsCore.h); Swift does not import these constants.
     private static let hotKeyExists: OSStatus = -9878
-    private static let hotKeyInvalid: OSStatus = -9879
     private static let handlerAlreadyInstalled: OSStatus = -9866
 
     static func isRegistered(status: OSStatus) -> Bool { status == noErr }
 
     /// A registration result in words. Carbon returns only a number, and the call's result
-    /// used to be discarded, so a key another app already held (hotKeyExistsErr) failed
-    /// with no trace anywhere.
+    /// used to be discarded, so a failed registration left no trace anywhere.
+    ///
+    /// What this log can and cannot show. Per CarbonEventsCore.h, -9878 (eventHotKeyExistsErr)
+    /// means the hotkey is already registered in THIS process, and registering the same key
+    /// in several processes is not an error. Tower registers with options 0, so another app
+    /// holding cmd+period does not make this call fail: it reports "registered" even then.
+    /// Catching that conflict would need kEventHotKeyExclusive, a behaviour change.
     static func describe(status: OSStatus) -> String {
         switch status {
         case noErr: return "registered"
-        case hotKeyExists: return "not registered: another app already holds this hotkey (\(status))"
-        case hotKeyInvalid: return "not registered: the system refused this key combination (\(status))"
+        case hotKeyExists: return "not registered: this process already registered this hotkey (\(status))"
         case handlerAlreadyInstalled: return "handler already installed (\(status))"
         default: return "not registered: Carbon status \(status)"
         }

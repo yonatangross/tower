@@ -532,8 +532,9 @@ enum CLI {
         // RegisterEventHotKey used to be discarded and cmd+. then did nothing, silently.
         check("a registered hotkey reads as registered",
               PanelHotkey.describe(status: 0).contains("registered"))
-        check("a hotkey another app already holds says so",
-              PanelHotkey.describe(status: -9878).contains("another app"))
+        check("-9878 says this process already registered the hotkey, not that another app holds it",
+              PanelHotkey.describe(status: -9878).contains("this process already registered")
+                  && !PanelHotkey.describe(status: -9878).contains("another app"))
         check("an unknown hotkey status carries its number",
               PanelHotkey.describe(status: -1234).contains("-1234"))
         check("only status 0 counts as registered",
