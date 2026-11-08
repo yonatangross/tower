@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tower: which AI coding account has room?</title>
-<meta name="description" content="A macOS menu bar app that shows where every AI coding account stands and which one has room. Built-in MCP server. MIT.">
-<meta property="og:title" content="Tower: which AI coding account has room?">
+<title>Tower: what you used, what is left, when it resets</title>
+<meta name="description" content="One macOS menu bar panel for Claude Code, Codex and Cursor: what you have used, what is left, when it resets. Built-in local MCP server. MIT.">
+<meta property="og:title" content="Tower: what you used, what is left, when it resets">
 <meta property="og:description" content="Usage per window, room left and next reset for every Claude Code account, with Codex and Cursor plans beside them.">
 <meta property="og:image" content="https://raw.githubusercontent.com/yonatangross/tower/main/docs/images/social-preview.png">
 <style>
@@ -45,8 +45,8 @@
 <body>
 <main>
   <div class="mark">TOWER<i></i></div>
-  <h1>Which account has room?</h1>
-  <p class="lede">A macOS menu bar app for people who run several AI coding subscriptions. It shows where every account stands (usage per window, room left, when it resets) and tells you which one to switch to before you get stuck.</p>
+  <h1>One panel for your coding tools</h1>
+  <p class="lede">A macOS menu bar app with one panel for your coding tools: Claude Code, Codex and Cursor. It shows what you have used, what is left and when it resets. Your agent reads the same numbers over MCP, and Tower runs only on your Mac.</p>
   <div class="cta">
     <a class="p" href="https://github.com/yonatangross/tower/releases/latest">Download the latest release</a>
     <a class="s" href="https://github.com/yonatangross/tower">View on GitHub</a>
@@ -62,20 +62,19 @@
 
   <h2>What it does</h2>
   <ul>
-    <li><b>Seats.</b> Real Claude Code usage for each account you have signed into: the 5 hour and weekly windows, the room left, the next reset. Codex and Cursor plans sit beside them.</li>
-    <li><b>Advice.</b> Which seat has the most room, and when to switch.</li>
-    <li><b>MCP server.</b> <code>tower mcp</code> lets Claude Code, Codex, Cursor and other agents ask which account has room.</li>
+    <li><b>Seats.</b> Real Claude Code usage for each account you have signed into: usage per window, what is left, the next reset. Codex and Cursor plans sit beside them.</li>
+    <li><b>Comparison.</b> Which of your seats has the most left.</li>
+    <li><b>MCP server.</b> <code>tower mcp</code> lets Claude Code, Codex, Cursor and other agents read the same numbers.</li>
   </ul>
 
   <h2>Every coding agent</h2>
   <p>Claude Code, Codex, Cursor, Cursor CLI, Devin, Muse, Antigravity and Pi, with the OpenRouter balance and the TypeSafe Jev and Cloudflare Clef balances you enter by hand. Other agents and OpenRouter appear when those tools are installed.</p>
-  <p>Windows support and more harnesses coming next.</p>
 
   <h2>Ask your agent</h2>
   <p><code>tower mcp</code> is a stdio MCP server that runs locally on your Mac. It opens no network port and sends nothing to us or anyone else. Reads never show a Keychain dialog. Plain prompts land on a tool:</p>
   <ul>
-    <li>&ldquo;Which of my accounts has room for a long refactor?&rdquo; <code>tower_room</code></li>
-    <li>&ldquo;Should I stay on this account or switch?&rdquo; <code>tower_advice</code></li>
+    <li>&ldquo;How much is left on each of my accounts?&rdquo; <code>tower_room</code></li>
+    <li>&ldquo;What do you advise for my active account?&rdquo; <code>tower_advice</code></li>
     <li>&ldquo;When does my weekly window reset?&rdquo; <code>tower_resets</code></li>
     <li>&ldquo;Is any reading stale? How fresh is each one?&rdquo; <code>tower_freshness</code></li>
     <li>&ldquo;Give me a rotation plan for the next login.&rdquo; <code>tower_rotate</code></li>
@@ -95,7 +94,7 @@ open ~/Applications/Tower.app</pre>
   <div class="pb">
     <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/setup.md">Setup<span>install, first run, Keychain trust</span></a>
     <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/multi-account.md">Multi-account<span>several seats, Codex, Cursor</span></a>
-    <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/mcp.md">MCP<span>let your agents ask which account has room</span></a>
+    <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/mcp.md">MCP<span>let your agents read your usage</span></a>
     <a href="https://github.com/yonatangross/tower/blob/main/docs/playbooks/troubleshooting.md">Troubleshooting<span>Gatekeeper, Intel Macs, odd rows</span></a>
   </div>
 
