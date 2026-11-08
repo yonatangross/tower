@@ -1,6 +1,6 @@
 # Tower
 
-A macOS menu bar app with one panel for every coding tool: Claude Code, Codex and
+A macOS menu bar app with one panel for your coding tools: Claude Code, Codex and
 Cursor. It shows what you have used, what is left and when it resets. Your agent reads
 the same numbers over MCP, and Tower runs only on your Mac.
 
