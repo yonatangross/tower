@@ -26,7 +26,7 @@ enum LaneCostRecorder {
     private static func transcripts(home: URL, config: String? = nil, privateLanes: PrivateLanes) -> [URL] {
         let root = projectsRoot(config: config, home: home)
         let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-        return dirs.flatMap { dir in
+        return dirs.filter { !privateLanes.isPrivate(projectFolder: $0.lastPathComponent) }.flatMap { dir in
             ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
                 .filter { $0.pathExtension == "jsonl" }
         }
@@ -35,7 +35,7 @@ enum LaneCostRecorder {
     /// The session's transcript: the cwd-derived folder first, then a scan of every project
     /// folder for the session id. nil when neither has it.
     static func transcriptURL(live: LaneCost.Live, home: URL, privateLanes: PrivateLanes) -> URL? {
-        guard let id = live.sessionId else { return nil }
+        guard let id = live.sessionId, !privateLanes.isPrivate(cwd: live.cwd) else { return nil }
         let root = projectsRoot(config: live.configDir, home: home)
         if let cwd = live.cwd {
             let direct = root.appendingPathComponent(projectFolder(cwd: cwd), isDirectory: true)
@@ -76,24 +76,28 @@ enum LaneCostRecorder {
         return total
     }
 
-    /// Writes one record per interactive session that left the list. When four or more
+    /// Writes one record per interactive session that left the list, except private lanes (see
+    /// PrivateLanes); an unreadable policy (nil) writes nothing. When four or more
     /// sessions were listed and over half vanish at once, that is a failed probe (an empty
     /// `claude agents` answer), not that many closes: nothing is written. A session whose
     /// newest transcript stamp is already in the ledger is not written again.
     @discardableResult
     static func recordClosed(previous: [LaneCost.Live], current: [LaneCost.Live], env: Environment) -> [LaneCost.Record] {
-        let gone = LaneCost.closed(previous: previous, current: current)
+        guard let policy = env.privateLanes else { return [] }
+        let all = LaneCost.closed(previous: previous, current: current)
         let before = previous.filter(\.interactive).count
-        if before >= 4, gone.count * 2 > before { return [] }
+        if before >= 4, all.count * 2 > before { return [] }
+        // A private lane is never read and never recorded; its transcript is not opened.
+        let gone = all.filter { !policy.isPrivate(cwd: $0.cwd) }
         let url = LaneCost.ledgerURL(now: env.now, home: env.home)
         let existing = Dictionary(LaneCost.latest(in: url).map { ($0.session, $0) }, uniquingKeysWith: { _, b in b })
         var written: [LaneCost.Record] = []
         for live in gone {
             guard let id = live.sessionId else { continue }
-            let summary = transcriptURL(live: live, home: env.home, privateLanes: env.privateLanes ?? PrivateLanes(folders: [])).map(LaneCost.summarize(url:)) ?? LaneCost.TranscriptSummary()
+            let summary = transcriptURL(live: live, home: env.home, privateLanes: policy).map(LaneCost.summarize(url:)) ?? LaneCost.TranscriptSummary()
             if let old = existing[id], old.end == summary.last.map(LaneCost.stampString) { continue }
             let total = summary.first.flatMap { f in summary.last.map { l in (f, l) } }
-                .flatMap { accountOutput(uuid: summary.accountUuid, from: $0.0, to: $0.1, home: env.home, privateLanes: env.privateLanes ?? PrivateLanes(folders: [])) }
+                .flatMap { accountOutput(uuid: summary.accountUuid, from: $0.0, to: $0.1, home: env.home, privateLanes: policy) }
             let record = LaneCost.makeRecord(
                 live: live, summary: summary,
                 samples: paceSamples(supportDir: env.supportDir, email: live.accountEmail),

@@ -8,8 +8,39 @@ struct PrivateLanes: Equatable {
     /// Absolute folder paths, `~` already expanded.
     var folders: [String]
 
-    // RED STUB: placeholders so the new tests compile and fail on their assertions.
-    static func load(from url: URL, home: URL) -> PrivateLanes? { nil }
-    func isPrivate(cwd: String?) -> Bool { false }
-    func isPrivate(projectFolder: String) -> Bool { false }
+    /// Reads `{"private_lanes": ["~/folder", ...]}` (other keys are ignored). nil when the
+    /// file is missing, is not JSON, or has no list of strings under that key: the caller
+    /// then reads and writes nothing (fail closed). An empty list is a valid policy.
+    static func load(from url: URL, home: URL) -> PrivateLanes? {
+        guard let data = try? Data(contentsOf: url),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let list = root["private_lanes"] as? [String] else { return nil }
+        let folders = list.map { entry -> String in
+            if entry == "~" { return home.path }
+            if entry.hasPrefix("~/") { return home.path + String(entry.dropFirst(1)) }
+            return entry
+        }
+        return PrivateLanes(folders: folders)
+    }
+
+    /// A cwd at or under a private folder. A cwd that is not known cannot be shown to be
+    /// public, so it counts as private. A sibling that only shares a name prefix does not.
+    func isPrivate(cwd: String?) -> Bool {
+        guard let cwd, !cwd.isEmpty else { return true }
+        let path = URL(fileURLWithPath: cwd).standardizedFileURL.path
+        return folders.contains { folder in
+            let f = URL(fileURLWithPath: folder).standardizedFileURL.path
+            return path == f || path.hasPrefix(f + "/")
+        }
+    }
+
+    /// A `~/.claude/projects` folder named after a private folder or anything below it.
+    /// Claude Code names a project folder after the cwd with `/` and `.` as `-`, so a
+    /// sibling such as `personal-desk-2` also matches: it errs toward not reading.
+    func isPrivate(projectFolder name: String) -> Bool {
+        folders.contains { folder in
+            let slug = LaneCostRecorder.projectFolder(cwd: folder)
+            return name == slug || name.hasPrefix(slug + "-")
+        }
+    }
 }

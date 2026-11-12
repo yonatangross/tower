@@ -11,8 +11,11 @@ extension LaneCost.Live {
 }
 
 enum LaneCostWiring {
-    // RED STUB
-    static func policyURL(home: URL) -> URL { home }
+    /// The floor's own copy of the private-lanes list (a copy or link of hq-ext
+    /// configs/private-lanes.json). Without it nothing is read or written: fail closed.
+    static func policyURL(home: URL) -> URL {
+        home.appendingPathComponent(".floor/private-lanes.json")
+    }
 
     /// Called after every refresh with the session list before and after it. Only when both
     /// probes answered: a nil list means `claude agents` could not run, which is not a close.
@@ -24,9 +27,10 @@ enum LaneCostWiring {
         let after = current.interactive.map(LaneCost.Live.init)
         guard !before.isEmpty else { return }
         Task.detached(priority: .utility) {
+            let home = FileManager.default.homeDirectoryForCurrentUser
             let env = LaneCostRecorder.Environment(
-                home: FileManager.default.homeDirectoryForCurrentUser,
-                supportDir: Store.defaultSupportDirectory(), now: Date(), privateLanes: nil)
+                home: home, supportDir: Store.defaultSupportDirectory(), now: Date(),
+                privateLanes: PrivateLanes.load(from: policyURL(home: home), home: home))
             LaneCostRecorder.recordClosed(previous: before, current: after, env: env)
         }
     }
