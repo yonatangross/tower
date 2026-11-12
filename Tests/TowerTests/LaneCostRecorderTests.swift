@@ -10,6 +10,8 @@ final class LaneCostRecorderTests: XCTestCase {
     private func at(_ minutes: Double) -> Date { Date(timeIntervalSince1970: base + minutes * 60) }
     private func iso(_ minutes: Double) -> String { ISO8601DateFormatter().string(from: at(minutes)) }
 
+    private let none = PrivateLanes(folders: [])
+
     private func home() throws -> URL {
         let h = FileManager.default.temporaryDirectory.appendingPathComponent("lc-home-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: h, withIntermediateDirectories: true)
@@ -43,7 +45,8 @@ final class LaneCostRecorderTests: XCTestCase {
     }
 
     private func env(_ h: URL, now: Double = 200) -> LaneCostRecorder.Environment {
-        LaneCostRecorder.Environment(home: h, supportDir: h.appendingPathComponent("support", isDirectory: true), now: at(now))
+        LaneCostRecorder.Environment(home: h, supportDir: h.appendingPathComponent("support", isDirectory: true), now: at(now),
+                                     privateLanes: PrivateLanes(folders: []))
     }
 
     private func ledger(_ h: URL, now: Double = 200) -> URL { LaneCost.ledgerURL(now: at(now), home: h) }
@@ -56,9 +59,9 @@ final class LaneCostRecorderTests: XCTestCase {
         let elsewhere = try transcript(home: h, dir: "-other-place", session: "s-scan", account: "u1", lines: [])
         // The temp dir sits behind a /var to /private/var link, and a directory scan reports the real path.
         func real(_ u: URL?) -> String? { u?.resolvingSymlinksInPath().path }
-        XCTAssertEqual(real(LaneCostRecorder.transcriptURL(live: live("s-exact"), home: h)), real(exact))
-        XCTAssertEqual(real(LaneCostRecorder.transcriptURL(live: live("s-scan"), home: h)), real(elsewhere))
-        XCTAssertNil(LaneCostRecorder.transcriptURL(live: live("s-missing"), home: h))
+        XCTAssertEqual(real(LaneCostRecorder.transcriptURL(live: live("s-exact"), home: h, privateLanes: none)), real(exact))
+        XCTAssertEqual(real(LaneCostRecorder.transcriptURL(live: live("s-scan"), home: h, privateLanes: none)), real(elsewhere))
+        XCTAssertNil(LaneCostRecorder.transcriptURL(live: live("s-missing"), home: h, privateLanes: none))
     }
 
     func testTheCwdFolderNameReplacesSlashesAndDots() {
@@ -86,9 +89,9 @@ final class LaneCostRecorderTests: XCTestCase {
         try transcript(home: h, session: "lane", account: "u1", lines: [line("a", minutes: 1, output: 100), line("b", minutes: 50, output: 5)])
         try transcript(home: h, dir: "-p2", session: "peer", account: "u1", lines: [line("c", minutes: 2, output: 300)])
         try transcript(home: h, dir: "-p3", session: "stranger", account: "u2", lines: [line("d", minutes: 3, output: 9999)])
-        let total = LaneCostRecorder.accountOutput(uuid: "u1", from: at(0), to: at(10), home: h)
+        let total = LaneCostRecorder.accountOutput(uuid: "u1", from: at(0), to: at(10), home: h, privateLanes: none)
         XCTAssertEqual(total, 400, "u1 inside the window: 100 + 300; the message at minute 50 and the other account are out")
-        XCTAssertNil(LaneCostRecorder.accountOutput(uuid: nil, from: at(0), to: at(10), home: h))
+        XCTAssertNil(LaneCostRecorder.accountOutput(uuid: nil, from: at(0), to: at(10), home: h, privateLanes: none))
     }
 
     // MARK: recording

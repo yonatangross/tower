@@ -11,6 +11,9 @@ extension LaneCost.Live {
 }
 
 enum LaneCostWiring {
+    // RED STUB
+    static func policyURL(home: URL) -> URL { home }
+
     /// Called after every refresh with the session list before and after it. Only when both
     /// probes answered: a nil list means `claude agents` could not run, which is not a close.
     /// The transcript reads happen off the main thread. A demo run never reads this Mac's
@@ -23,7 +26,7 @@ enum LaneCostWiring {
         Task.detached(priority: .utility) {
             let env = LaneCostRecorder.Environment(
                 home: FileManager.default.homeDirectoryForCurrentUser,
-                supportDir: Store.defaultSupportDirectory(), now: Date())
+                supportDir: Store.defaultSupportDirectory(), now: Date(), privateLanes: nil)
             LaneCostRecorder.recordClosed(previous: before, current: after, env: env)
         }
     }

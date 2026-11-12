@@ -9,6 +9,8 @@ enum LaneCostRecorder {
         /// Tower's own support directory (`~/Library/Application Support/Tower`).
         var supportDir: URL
         var now: Date
+        /// nil means the policy could not be read: nothing is read or written (fail closed).
+        var privateLanes: PrivateLanes?
     }
 
     /// How Claude Code names a project folder: the cwd with `/` and `.` turned into `-`.
@@ -21,7 +23,7 @@ enum LaneCostRecorder {
             .appendingPathComponent("projects", isDirectory: true)
     }
 
-    private static func transcripts(home: URL, config: String? = nil) -> [URL] {
+    private static func transcripts(home: URL, config: String? = nil, privateLanes: PrivateLanes) -> [URL] {
         let root = projectsRoot(config: config, home: home)
         let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         return dirs.flatMap { dir in
@@ -32,7 +34,7 @@ enum LaneCostRecorder {
 
     /// The session's transcript: the cwd-derived folder first, then a scan of every project
     /// folder for the session id. nil when neither has it.
-    static func transcriptURL(live: LaneCost.Live, home: URL) -> URL? {
+    static func transcriptURL(live: LaneCost.Live, home: URL, privateLanes: PrivateLanes) -> URL? {
         guard let id = live.sessionId else { return nil }
         let root = projectsRoot(config: live.configDir, home: home)
         if let cwd = live.cwd {
@@ -40,7 +42,7 @@ enum LaneCostRecorder {
                 .appendingPathComponent("\(id).jsonl")
             if FileManager.default.fileExists(atPath: direct.path) { return direct }
         }
-        return transcripts(home: home, config: live.configDir).first { $0.lastPathComponent == "\(id).jsonl" }
+        return transcripts(home: home, config: live.configDir, privateLanes: privateLanes).first { $0.lastPathComponent == "\(id).jsonl" }
     }
 
     /// The meter samples Tower keeps per account (`pace.json`: email to a list of
@@ -61,10 +63,10 @@ enum LaneCostRecorder {
 
     /// The account's output tokens inside a window, from every transcript of that account
     /// that was touched since the window opened. nil without an account id.
-    static func accountOutput(uuid: String?, from: Date, to: Date, home: URL) -> Int? {
+    static func accountOutput(uuid: String?, from: Date, to: Date, home: URL, privateLanes: PrivateLanes) -> Int? {
         guard let uuid else { return nil }
         var total = 0
-        for url in transcripts(home: home) {
+        for url in transcripts(home: home, privateLanes: privateLanes) {
             let touched = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             if let touched, touched < from { continue }
             let s = LaneCost.summarize(url: url)
@@ -88,10 +90,10 @@ enum LaneCostRecorder {
         var written: [LaneCost.Record] = []
         for live in gone {
             guard let id = live.sessionId else { continue }
-            let summary = transcriptURL(live: live, home: env.home).map(LaneCost.summarize(url:)) ?? LaneCost.TranscriptSummary()
+            let summary = transcriptURL(live: live, home: env.home, privateLanes: env.privateLanes ?? PrivateLanes(folders: [])).map(LaneCost.summarize(url:)) ?? LaneCost.TranscriptSummary()
             if let old = existing[id], old.end == summary.last.map(LaneCost.stampString) { continue }
             let total = summary.first.flatMap { f in summary.last.map { l in (f, l) } }
-                .flatMap { accountOutput(uuid: summary.accountUuid, from: $0.0, to: $0.1, home: env.home) }
+                .flatMap { accountOutput(uuid: summary.accountUuid, from: $0.0, to: $0.1, home: env.home, privateLanes: env.privateLanes ?? PrivateLanes(folders: [])) }
             let record = LaneCost.makeRecord(
                 live: live, summary: summary,
                 samples: paceSamples(supportDir: env.supportDir, email: live.accountEmail),
