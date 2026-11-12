@@ -78,6 +78,17 @@ enum LaneCostRecorder {
         return total
     }
 
+    /// A missing or unreadable policy keeps closed lanes unrecorded. That must not be silent:
+    /// one line in `~/.floor/lane-cost/refused.log` with the count (never a lane or session name),
+    /// the file that is missing and the step that installs it.
+    private static func noteUnrecorded(count: Int, env: Environment) {
+        guard count > 0 else { return }
+        let log = env.home.appendingPathComponent(".floor/lane-cost/refused.log")
+        let line = "\(LaneCost.stampString(env.now)) private-lanes policy unreadable (\(env.policyPath)): "
+            + "\(count) closed lane(s) not recorded; install it with scripts/install-private-lanes.sh --from <source>"
+        try? LaneCost.appendLine(line, to: log)
+    }
+
     /// Writes one record per interactive session that left the list, except private lanes (see
     /// PrivateLanes); an unreadable policy (nil) writes nothing. When four or more
     /// sessions were listed and over half vanish at once, that is a failed probe (an empty
@@ -85,10 +96,13 @@ enum LaneCostRecorder {
     /// newest transcript stamp is already in the ledger is not written again.
     @discardableResult
     static func recordClosed(previous: [LaneCost.Live], current: [LaneCost.Live], env: Environment) -> [LaneCost.Record] {
-        guard let policy = env.privateLanes else { return [] }
         let all = LaneCost.closed(previous: previous, current: current)
         let before = previous.filter(\.interactive).count
         if before >= 4, all.count * 2 > before { return [] }
+        guard let policy = env.privateLanes else {
+            noteUnrecorded(count: all.count, env: env)
+            return []
+        }
         // A private lane is never read and never recorded; its transcript is not opened.
         let gone = all.filter { !policy.isPrivate(cwd: $0.cwd) }
         let url = LaneCost.ledgerURL(now: env.now, home: env.home)
@@ -98,12 +112,21 @@ enum LaneCostRecorder {
             guard let id = live.sessionId else { continue }
             let summary = transcriptURL(live: live, home: env.home, privateLanes: policy).map(LaneCost.summarize(url:)) ?? LaneCost.TranscriptSummary()
             if let old = existing[id], old.end == summary.last.map(LaneCost.stampString) { continue }
-            let total = summary.first.flatMap { f in summary.last.map { l in (f, l) } }
+            // The account total scans ~/.claude only. A lane under another config root is not in it,
+            // so dividing by it would write a share that is too high: no share, and say why.
+            let ownRoot = live.configDir.map {
+                URL(fileURLWithPath: $0).standardizedFileURL.path
+                    != env.home.appendingPathComponent(".claude").standardizedFileURL.path
+            } ?? false
+            let total = ownRoot ? nil : summary.first.flatMap { f in summary.last.map { l in (f, l) } }
                 .flatMap { accountOutput(uuid: summary.accountUuid, from: $0.0, to: $0.1, home: env.home, privateLanes: policy) }
-            let record = LaneCost.makeRecord(
+            var record = LaneCost.makeRecord(
                 live: live, summary: summary,
                 samples: paceSamples(supportDir: env.supportDir, email: live.accountEmail),
                 accountOutputInWindow: total, now: env.now)
+            if ownRoot {
+                record.unread["quota_share"] = "the lane runs under its own config root; the account total reads ~/.claude only"
+            }
             if (try? LaneCost.append(record, to: url)) != nil { written.append(record) }
         }
         return written

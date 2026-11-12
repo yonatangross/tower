@@ -287,8 +287,13 @@ extension LaneCost {
     /// line and an earlier line is never touched.
     static func append(_ record: Record, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        var data = try encoder().encode(record)
-        data.append(0x0A)
+        try appendLine(String(decoding: try encoder().encode(record), as: UTF8.self), to: url)
+    }
+
+    /// One line, written with O_APPEND in a single write (mode 0600), after making the folder.
+    static func appendLine(_ text: String, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = Data((text + "\n").utf8)
         let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
         guard fd >= 0 else { throw CocoaError(.fileWriteUnknown) }
         defer { close(fd) }

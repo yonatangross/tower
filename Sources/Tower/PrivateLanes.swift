@@ -31,8 +31,13 @@ struct PrivateLanes: Equatable {
         case unreadable(String)
     }
 
-    // RED STUB
-    static func readback(from url: URL, home: URL) -> Readback { .missing("") }
+    /// Reads the policy once and says which of the three it found. The caller that needs the
+    /// list loudly (the recorder's note, the install script's check) uses this, not `load`.
+    static func readback(from url: URL, home: URL) -> Readback {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing(url.path) }
+        if let policy = load(from: url, home: home) { return .ok(policy) }
+        return .unreadable(url.path)
+    }
 
     /// A cwd at or under a private folder. A cwd that is not known cannot be shown to be
     /// public, so it counts as private. A sibling that only shares a name prefix does not.

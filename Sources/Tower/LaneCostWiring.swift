@@ -30,7 +30,8 @@ enum LaneCostWiring {
             let home = FileManager.default.homeDirectoryForCurrentUser
             let env = LaneCostRecorder.Environment(
                 home: home, supportDir: Store.defaultSupportDirectory(), now: Date(),
-                privateLanes: PrivateLanes.load(from: policyURL(home: home), home: home))
+                privateLanes: PrivateLanes.load(from: policyURL(home: home), home: home),
+                policyPath: policyURL(home: home).path)
             LaneCostRecorder.recordClosed(previous: before, current: after, env: env)
         }
     }
