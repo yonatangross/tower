@@ -154,10 +154,10 @@ if [ ! -r "$from" ]; then
   exit 2
 fi
 folders_of "$from" >/dev/null
-mkdir -p "$dest_dir"
+mkdir -p -m 700 "$dest_dir"
 tmp="$(mktemp "$dest_dir/.private-lanes.tmp.XXXXXX")"
 cp "$from" "$tmp"
-chmod 644 "$tmp"
+chmod 600 "$tmp"
 mv -f "$tmp" "$dest"
 echo "installed $dest from $from"
 status=0
