@@ -54,8 +54,10 @@ final class LaneCostRecorderTests: XCTestCase {
         let h = try home()
         let exact = try transcript(home: h, dir: "-work-lane", session: "s-exact", account: "u1", lines: [])
         let elsewhere = try transcript(home: h, dir: "-other-place", session: "s-scan", account: "u1", lines: [])
-        XCTAssertEqual(LaneCostRecorder.transcriptURL(live: live("s-exact"), home: h)?.path, exact.path)
-        XCTAssertEqual(LaneCostRecorder.transcriptURL(live: live("s-scan"), home: h)?.path, elsewhere.path)
+        // The temp dir sits behind a /var to /private/var link, and a directory scan reports the real path.
+        func real(_ u: URL?) -> String? { u?.resolvingSymlinksInPath().path }
+        XCTAssertEqual(real(LaneCostRecorder.transcriptURL(live: live("s-exact"), home: h)), real(exact))
+        XCTAssertEqual(real(LaneCostRecorder.transcriptURL(live: live("s-scan"), home: h)), real(elsewhere))
         XCTAssertNil(LaneCostRecorder.transcriptURL(live: live("s-missing"), home: h))
     }
 
