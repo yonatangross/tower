@@ -42,6 +42,22 @@ code=0
 out=$(./scripts/install-private-lanes.sh --from "$GOOD" --home "$H1" 2>&1) || code=$?
 expect_exit "install: valid source exits 0" 0 "$code"
 if cmp -s "$GOOD" "$H1/.floor/private-lanes.json"; then pass "install: the installed bytes equal the source"; else fail "install: the installed bytes differ from the source"; fi
+# the list names a private lane: owner-only file, and an owner-only folder when the install made it
+file_mode=$(stat -f '%Lp' "$H1/.floor/private-lanes.json")
+dir_mode=$(stat -f '%Lp' "$H1/.floor")
+if [ "$file_mode" = "600" ]; then pass "install: the file is owner-only (600)"; else fail "install: file mode is $file_mode, wanted 600"; fi
+if [ "$dir_mode" = "700" ]; then pass "install: a folder the install created is owner-only (700)"; else fail "install: folder mode is $dir_mode, wanted 700"; fi
+# an existing folder is not re-moded: the install owns its file, not the shared folder
+H4="$T/home4"
+mkdir -p "$H4/.floor"
+chmod 755 "$H4/.floor"
+code=0
+out=$(./scripts/install-private-lanes.sh --from "$GOOD" --home "$H4" 2>&1) || code=$?
+expect_exit "install: into an existing folder exits 0" 0 "$code"
+existing_mode=$(stat -f '%Lp' "$H4/.floor")
+if [ "$existing_mode" = "755" ]; then pass "install: an existing folder keeps its mode"; else fail "install: existing folder mode changed to $existing_mode"; fi
+file_mode=$(stat -f '%Lp' "$H4/.floor/private-lanes.json")
+if [ "$file_mode" = "600" ]; then pass "install: the file is 600 in an existing folder too"; else fail "install: file mode is $file_mode in an existing folder, wanted 600"; fi
 code=0
 out=$(./scripts/install-private-lanes.sh --check --home "$H1" --expect "~/.floor/desks/personal-desk" 2>&1) || code=$?
 expect_exit "check: installed file names the private lane" 0 "$code"
