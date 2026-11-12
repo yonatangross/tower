@@ -563,7 +563,10 @@ final class LimitsModel: ObservableObject {
         // The lanes are read inside the refresh (file reads plus one bounded `muse usage`),
         // so the panel shows the same answer that was folded into the store and the mirror.
         let result = await Refresher.refreshActive()
+        let previousAgents = agents
         agents = await agentProbe
+        // A lane that left the session list closes: its cost is written beside how it ended.
+        LaneCostWiring.observe(previous: previousAgents, current: agents)
         laneOutcomes = result.lanes
         // Refresher already fetched and persisted this exact observation. Reuse it so the
         // panel, history and mirror cannot report three different answers from two requests.
