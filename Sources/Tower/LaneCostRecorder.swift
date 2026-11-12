@@ -11,6 +11,8 @@ enum LaneCostRecorder {
         var now: Date
         /// nil means the policy could not be read: nothing is read or written (fail closed).
         var privateLanes: PrivateLanes?
+        /// Where the policy was looked for, named in the note left when it is missing.
+        var policyPath: String = "~/.floor/private-lanes.json"
     }
 
     /// How Claude Code names a project folder: the cwd with `/` and `.` turned into `-`.

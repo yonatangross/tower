@@ -23,6 +23,17 @@ struct PrivateLanes: Equatable {
         return PrivateLanes(folders: folders)
     }
 
+    /// What a read of the policy file found: three different things, so a missing file is
+    /// never mistaken for an empty or a bad one.
+    enum Readback: Equatable {
+        case ok(PrivateLanes)
+        case missing(String)
+        case unreadable(String)
+    }
+
+    // RED STUB
+    static func readback(from url: URL, home: URL) -> Readback { .missing("") }
+
     /// A cwd at or under a private folder. A cwd that is not known cannot be shown to be
     /// public, so it counts as private. A sibling that only shares a name prefix does not.
     func isPrivate(cwd: String?) -> Bool {
