@@ -1,8 +1,8 @@
 # Tower
 
-A macOS menu bar app for people who run several AI coding subscriptions. It shows
-where every account stands (usage per window, room left, when it resets) and tells
-you which one to switch to before you get stuck.
+A macOS menu bar app with one panel for every coding tool: Claude Code, Codex and
+Cursor. It shows what you have used, what is left and when it resets. Your agent reads
+the same numbers over MCP, and Tower runs only on your Mac.
 
 ![Tower panel with invented demo accounts](docs/images/panel-demo.png)
 
@@ -59,20 +59,20 @@ Then `tower mcp --self-test` (a non zero exit means the server is broken).
 | Playbook | For |
 | --- | --- |
 | [Setup](docs/playbooks/setup.md) | install, first run, Keychain trust, adding accounts |
-| [Multi-account](docs/playbooks/multi-account.md) | several Claude Code seats, Codex, Cursor, switching fast |
-| [MCP](docs/playbooks/mcp.md) | let Claude Code, Codex or Cursor ask which account has room |
+| [Multi-account](docs/playbooks/multi-account.md) | several Claude Code seats, Codex, Cursor |
+| [MCP](docs/playbooks/mcp.md) | let Claude Code, Codex or Cursor read your usage |
 | [Troubleshooting](docs/playbooks/troubleshooting.md) | Gatekeeper, Intel Macs, build errors, odd rows |
 | [Uninstall](docs/playbooks/uninstall.md) | remove the app and everything it stored |
 
 ## What it does
 
-- **Seats.** Real Claude Code usage for each account you have signed into: the
-  5 hour and weekly windows, the room left, and the next reset. Codex and Cursor
+- **Seats.** Real Claude Code usage for each account you have signed into: usage
+  per window, what is left, and the next reset. Codex and Cursor
   plans sit beside them.
-- **Advice.** Which seat has the most room, and when to switch.
+- **Comparison.** Which of your seats has the most left.
 - **MCP server.** `tower mcp` answers the same questions over the Model Context
-  Protocol, so any agent (Claude Code, Codex, Cursor and others) can ask which
-  account has room. See [docs/mcp-surface.md](docs/mcp-surface.md).
+  Protocol, so any agent (Claude Code, Codex, Cursor and others) can read the
+  same numbers. See [docs/mcp-surface.md](docs/mcp-surface.md).
 - **Extras.** OpenRouter balance, agent lanes (Muse, Devin, the Cursor CLI,
   Antigravity, and Pi with its spend this month and today as a share of the
   OpenRouter budget) and live Claude Code sessions, when those tools are present.
@@ -197,7 +197,7 @@ agent prompts are in the [MCP playbook](docs/playbooks/mcp.md).
 
 | Tools | What they answer |
 | --- | --- |
-| `tower_advice`, `tower_room`, `tower_rotate` | stay or switch, which seat has room, a login plan |
+| `tower_advice`, `tower_room`, `tower_rotate` | advice on the active seat, what is left per seat, a login plan |
 | `tower_status`, `tower_accounts`, `tower_account` | every account, or one, with its usage windows |
 | `tower_resets`, `tower_freshness`, `tower_alerts` | reset times, how fresh each reading is, threshold state |
 | `tower_seats`, `tower_lanes`, `tower_sessions` | remembered seats, agent lanes, running Claude Code sessions |
@@ -226,9 +226,9 @@ result, from the invented demo store:
 
 The full list, with every field, is [docs/mcp-surface.md](docs/mcp-surface.md).
 
-## Tip: switch accounts in two clicks
+## Tip: signing into another seat
 
-Switching seats means signing Claude Code into another account. Add a passkey to
+Using another seat means signing Claude Code into that account. Add a passkey to
 each account you use (in the account's security settings) and keep one browser
 profile per account. A login is then `/login`, pick the profile, confirm the
 passkey. `tower rotate` names the seat to sign into next and, when it knows it,

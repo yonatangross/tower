@@ -1,6 +1,6 @@
 # Tower
 
-> Tower is a free, open-source macOS menu bar app (Apple silicon) that shows the usage limits of your Claude Code, Codex, Cursor and OpenRouter accounts and tells you which one to switch to. The same binary is a CLI and a local stdio MCP server; it runs on your Mac and sends nothing to its authors.
+> Tower is a free, open-source macOS menu bar app (Apple silicon) that shows the usage limits of your Claude Code, Codex, Cursor and OpenRouter accounts: what is used, what is left and when it resets. The same binary is a CLI and a local stdio MCP server; it runs on your Mac and sends nothing to its authors.
 
 ## Install
 

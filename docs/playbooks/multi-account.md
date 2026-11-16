@@ -1,7 +1,6 @@
 # Multi-account playbook
 
-How Tower sees several Claude Code seats, plus Codex and Cursor, and how to
-switch between seats quickly.
+How Tower sees several Claude Code seats, plus Codex and Cursor.
 
 Check first that running several subscriptions fits each provider's terms.
 Tower does not decide that for you.

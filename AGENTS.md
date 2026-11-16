@@ -4,8 +4,8 @@ Instructions for AI coding agents (Claude Code, Codex, Cursor and others) that i
 Tower for a user or work in this repository.
 
 Tower is a macOS menu bar app for Apple silicon that shows the usage limits of the
-user's Claude Code, Codex, Cursor and OpenRouter accounts, and tells them which account
-to switch to. The same binary is a CLI (`tower`) and a local stdio MCP server
+user's Claude Code, Codex, Cursor and OpenRouter accounts: what is used, what is left and
+when it resets. The same binary is a CLI (`tower`) and a local stdio MCP server
 (`tower mcp`). It is not a hosted service: it runs on the user's Mac and sends nothing to
 its authors. Its only network requests go to the providers' own usage APIs.
 

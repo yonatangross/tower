@@ -1,7 +1,7 @@
 # MCP playbook
 
 `tower mcp` is a stdio MCP server inside the Tower binary. Any agent that speaks
-MCP (Claude Code, Codex, Cursor and others) can ask it which account has room.
+MCP (Claude Code, Codex, Cursor and others) can read the same numbers from it.
 The full tool list is [docs/mcp-surface.md](../mcp-surface.md).
 
 ## 1. Register it
@@ -52,7 +52,7 @@ Plain prompts that work, and the tool each one lands on:
 
 | Ask your agent | Tool |
 | --- | --- |
-| "Which of my accounts has room for a long refactor?" | `tower_room` |
+| "How much is left on each of my accounts?" | `tower_room` |
 | "Should I stay on this account or switch?" | `tower_advice` |
 | "When does my weekly window reset?" | `tower_resets` |
 | "Is any reading stale? How fresh is each one?" | `tower_freshness` |
@@ -73,7 +73,7 @@ room on its binding window, stop and tell me which seat tower_advice names.
 
 ## What it will not do
 
-- Log in or switch accounts. Switching is always your `/login`.
+- Log you in to any account. That is always your `/login`.
 - Send anything off your Mac except the providers' own usage calls.
 - Write without saying so: the four write tools (`tower_refresh`,
   `tower_forget_seats`, `tower_config_set`, `tower_alert_ack`) are annotated,
