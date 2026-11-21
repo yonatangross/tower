@@ -229,8 +229,15 @@ final class DashboardFeedTests: XCTestCase {
     }
     """
 
+    /// The page measures ages against window.towerClock. By default the clock reads the moment of the feed it
+    /// was last given, so a feed is fresh unless a test sets its own clock (stage(_:clock:)).
+    private static let clockKit = """
+    window.towerClock = function() { return (window.__feedAt || 0); };
+    (function() { var take = window.towerUpdate; window.towerUpdate = function(f) { window.__feedAt = Date.parse(f.generatedAt); return take(f); }; })();
+    """
+
     /// Draws `feedExpression` (JS that yields a feed) on one surface and returns the stage markup.
-    private func stage(_ feedExpression: String, surface: String = "dash") throws -> String {
+    private func stage(_ feedExpression: String, surface: String = "dash", clock: String? = nil) throws -> String {
         let html = try page()
         let open = try XCTUnwrap(html.range(of: "<script>"))
         let close = try XCTUnwrap(html.range(of: "</script>", options: .backwards))
@@ -241,6 +248,10 @@ final class DashboardFeedTests: XCTestCase {
         context.evaluateScript(Self.domStub)
         context.evaluateScript(Self.feedKit)
         context.evaluateScript(script)
+        context.evaluateScript(Self.clockKit)
+        // The wall clock is injected the way the page asks for it (window.towerClock), in the feed's own
+        // milliseconds, so an age is measured against it and not against the feed's generatedAt.
+        if let clock { context.evaluateScript("window.towerClock = function() { return \(clock); };") }
         context.evaluateScript("window.towerSurface('\(surface)'); window.towerUpdate(\(feedExpression)); window.towerSurface('\(surface)');")
         XCTAssertEqual(thrown, [], "the page threw while drawing")
         return context.evaluateScript("els.stage.innerHTML")?.toString() ?? ""
@@ -281,16 +292,19 @@ final class DashboardFeedTests: XCTestCase {
             XCTAssertFalse(exhausted.contains("YES"), "\(surface): an exhausted seat is not a YES")
 
             let stale = try stage("(function() { var f = feed(); f.accounts.accounts[0].windows = wins(40, 'stale'); return f; })()", surface: surface)
-            XCTAssertTrue(stale.contains("PROBABLY") && stale.contains("Press Refresh"), "\(surface): a stale read reads PROBABLY")
+            // Approved mockup: the headline seat must be live. A stale active seat is no longer PROBABLY a seat
+            // with a number; it is CAN'T TELL with its age and a Refresh.
+            XCTAssertTrue(stale.contains("CAN'T TELL") && stale.contains("Press Refresh"), "\(surface): a stale read reads CAN'T TELL")
+            XCTAssertFalse(stale.contains("PROBABLY"), "\(surface): a stale read is not a PROBABLY")
         }
     }
 
-    /// 2026-11-09, alt3 after /login: 7d live, 5h absent from the reply. The dial said CAN'T TELL,
+    /// 2026-11-09, ops6 after /login: 7d live, 5h absent from the reply. The dial said CAN'T TELL,
     /// offered a Refresh that returns the same reply, and printed the live week as an upper bound.
     private static let weekLiveFiveHourAbsent = """
-    (function() { var f = feed({kind: 'activeFiveHourUnknown', nickname: 'main', percentUsed: null, roomPct: 98});
+    (function() { var f = feed({kind: 'stay', nickname: 'main', percentUsed: 2, roomPct: null});
       f.accounts.accounts[0].model = null;
-      f.accounts.accounts[0].windows = [{name: '5h', percentUsed: null, resetsAt: null, trust: 'unknown'},
+      f.accounts.accounts[0].windows = [{name: '5h', percentUsed: null, resetsAt: null, trust: 'notReported'},
         {name: '7d', percentUsed: 2, resetsAt: iso(now + 6 * 864e5), trust: 'live'}];
       return f; })()
     """
@@ -300,9 +314,8 @@ final class DashboardFeedTests: XCTestCase {
             let markup = try stage(Self.weekLiveFiveHourAbsent, surface: surface)
             XCTAssertFalse(markup.contains("CAN'T TELL"), "\(surface): the week is known, only 5h is not")
             XCTAssertFalse(markup.contains("Refresh now"), "\(surface): a refresh returns the same reply")
-            XCTAssertTrue(markup.contains("PROBABLY"), "\(surface): the gap keeps the verdict short of YES")
-            XCTAssertFalse(markup.contains("YES"), "\(surface): an unknown 5h window is not a YES")
-            XCTAssertTrue(markup.contains("no 5h reading"), "\(surface): the verdict names what is missing")
+            XCTAssertFalse(markup.contains("PROBABLY"), "\(surface): a window not reported is not a PROBABLY (2026-11-18)")
+            XCTAssertTrue(markup.contains("YES"), "\(surface): the live week is a verdict")
         }
     }
 
@@ -360,10 +373,11 @@ final class DashboardFeedTests: XCTestCase {
     }
 
     func testANearlyFullSeatIsNeverGreenInTheDialList() throws {
-        let nearlyFull = "(function() { var f = feed(); f.accounts.accounts[1].windows = wins(97); return f; })()"
+        // 94 % used: one point under Tower's cap (95), so it is still a number, not "full".
+        let nearlyFull = "(function() { var f = feed(); f.accounts.accounts[1].windows = wins(94); return f; })()"
         let alt = dialRow(try stage(nearlyFull, surface: "dial"), "alt")
-        XCTAssertTrue(alt.contains("3 %"), "3 % room left: \(alt)")
-        XCTAssertTrue(alt.contains("t-crit"), "3 % room reads red: \(alt)")
+        XCTAssertTrue(alt.contains("6 %"), "6 % room left: \(alt)")
+        XCTAssertTrue(alt.contains("t-warn"), "6 % room reads amber: \(alt)")
         XCTAssertFalse(alt.contains("t-good") || alt.contains("gain"), "a nearly full seat is never green: \(alt)")
     }
 
@@ -390,8 +404,288 @@ final class DashboardFeedTests: XCTestCase {
         """
         let markup = try stage(alerted, surface: "dial")
         XCTAssertFalse(markup.contains("owner ?"), "a bare question mark says nothing")
-        XCTAssertTrue(markup.contains("account not known for 2"), "the footer says what is unknown")
-        XCTAssertTrue(markup.contains("main over the red rail"), "the footer names the alert")
+        // Round 4 (critic E 4): "account not known for 2" and "over the red rail" were jargon.
+        XCTAssertTrue(markup.contains("2 with no known account"), "the footer says what is unknown")
+        XCTAssertTrue(markup.contains("main used 90 % or more"), "the footer names the alert and its mark")
+        XCTAssertFalse(markup.contains("rail"), "no rail jargon")
+    }
+
+    // MARK: Round 4 (tower-loop, critic on 056611f)
+
+    /// E: "$11.10, $0.58/d" in the footer did not say what it was.
+    func testTheFooterSaysWhatTheMoneyIs() throws {
+        let funded = "(function() { var f = feed(); f.openrouterHistory = {samples: [{capturedAt: iso(now - 864e5), available: 12.5, totalCredits: 20}, {capturedAt: iso(now - 6e4), available: 11.1, totalCredits: 20}]}; return f; })()"
+        let markup = try stage(funded, surface: "dial")
+        XCTAssertTrue(markup.contains("OpenRouter $11.10 left, $"), "the balance names its service: \(markup.suffix(900))")
+        XCTAssertTrue(markup.contains(" a day"), "spend a day")
+        XCTAssertFalse(markup.contains("/d<"), "no bare /d")
+        let unread = try stage("feed()", surface: "dial")
+        XCTAssertTrue(unread.contains("OpenRouter balance not read"), "no balance says so in words")
+        XCTAssertFalse(unread.contains("OpenRouter ? left"), "no bare ?")
+    }
+
+    /// C: "12.4× pace" in the verdict line never said what the multiple is of.
+    func testTheVerdictLineSaysWhatThePaceMultipleMeans() throws {
+        let fiveBinds = "(function() { var f = feed(); f.accounts.accounts[0].windows = [{name: '7d', percentUsed: 30, resetsAt: iso(now + 3 * 864e5), trust: 'live'}, {name: '5h', percentUsed: 60, resetsAt: iso(now + 3 * 36e5), trust: 'live'}]; return f; })()"
+        let markup = try stage(fiveBinds, surface: "dial")
+        XCTAssertTrue(markup.contains("× the even rate"), "the multiple names its base")
+        XCTAssertFalse(markup.contains("× pace,"), "no bare pace multiple")
+    }
+
+    // MARK: Round 5 (critic on 0d3fa14, I 4)
+
+    /// The footer listed ops7 as "used 90 % or more" while its row said signed out. A signed-out seat's
+    /// fix is the sign-in, so the alert names only seats you can use.
+    func testTheFooterAlertSkipsASignedOutSeat() throws {
+        let both = """
+        (function() { var f = feed(); f.accounts.accounts[1].lastError = 'needs login'; f.accounts.accounts[1].windows = wins(0, 'stale');
+          f.alerts.accounts = [{nickname: 'main', provider: 'claude', crossing: 'red', announced: [], pending: []},
+                               {nickname: 'alt', provider: 'claude', crossing: 'red', announced: [], pending: []}]; return f; })()
+        """
+        let markup = try stage(both, surface: "dial")
+        XCTAssertTrue(markup.contains("main used 90 % or more"), "the usable seat is named")
+        XCTAssertFalse(markup.contains("alt used"), "the signed-out seat is not")
+    }
+
+    /// Live capture 2026-11-11 (round 6): yai2g needed a login but its row said "full", because the page
+    /// checked the old full reading before the error. The fix for a signed-out seat is the sign-in.
+    func testASignedOutSeatWithAFullReadingAsksForTheLogin() throws {
+        let out = """
+        (function() { var f = feed(); f.accounts.accounts[1].lastError = 'needs login';
+          f.accounts.accounts[1].windows = [{name: '7d', percentUsed: 100, resetsAt: iso(now + 2 * 864e5), trust: 'stale'}]; return f; })()
+        """
+        let markup = try stage(out, surface: "dial")
+        XCTAssertTrue(markup.contains("class=\"n act\">/login<"), "the row names the sign-in")
+        // b146 P3 on #184: the sign-in comes first, but the seat may still be full after it.
+        XCTAssertTrue(markup.contains(">full till "), "the row keeps the old full reading as a note")
+    }
+
+    /// I (critic on 445340b, 4): the header said "First back Wed 20:30" from Tower's advice while the dial
+    /// centre named another seat at Wed 20:00. Both now name one seat, the one the centre names.
+    func testTheHeaderAndTheCentreNameTheSameFirstSeatBack() throws {
+        let wait = """
+        (function() { var f = feed({kind: 'allResting', nickname: null, percentUsed: null, earliestReset: iso(now + 5 * 36e5)});
+          f.accounts.accounts[1].windows = [{name: '7d', percentUsed: 100, resetsAt: iso(now + 2 * 36e5), trust: 'live'}]; return f; })()
+        """
+        let markup = try stage(wait, surface: "dial")
+        XCTAssertTrue(markup.contains("First back alt"), "the header names the seat the centre names")
+    }
+
+    /// H (critic on b19a3a1, 7; runner 2026-11-11): a row read 4 days ago looked like one read 2 minutes ago.
+    /// A row Tower cannot trust (any window past the 15 minute line) says "stale" beside its read age.
+    func testAStaleRowSaysStaleAndAFreshOneDoesNot() throws {
+        let stale = "(function() { var f = feed(); f.accounts.accounts[1].windows = wins(40, 'stale'); return f; })()"
+        let markup = try stage(stale, surface: "dial")
+        let row = try NSRegularExpression(pattern: "<div class=\"drow [^\"]*\"[^>]*><span class=\"nm\"><b>(\\w+)</b>.*?</div>")
+        let ns = markup as NSString
+        var said: [String: String] = [:]
+        for hit in row.matches(in: markup, range: NSRange(location: 0, length: ns.length)) {
+            said[ns.substring(with: hit.range(at: 1))] = ns.substring(with: hit.range)
+        }
+        XCTAssertTrue(try XCTUnwrap(said["alt"]).contains("stale"), "the stale row says so")
+        XCTAssertFalse(try XCTUnwrap(said["main"]).contains("stale"), "a live row does not")
+    }
+
+    /// E (critic on b19a3a1, 6): the active ops7 had no 5h reading, and only the header said so; its row and
+    /// its room read like a full answer. A Claude row with no 5h reading says so, and a row that has one does not.
+    func testAClaudeRowWithNoFiveHourReadingSaysSo() throws {
+        let noFive = "(function() { var f = feed(); f.accounts.accounts[0].windows = [{name: '5h', percentUsed: null, resetsAt: null, trust: 'unknown'}, {name: '7d', percentUsed: 65, resetsAt: iso(now + 2 * 864e5), trust: 'live'}]; return f; })()"
+        let markup = try stage(noFive, surface: "dial")
+        let row = try NSRegularExpression(pattern: "<div class=\"drow [^\"]*\"[^>]*><span class=\"nm\"><b>(\\w+)</b>.*?</div>")
+        let ns = markup as NSString
+        var said: [String: String] = [:]
+        for hit in row.matches(in: markup, range: NSRange(location: 0, length: ns.length)) {
+            said[ns.substring(with: hit.range(at: 1))] = ns.substring(with: hit.range)
+        }
+        XCTAssertTrue(try XCTUnwrap(said["main"]).contains("no 5h"), "the row names the gap")
+        XCTAssertFalse(try XCTUnwrap(said["alt"]).contains("no 5h"), "a row with a 5h reading does not")
+        XCTAssertFalse(try XCTUnwrap(said["main"]).contains("stale"), "a missing 5h reading is not a stale one")
+    }
+
+    /// G (critic on b19a3a1, 6): "ops2, ops4, ops3 +1 used 90 % or more" hid a seat behind "+1". Every seat
+    /// over a mark is named.
+    func testTheFooterAlertNamesEverySeatOverAMark() throws {
+        let many = """
+        (function() { var f = feed(); var names = ['main', 'alt', 'c1', 'c2', 'c3'];
+          names.slice(2).forEach(function(n) { f.accounts.accounts.push(seat(n, 'claude', wins(10, 'live'), false)); });
+          f.alerts.accounts = names.map(function(n) { return {nickname: n, provider: 'claude', crossing: 'red', announced: [], pending: []}; });
+          return f; })()
+        """
+        let markup = try stage(many, surface: "dial")
+        XCTAssertTrue(markup.contains("main, alt, c1, c2, c3 used 90 % or more"), "all five are named")
+        XCTAssertFalse(markup.contains(" +2 used"), "none hides behind a count")
+    }
+
+    /// The centre named the first full seat to come back under "next reset", while another seat reset sooner.
+    func testTheDialCentreSaysWhichResetItNames() throws {
+        let full = "(function() { var f = feed(); f.accounts.accounts[1].windows = [{name: '7d', percentUsed: 100, resetsAt: iso(now + 2 * 864e5), trust: 'live'}]; return f; })()"
+        let markup = try stage(full, surface: "dial")
+        XCTAssertTrue(markup.contains("next full seat back"), "the centre says it names a full seat")
+        XCTAssertTrue(try stage("feed()", surface: "dial").contains(">next reset<"), "with none full it is the next reset")
+    }
+
+    /// D: a ring with no reset due was drawn in the green of room even when its reading was weeks old.
+    func testARingWithNoResetDueIsGreenOnlyWhenItsReadingIsLive() throws {
+        let cached = "(function() { var f = feed(); f.accounts.accounts[1].windows = [{name: '7d', percentUsed: 0, resetsAt: null, trust: 'stale'}]; return f; })()"
+        let markup = try stage(cached, surface: "dial")
+        let start = try XCTUnwrap(markup.range(of: "<g data-tip=\"alt (claude)"), "the alt ring group")
+        let rest = markup[start.lowerBound...]
+        let ring = String(rest[..<(rest.range(of: "</g>")?.lowerBound ?? rest.endIndex)])
+        XCTAssertFalse(ring.contains("#62c073"), "an old reading is not green: \(ring)")
+        XCTAssertTrue(ring.contains("#aab2c0"), "grey: \(ring)")
+    }
+
+    /// D: the "signed out" chip wore an alarm colour; it is a state to fix, not a failure.
+    func testTheSignedOutChipIsNeutral() throws {
+        let signedOut = "(function() { var f = feed(); f.accounts.accounts[1].lastError = 'needs login'; f.accounts.accounts[1].windows = wins(0, 'stale'); return f; })()"
+        let markup = try stage(signedOut, surface: "dial")
+        XCTAssertTrue(markup.contains("p-idle\">1 signed out"), "neutral chip")
+        XCTAssertFalse(markup.contains("p-out\">1 signed out"), "no alarm colour")
+    }
+
+    // MARK: Round 2 (tower-loop, 2026-11-11): the Week dial is the face
+
+    /// Stage markup with no surface chosen: what the page opens on.
+    private func firstStage(_ feedExpression: String) throws -> String {
+        let html = try page()
+        let open = try XCTUnwrap(html.range(of: "<script>"))
+        let close = try XCTUnwrap(html.range(of: "</script>", options: .backwards))
+        let context = try XCTUnwrap(JSContext())
+        context.evaluateScript(Self.domStub)
+        context.evaluateScript(Self.feedKit)
+        context.evaluateScript(String(html[open.upperBound..<close.lowerBound]))
+        context.evaluateScript(Self.clockKit)
+        context.evaluateScript("window.towerUpdate(\(feedExpression));")
+        return context.evaluateScript("els.stage.innerHTML")?.toString() ?? ""
+    }
+
+    func testThePageOpensOnTheWeekDial() throws {
+        let markup = try firstStage("feed()")
+        XCTAssertTrue(markup.contains("dialhero"), "the Week dial is the view that opens first")
+    }
+
+    func testAFullSeatSaysFullNotAnUpperBoundOfZero() throws {
+        let full = "(function() { var f = feed(); f.accounts.accounts[1].windows = wins(100, 'stale'); return f; })()"
+        let alt = dialRow(try stage(full, surface: "dial"), "alt")
+        XCTAssertFalse(alt.contains("≤0"), "an upper bound of zero is not a reading: \(alt)")
+        // 18.11.2026: the bare word "full" was read as 100 %. The word is "capped" and the number is always there.
+        XCTAssertTrue(alt.contains(">0 % left, capped<") && alt.contains("t-crit"), "a capped seat says its number in red: \(alt)")
+    }
+
+    /// Round 2 critic: the dial said "full" where the Dashboard said "5 %" for the same seat.
+    func testBothViewsCallAFullSeatFull() throws {
+        let full = "(function() { var f = feed(); f.accounts.accounts[1].windows = wins(96); return f; })()"
+        let dash = try stage(full, surface: "dash")
+        XCTAssertTrue(dash.contains("<td class=\"n t-crit\">4 % left, capped</td>"), "the Dashboard Room cell says the same as the dial")
+        XCTAssertFalse(dash.contains(">4 %<"), "not a bare number the dial does not show")
+    }
+
+    func testASessionWithAnEmailButNoSeatNamePrintsNoQuestionMark() throws {
+        let tagged = "feed(null, {interactive: [{label: 'lane-a', busy: true, accountEmail: 'x'}]})"
+        XCTAssertFalse(try stage(tagged, surface: "dash").contains("<span class=\"dim\">?</span>"), "a known email with no seat name is not a question mark")
+    }
+
+    // MARK: Round 3 (c): the critic's four on the Week dial
+
+    /// D: a signed-out seat's ring was drawn in the green of room. It now reads grey and dashed.
+    func testASignedOutRingIsGreyAndDashedNotGreen() throws {
+        let signedOut = "(function() { var f = feed(); f.accounts.accounts[1].lastError = 'needs login'; f.accounts.accounts[1].windows = wins(0, 'stale'); return f; })()"
+        let markup = try stage(signedOut, surface: "dial")
+        let start = try XCTUnwrap(markup.range(of: "<g data-tip=\"alt (claude)"), "the alt ring group")
+        let rest = markup[start.lowerBound...]
+        let ring = String(rest[..<(rest.range(of: "</g>")?.lowerBound ?? rest.endIndex)])
+        XCTAssertFalse(ring.contains("#62c073"), "no green on a signed-out ring: \(ring)")
+        XCTAssertTrue(ring.contains("#aab2c0") && ring.contains("stroke-dasharray"), "grey and dashed: \(ring)")
+    }
+
+    /// H: the dial list said nothing about how old each seat's number is.
+    func testEachDialRowSaysHowOldItsReadingIs() throws {
+        let markup = try stage("(function() { var f = feed(); f.accounts.accounts[1].capturedAt = iso(now - 4 * 36e5); f.accounts.accounts[1].windows = wins(10, 'stale'); return f; })()", surface: "dial")
+        XCTAssertTrue(dialRow(markup, "main").contains("read 1m ago"), dialRow(markup, "main"))
+        XCTAssertTrue(dialRow(markup, "alt").contains("read 4h ago"), dialRow(markup, "alt"))
+    }
+
+    /// The verdict line printed "40 % left, 5h," with nothing saying what 5h is.
+    func testTheVerdictLineSaysWhatTheWindowIs() throws {
+        let fiveBinds = "(function() { var f = feed(); f.accounts.accounts[0].windows = [{name: '7d', percentUsed: 30, resetsAt: iso(now + 3 * 864e5), trust: 'live'}, {name: '5h', percentUsed: 60, resetsAt: iso(now + 3 * 36e5), trust: 'live'}]; return f; })()"
+        let markup = try stage(fiveBinds, surface: "dial")
+        XCTAssertTrue(markup.contains("40 % left of the 5 hour window"), "the window is named in words")
+        XCTAssertFalse(markup.contains("left, 5h,"), "no bare 5h in the verdict line")
+    }
+
+    /// 2026-11-18 18:2x, the operator on the Week dial: "why stale wtf?". The active seat, read a minute earlier,
+    /// 7d live and no 5h window in the reply. The window is "notReported", which does not lower a live seat, so the
+    /// headline is a verdict (YES) with the week named, never PROBABLY or CAN'T TELL.
+    func testALiveSeatWithNoFiveHourWindowReadsAVerdictNotProbably() throws {
+        let notReported = """
+        (function() { var f = feed({kind: 'stay', nickname: 'main', percentUsed: 6, roomPct: null});
+          f.accounts.accounts[0].windows = [{name: '5h', percentUsed: null, resetsAt: null, trust: 'notReported'},
+            {name: '7d', percentUsed: 6, resetsAt: iso(now + 4 * 864e5), trust: 'live'}];
+          return f; })()
+        """
+        for surface in surfaces {
+            let markup = try stage(notReported, surface: surface)
+            XCTAssertFalse(markup.isEmpty, "\(surface): the page drew nothing")
+            XCTAssertTrue(markup.contains("YES"), "\(surface): a live week with no 5h window is a YES")
+            XCTAssertFalse(markup.contains("PROBABLY"), "\(surface): not reported is not a PROBABLY")
+            XCTAssertFalse(markup.contains("CAN'T TELL"), "\(surface): the week is known")
+            XCTAssertFalse(markup.contains("Tower stopped reading"), "\(surface): the seat was read a minute ago")
+        }
+    }
+
+    /// The dial lists every Claude seat's next reset, soonest first, so the switch plan reads at a glance
+    /// (operator, 2026-11-18). A seat with no known reset says "?", never a guess.
+    func testTheDialListsNextResetsSoonestFirstWithAQuestionMarkForUnknown() throws {
+        let three = """
+        (function() { var f = feed(); f.accounts.accounts = [
+          seat('late', 'claude', [{name: '7d', percentUsed: 20, resetsAt: iso(now + 5 * 864e5), trust: 'live'}], true),
+          seat('soon', 'claude', [{name: '7d', percentUsed: 30, resetsAt: iso(now + 2 * 36e5), trust: 'live'}], false),
+          seat('none', 'claude', [{name: '7d', percentUsed: null, resetsAt: null, trust: 'unknown'}], false)];
+          return f; })()
+        """
+        let markup = try stage(three, surface: "dial")
+        let start = try XCTUnwrap(markup.range(of: "Next resets, soonest first"), "the dial has no reset plan")
+        let plan = String(markup[start.lowerBound...].prefix(700))
+        let soon = try XCTUnwrap(plan.range(of: "<b>soon</b>")), late = try XCTUnwrap(plan.range(of: "<b>late</b>"))
+        let none = try XCTUnwrap(plan.range(of: "<b>none</b>"))
+        XCTAssertTrue(soon.lowerBound < late.lowerBound && late.lowerBound < none.lowerBound, "soonest first, unknown last")
+        let noneRow = String(plan[none.lowerBound...].prefix(120))
+        XCTAssertTrue(noneRow.contains(">?<"), "an unknown reset time is a question mark: \(noneRow)")
+    }
+
+    /// The control: the same seat with a truly old capture still reads CAN'T TELL with a Refresh.
+    func testTheSameSeatWithAnOldCaptureStillReadsCantTell() throws {
+        let old = """
+        (function() { var f = feed({kind: 'stay', nickname: 'main', percentUsed: 6, roomPct: null});
+          f.accounts.accounts[0].windows = [{name: '5h', percentUsed: null, resetsAt: null, trust: 'notReported'},
+            {name: '7d', percentUsed: 6, resetsAt: iso(now + 4 * 864e5), trust: 'stale'}];
+          return f; })()
+        """
+        for surface in surfaces {
+            let markup = try stage(old, surface: surface)
+            XCTAssertTrue(markup.contains("CAN'T TELL"), "\(surface): an old read is not a verdict")
+            XCTAssertFalse(markup.contains("YES"), "\(surface): an old read is not a YES")
+        }
+    }
+
+    func testTheFooterGivesTheMachineLimits() throws {
+        let sampled = "(function() { var f = feed(); f.room = {machine: {load1: 47, compressorGiB: 12, swapUsedGiB: 2, swapTotalGiB: 4, gate: {load1: 120, compressorGiB: 25}, level: 'ok', line: ''}}; return f; })()"
+        let markup = try stage(sampled, surface: "dial")
+        // 2026-11-17 live: "mem 29 of 25 GB" read as used of total. A reading names its gate, it is not a fraction of it.
+        XCTAssertTrue(markup.contains("load 47, gate 120"), "load says its gate")
+        // A feed with no total memory says compressed and its gate; it never sets compressed against a gate as "of".
+        XCTAssertTrue(markup.contains("mem compressed 12 GB, gate 25"), "memory says its gate")
+        XCTAssertFalse(markup.contains(" of 25 GB"), "never a fraction of the gate")
+    }
+
+    func testTheDashboardPrintsNoBareQuestionMarkForModelOrSessionOwner() throws {
+        let unknown = """
+        (function() { var f = feed(null, {interactive: [{label: 'lane-a', busy: true}]});
+          f.accounts.accounts[1].model = null; return f; })()
+        """
+        let markup = try stage(unknown, surface: "dash")
+        XCTAssertFalse(markup.contains("<span class=\"mchip\">?</span>"), "an unknown model is not a question mark")
+        XCTAssertFalse(markup.contains("<span class=\"dim\">?</span>"), "an unknown session owner is not a question mark")
     }
 
     /// P2 (Codex, b114): a failed session probe is "unavailable", not an idle machine.
@@ -474,6 +768,7 @@ final class DashboardFeedTests: XCTestCase {
         """)
         context.evaluateScript(Self.feedKit)
         context.evaluateScript(script)
+        context.evaluateScript(Self.clockKit)
         context.evaluateScript("window.towerUpdate(\(feedExpression));")
         if let dataAct {
             context.evaluateScript("""
@@ -516,7 +811,7 @@ final class DashboardFeedTests: XCTestCase {
         XCTAssertTrue(try stage(stale).contains("data-act=\"refresh\""))
     }
 
-    /// User's screenshot: no ready seat, four seats the Keychain would hand back after one approval.
+    /// Yonatan's screenshot: no ready seat, four seats the Keychain would hand back after one approval.
     /// The headline said WAIT and "Nothing has room" with nothing to press, so the one click that
     /// fixes it was only in the table. When Re-trust can recover seats it is the headline action.
     func testTheHeadlineOffersRetrustWhenSeatsAreLocked() throws {
@@ -627,7 +922,7 @@ final class DashboardFeedTests: XCTestCase {
         XCTAssertNil(dial.range(of: #"[0-9]{4,}d"#, options: .regularExpression), "dial: no read age of thousands of days")
     }
 
-    /// Betty/User 2026-11-07: a seat Tower has not read yet showed "?", which reads as a broken number.
+    /// Betty/Yonatan 2026-11-07: a seat Tower has not read yet showed "?", which reads as a broken number.
     /// A seat with no reading says "not yet seen"; "?" stays for a number that is genuinely unknown.
     func testASeatNeverReadSaysNotYetSeenNotAQuestionMark() throws {
         let ghost = """
@@ -708,6 +1003,281 @@ final class DashboardFeedTests: XCTestCase {
         XCTAssertEqual(page?.contains("installed-page"), true, "the page was not found through the symlink")
     }
 
+    // MARK: A stale picture, a headline seat that is not live, a title that disagrees
+    //
+    // A panel can draw a picture built a day earlier: SWITCH, one seat, 3 % left, while the menu bar names another.
+    // Three rules, from the approved design: a feed older than the
+    // freshness line draws CAN'T TELL with its age; the headline seat is active AND live; the headline seat
+    // is the seat the menu bar title names. Ages are measured against the wall clock, injected as
+    // window.towerClock, never against the feed's own generatedAt.
+
+    /// The headline region of the stage: the Week dial header, or the Dashboard's first cell.
+    private func headline(_ markup: String, surface: String) throws -> String {
+        let pattern = surface == "dial"
+            ? "<div class=\"dhead\">(.*?)<div class=\"dbody\">"
+            : "<div class=\"cell c-a\">(.*?)<div class=\"cell c-b\">"
+        let re = try NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
+        let ns = markup as NSString
+        let hit = try XCTUnwrap(re.firstMatch(in: markup, range: NSRange(location: 0, length: ns.length)), "\(surface): no headline region in the markup")
+        return ns.substring(with: hit.range(at: 1))
+    }
+
+    /// Canary: the stage drew its rows. A headline test that reads an empty stage would pass without proving anything.
+    private func assertDrawn(_ markup: String, _ nicks: [String], _ surface: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertGreaterThan(markup.count, 500, "\(surface): the stage is empty", file: file, line: line)
+        for nick in nicks {
+            XCTAssertTrue(markup.contains("<b>\(nick)</b>") || markup.contains(">\(nick)<") || markup.contains(">\(nick) "),
+                          "\(surface): the stage is missing the \(nick) row, so a headline check on it proves nothing", file: file, line: line)
+        }
+    }
+
+    /// A picture built a day earlier: alpha was the login, its 5h window at 97 percent, advice said switch.
+    private static let oldPicture = """
+    (function() { var f = feed({kind: 'switch', nickname: 'charlie', percentUsed: 0, roomPct: 100});
+      f.accounts.accounts = [
+        seat('alpha', 'claude', [{name: '5h', percentUsed: 97, resetsAt: iso(now + 3 * 36e5), trust: 'live'}, {name: '7d', percentUsed: 16, resetsAt: iso(now + 5 * 864e5), trust: 'live'}], true),
+        seat('bravo', 'claude', wins(79), false), seat('charlie', 'claude', wins(0), false)];
+      f.status = {menubarTitle: '\u{1F534}alpha 97%'};
+      return f; })()
+    """
+
+    func testAFeedOlderThanTheFreshnessLineDrawsCantTellWithItsAge() throws {
+        for surface in surfaces {
+            let markup = try stage(Self.oldPicture, surface: surface, clock: "now + 22 * 36e5")
+            assertDrawn(markup, ["bravo", "charlie"], surface)
+            let head = try headline(markup, surface: surface)
+            XCTAssertTrue(head.contains("CAN'T TELL"), "\(surface): an old picture reads CAN'T TELL: \(head)")
+            XCTAssertTrue(head.contains("22h"), "\(surface): the headline says how old the picture is: \(head)")
+            XCTAssertTrue(head.contains("Refresh now") && head.contains("data-act=\"refresh\""), "\(surface): the one action is a wired Refresh: \(head)")
+            XCTAssertFalse(head.contains("alpha"), "\(surface): no seat name in the headline of an old picture: \(head)")
+            XCTAssertFalse(head.contains("%") || head.contains("97"), "\(surface): no percent in the headline of an old picture: \(head)")
+            XCTAssertFalse(head.contains("SWITCH") || head.contains("YES"), "\(surface): an old picture gives no verdict: \(head)")
+            XCTAssertTrue(markup.contains("oldfeed"), "\(surface): the body is dimmed")
+        }
+    }
+
+    /// Control: the same feed, one minute old, is trusted and says what it knew.
+    func testTheSameFeedOneMinuteOldKeepsItsVerdictAndItsSeat() throws {
+        for surface in surfaces {
+            let markup = try stage(Self.oldPicture, surface: surface, clock: "now + 60000")
+            assertDrawn(markup, ["bravo", "charlie"], surface)
+            let head = try headline(markup, surface: surface)
+            XCTAssertTrue(head.contains("SWITCH") && head.contains("alpha"), "\(surface): a fresh feed names its seat and its verdict: \(head)")
+            XCTAssertFalse(markup.contains("oldfeed"), "\(surface): a fresh feed is not dimmed")
+        }
+    }
+
+    /// The line is the TTL the feed carries (rules.freshnessTTLSeconds), 15 minutes when it carries none.
+    func testTheFreshnessLineIsTheFeedsOwnTTLAndFifteenMinutesWithoutOne() throws {
+        let atLine = try stage("feed()", surface: "dial", clock: "now + 900 * 1000")
+        let pastLine = try stage("feed()", surface: "dial", clock: "now + 901 * 1000")
+        assertDrawn(atLine, ["main", "alt"], "dial")
+        XCTAssertFalse(try headline(atLine, surface: "dial").contains("CAN'T TELL"), "exactly 15 minutes is still fresh")
+        XCTAssertTrue(try headline(pastLine, surface: "dial").contains("CAN'T TELL"), "15 minutes and a second is old")
+        let short = "(function() { var f = feed(); f.freshness = {rules: {freshnessTTLSeconds: 60}}; return f; })()"
+        XCTAssertTrue(try headline(try stage(short, surface: "dial", clock: "now + 120 * 1000"), surface: "dial").contains("CAN'T TELL"), "the feed's own TTL (60 s) draws the line")
+        XCTAssertFalse(try headline(try stage(short, surface: "dial", clock: "now + 30 * 1000"), surface: "dial").contains("CAN'T TELL"), "inside the feed's own TTL it is fresh")
+    }
+
+    /// An active seat whose reading is past the line is never the headline seat, whatever the advice says.
+    func testAnActiveSeatWithAStaleReadingNeverNamesItselfInTheHeadline() throws {
+        let stale = "(function() { var f = feed({kind: 'switch', nickname: 'alt', percentUsed: 10}); f.accounts.accounts[0].windows = wins(97, 'stale'); f.accounts.accounts[0].capturedAt = iso(now - 19 * 36e5); return f; })()"
+        for surface in surfaces {
+            let markup = try stage(stale, surface: surface)
+            assertDrawn(markup, ["main", "alt"], surface)
+            let head = try headline(markup, surface: surface)
+            XCTAssertTrue(head.contains("CAN'T TELL"), "\(surface): a stale active seat reads CAN'T TELL: \(head)")
+            XCTAssertTrue(head.contains("19h"), "\(surface): with the age of its reading: \(head)")
+            XCTAssertFalse(head.contains("main") || head.contains("%") || head.contains("SWITCH"), "\(surface): no seat and no percent beside it: \(head)")
+        }
+    }
+
+    /// A window the reply did not carry is not reported, not stale: a live week without a 5h reading is a YES that names its seat.
+    func testAnActiveSeatWithALiveWeekAndNoFiveHourReadingStillNamesItself() throws {
+        let markup = try stage(Self.weekLiveFiveHourAbsent, surface: "dial")
+        assertDrawn(markup, ["main", "alt"], "dial")
+        let head = try headline(markup, surface: "dial")
+        XCTAssertTrue(head.contains("YES") && head.contains("main"), "a live week with no 5h window is a YES that names its seat: \(head)")
+        XCTAssertFalse(head.contains("PROBABLY"), "a window not reported is not a PROBABLY (a56baab, 2026-11-18): \(head)")
+    }
+
+    /// The headline seat is the seat the menu bar title names. Disagreement is CAN'T TELL, never a guess.
+    func testTheHeadlineSeatIsTheSeatTheMenuBarTitleNames() throws {
+        let titled = { (title: String) in "(function() { var f = feed(); f.status = {menubarTitle: '\(title)'}; return f; })()" }
+        for surface in surfaces {
+            let agree = try headline(try stage(titled("\u{1F7E2}main 40%"), surface: surface), surface: surface)
+            XCTAssertTrue(agree.contains("main") && agree.contains("YES"), "\(surface): title and headline name main: \(agree)")
+            let bare = try headline(try stage(titled("\u{26A0}\u{FE0F}main"), surface: surface), surface: surface)
+            XCTAssertTrue(bare.contains("main"), "\(surface): a title with no percent still names main: \(bare)")
+            let markup = try stage(titled("\u{1F7E2}alt 10%"), surface: surface)
+            assertDrawn(markup, ["main", "alt"], surface)
+            let differ = try headline(markup, surface: surface)
+            XCTAssertTrue(differ.contains("CAN'T TELL"), "\(surface): the title says alt, the feed says main: \(differ)")
+            XCTAssertFalse(differ.contains("main") || differ.contains("alt") || differ.contains("%"), "\(surface): no name when they differ: \(differ)")
+            let blind = try headline(try stage(titled("CC ??"), surface: surface), surface: surface)
+            XCTAssertTrue(blind.contains("CAN'T TELL"), "\(surface): a title that names no seat is not a match: \(blind)")
+        }
+    }
+
+    // The same rules against a store written the way Tower's own store is written.
+
+    private func seedStore(_ rows: [AccountSnapshot]) throws {
+        let map = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+        if let error = fixture.store.save(map) { throw NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: error]) }
+    }
+
+    private func claudeRow(_ email: String, _ nick: String, fiveHour: Double?, week: Double, readAgo: TimeInterval, error: String? = nil) -> AccountSnapshot {
+        var r = AccountSnapshot(email: email, nickname: nick, plan: "max", tier: "default_claude_max_20x")
+        r.fiveHourPct = fiveHour
+        r.fiveHourResetsAt = fiveHour == nil ? nil : fixture.now.addingTimeInterval(3 * 3600)
+        r.weeklyPct = week
+        r.weeklyResetsAt = fixture.now.addingTimeInterval(5 * 86_400)
+        r.capturedAt = fixture.now.addingTimeInterval(-readAgo)
+        r.lastError = error
+        return r
+    }
+
+    private func feedLiteral(activeEmail: String) async -> String {
+        var env = fixture.environment(verifiedActiveEmail: .some(activeEmail))
+        // The live credential names the same login the verified record does, so the bound active seat is that one.
+        let live = fixture.activeCredential()
+        env.activeCredential = {
+            ClaudeCredential(service: live.service, accessToken: live.accessToken, subscriptionType: live.subscriptionType,
+                             rateLimitTier: live.rateLimitTier, expiresAt: live.expiresAt, emailHint: activeEmail,
+                             refreshToken: live.refreshToken, scopes: live.scopes)
+        }
+        let feed = await DashboardFeed.build(service: TowerMCPService(env: env))
+        return DashboardFeed.jsLiteral(feed)
+    }
+
+    private var fixtureNowMillis: String { "\(Int(fixture.now.timeIntervalSince1970 * 1000))" }
+
+    /// The login is at 97 percent of its 5h window. The feed built then, drawn 22 hours later.
+    func testARealStoreFeedFromTheDayBeforeDrawsNoSeatAndNoPercent() async throws {
+        try seedStore([
+            claudeRow("alpha@example.com", "alpha", fiveHour: 97, week: 16, readAgo: 60),
+            claudeRow("charlie@example.com", "charlie", fiveHour: 0, week: 0, readAgo: 120),
+            claudeRow("bravo@example.com", "bravo", fiveHour: nil, week: 79, readAgo: 300),
+        ])
+        let feed = await feedLiteral(activeEmail: "alpha@example.com")
+        XCTAssertTrue(feed.contains("alpha 97%"), "canary: the menu bar title of the store's own feed names the login alpha")
+        for surface in surfaces {
+            let old = try stage(feed, surface: surface, clock: "\(fixtureNowMillis) + 22 * 36e5")
+            assertDrawn(old, ["bravo", "charlie"], surface)
+            let head = try headline(old, surface: surface)
+            XCTAssertTrue(head.contains("CAN'T TELL") && head.contains("22h"), "\(surface): \(head)")
+            XCTAssertFalse(head.contains("alpha") || head.contains("%"), "\(surface): the day-old picture named a seat and a percent: \(head)")
+            let fresh = try headline(try stage(feed, surface: surface, clock: "\(fixtureNowMillis) + 60000"), surface: surface)
+            XCTAssertTrue(fresh.contains("alpha"), "\(surface): the control (a one minute old feed) names the login: \(fresh)")
+        }
+    }
+
+    /// The login is bravo (week 79 percent, no 5h reading); alpha rests, 19 hours stale. The headline
+    /// names bravo, the seat the menu bar title names, and never alpha.
+    func testARealStoreFeedOfTodayNamesTheLoginTheMenuBarNames() async throws {
+        try seedStore([
+            claudeRow("alpha@example.com", "alpha", fiveHour: 0, week: 16, readAgo: 19.8 * 3600, error: "needs login"),
+            claudeRow("bravo@example.com", "bravo", fiveHour: nil, week: 79, readAgo: 120),
+            claudeRow("charlie@example.com", "charlie", fiveHour: 0, week: 0, readAgo: 180),
+        ])
+        let feed = await feedLiteral(activeEmail: "bravo@example.com")
+        XCTAssertTrue(feed.contains("bravo 79%"), "canary: the menu bar title of the store's own feed names the login bravo")
+        for surface in surfaces {
+            let markup = try stage(feed, surface: surface, clock: "\(fixtureNowMillis) + 60000")
+            assertDrawn(markup, ["bravo", "alpha", "charlie"], surface)
+            let head = try headline(markup, surface: surface)
+            XCTAssertTrue(head.contains("bravo"), "\(surface): the headline names the login: \(head)")
+            XCTAssertFalse(head.contains("alpha"), "\(surface): the headline never names the stale resting seat: \(head)")
+            XCTAssertFalse(head.contains("CAN'T TELL"), "\(surface): a feed one minute old is trusted: \(head)")
+        }
+    }
+
+    // MARK: The Week dial, approved mockup
+    //
+    // Beads closer than one bead width merge into one stack marker with a count; single beads are plain dots;
+    // a stale seat is a dashed ring with no bead; provider labels and ring names leave the dial; only the
+    // active seat glows. The geometry below mirrors the page's own: the big dial is 520 wide, rings run from
+    // 0.915 to 0.34 of the radius, a bead is 18 px and its marker 1.24 times that across.
+
+    private let dialRadius = 260.0 * 0.915
+    private let dialInner = 260.0 * 0.34
+    private let beadWidth = 18.0 * 1.24
+
+    /// Twelve Claude rings, the way the real dial has about a dozen: `bead` seats carry a week reset (the first of
+    /// them is the active one), the others have no reading to draw a bead from. `resets` are ms after the feed.
+    private func crowdedDial(_ resets: [Double]) -> String {
+        let beads = resets.enumerated().map { i, ms in
+            "seat('s\(i)', 'claude', [{name: '7d', percentUsed: \(10 + i * 5), resetsAt: iso(now + \(ms)), trust: 'live'}], \(i == 0 ? "true" : "false"))"
+        }
+        let bare = (resets.count..<12).map { i in
+            "seat('s\(i)', 'claude', [{name: '7d', percentUsed: null, resetsAt: null, trust: 'unknown'}], false)"
+        }
+        return "(function() { var f = feed(); f.accounts.accounts = [\((beads + bare).joined(separator: ", "))]; return f; })()"
+    }
+
+    private func dialSVG(_ markup: String) throws -> String {
+        let re = try NSRegularExpression(pattern: "<div class=\"dstage\">(<svg.*?</svg>)", options: [.dotMatchesLineSeparators])
+        let ns = markup as NSString
+        let hit = try XCTUnwrap(re.firstMatch(in: markup, range: NSRange(location: 0, length: ns.length)), "no dial in the markup")
+        return ns.substring(with: hit.range(at: 1))
+    }
+
+    private func occurrences(_ needle: String, in text: String) -> Int { text.components(separatedBy: needle).count - 1 }
+
+    /// The angle gap that puts two beads on neighbouring rings `distance` px apart.
+    private func gapMillis(forBeadDistance distance: Double, firstRing: Int) -> Double {
+        let step = (dialRadius - dialInner) / 12
+        let r1 = dialRadius - Double(firstRing) * step, r2 = r1 - step
+        let cosGap = (r1 * r1 + r2 * r2 - distance * distance) / (2 * r1 * r2)
+        return acos(cosGap) * 180 / .pi / 360 * 7 * 86_400_000
+    }
+
+    func testTwoBeadsCloserThanOneBeadWidthMergeIntoOneMarkerWithACount() throws {
+        let t0 = 3.0 * 86_400_000
+        let markup = try stage(crowdedDial([t0, t0 + gapMillis(forBeadDistance: beadWidth * 0.8, firstRing: 0)]), surface: "dial")
+        assertDrawn(markup, ["s0", "s1", "s11"], "dial")
+        let dial = try dialSVG(markup)
+        XCTAssertEqual(occurrences("class=\"stack\"", in: dial), 1, "two close beads are one marker")
+        XCTAssertEqual(occurrences("class=\"bead\"", in: dial), 0, "no loose bead is left beside the marker")
+        XCTAssertTrue(dial.contains(">2</text>"), "the marker carries the count")
+        XCTAssertTrue(dial.contains("s0") && dial.contains("s1"), "the marker's hover names both seats")
+    }
+
+    func testTwoBeadsJustFartherApartThanOneBeadWidthStayTwoMarkers() throws {
+        let t0 = 3.0 * 86_400_000
+        let markup = try stage(crowdedDial([t0, t0 + gapMillis(forBeadDistance: beadWidth * 1.2, firstRing: 0)]), surface: "dial")
+        assertDrawn(markup, ["s0", "s1", "s11"], "dial")
+        let dial = try dialSVG(markup)
+        XCTAssertEqual(occurrences("class=\"bead\"", in: dial), 2, "two beads one width and a bit apart stay two")
+        XCTAssertEqual(occurrences("class=\"stack\"", in: dial), 0, "no marker, no count")
+    }
+
+    /// Six seats on one reset, the shape of the real week: one marker that says 6.
+    func testSixSeatsOnOneResetDrawOneMarkerThatSaysSix() throws {
+        let t0 = 6.75 * 86_400_000
+        let dial = try dialSVG(try stage(crowdedDial(Array(repeating: t0, count: 6)), surface: "dial"))
+        XCTAssertEqual(occurrences("class=\"stack\"", in: dial), 1)
+        XCTAssertEqual(occurrences("class=\"bead\"", in: dial), 0)
+        XCTAssertTrue(dial.contains(">6</text>"))
+    }
+
+    func testProviderLabelsAndRingNamesLeaveTheDial() throws {
+        let dial = try dialSVG(try stage("feed()", surface: "dial"))
+        XCTAssertFalse(dial.contains("<use "), "no provider icon on the dial; the legend names the providers")
+        XCTAssertFalse(dial.contains("class=\"rl\""), "the names live in the list beside the dial, not on the rings")
+    }
+
+    func testAStaleSeatIsADashedRingWithNoBeadAndOnlyTheActiveSeatGlows() throws {
+        let staleAlt = "(function() { var f = feed(); f.accounts.accounts[1].windows = wins(40, 'stale'); f.accounts.accounts[1].capturedAt = iso(now - 19 * 36e5); f.accounts.accounts[0].windows = wins(85); return f; })()"
+        let markup = try stage(staleAlt, surface: "dial")
+        assertDrawn(markup, ["main", "alt"], "dial")
+        let dial = try dialSVG(markup)
+        XCTAssertEqual(occurrences("class=\"stalering\"", in: dial), 1, "the stale seat is one dashed ring")
+        XCTAssertTrue(dial.contains("stale"), "and its hover says stale, not colour alone")
+        XCTAssertEqual(occurrences("class=\"bead\"", in: dial), 1, "only the live seat keeps a bead")
+        XCTAssertEqual(occurrences("halo", in: dial), 1, "only the active seat glows")
+    }
+
     // MARK: What the menu bar opens
 
     func testMenuBarOpensTheDashboardByDefaultAndClassicStaysOneSettingAway() {
@@ -717,5 +1287,168 @@ final class DashboardFeedTests: XCTestCase {
         XCTAssertEqual(PanelSurface.current(defaults: d), .classic)
         d.set("garbage", forKey: PanelSurface.defaultsKey)
         XCTAssertEqual(PanelSurface.current(defaults: d), .dashboard)
+    }
+
+    // MARK: Seat state truth, 18.11.2026 (his screens 09:09 to 09:11 against Tower)
+    //
+    // The fixture clock is Sat 07.11.2026 10:00 UTC (12:00 in Jerusalem). Each test names the seat it
+    // stands for; the numbers (48 %, 100 %, 96 %, 99 %, 170.88, 30 of 25) are the ones on his screens.
+
+    private func altRow(_ markup: String) -> String { dialRow(markup, "alt") }
+
+    /// Row 1, ops7: 48 % used, usable, no longer the login. Tower said "/login" and "signed out".
+    func testASeatTheLoginLeftKeepsItsNumberAndIsNotSignedOut() throws {
+        let ops7 = "(function() { var f = feed(); var a = f.accounts.accounts[1]; a.lastError = 'not polled'; a.windows = wins(48, 'stale'); a.capturedAt = iso(now - 16 * 6e4); return f; })()"
+        let alt = altRow(try stage(ops7, surface: "dial"))
+        XCTAssertTrue(alt.contains("≤52 %"), "the 09:01 reading stays, as an upper bound: \(alt)")
+        XCTAssertTrue(alt.contains("stale since Sat 11:44"), "the time of the last read, not a guess: \(alt)")
+        XCTAssertFalse(alt.contains("/login"), "no sign-in asked of a usable seat: \(alt)")
+        XCTAssertFalse(alt.contains("signed out"), alt)
+    }
+
+    /// Row 2, ops6: 100 % used, read 2 h 25 m ago, no token Tower can poll. It shows its number and "stale since".
+    func testAStaleFullSeatSaysStaleSinceAndKeepsItsNumber() throws {
+        let ops6 = "(function() { var f = feed(); var a = f.accounts.accounts[1]; a.lastError = 'not polled'; a.windows = [{name: '7d', percentUsed: 100, resetsAt: iso(now + 2 * 864e5), trust: 'stale'}]; a.capturedAt = iso(now - 145 * 6e4); return f; })()"
+        let alt = altRow(try stage(ops6, surface: "dial"))
+        XCTAssertTrue(alt.contains(">0 % left, capped<"), alt)
+        XCTAssertTrue(alt.contains("stale since Sat 09:35"), alt)
+        XCTAssertFalse(alt.contains("/login"), alt)
+    }
+
+    /// Control for rows 1 and 2: a seat whose sign-in really failed still asks for the login.
+    func testASeatWhoseSignInFailedStillAsksForTheLogin() throws {
+        let out = "(function() { var f = feed(); var a = f.accounts.accounts[1]; a.lastError = 'needs login: refresh token rejected'; a.windows = wins(48, 'stale'); return f; })()"
+        let alt = altRow(try stage(out, surface: "dial"))
+        XCTAssertTrue(alt.contains("signed out"), alt)
+        XCTAssertTrue(alt.contains("class=\"n act\">/login<"), alt)
+    }
+
+    /// Rows 3 and 4, ops5 96 % and ops4 99 %: the word is "capped" and the number is always printed.
+    func testACappedSeatPrintsItsNumberOnBothViews() throws {
+        for (used, left) in [(96, 4), (99, 1)] {
+            let f = "(function() { var f = feed(); f.accounts.accounts[1].windows = wins(\(used)); return f; })()"
+            let dial = altRow(try stage(f, surface: "dial"))
+            XCTAssertTrue(dial.contains(">\(left) % left, capped<"), "dial, \(used) % used: \(dial)")
+            XCTAssertFalse(dial.contains(">full<"), dial)
+            let dash = try stage(f, surface: "dash")
+            XCTAssertTrue(dash.contains("<td class=\"n t-crit\">\(left) % left, capped</td>"), "dashboard, \(used) % used")
+        }
+    }
+
+    /// Control for rows 3 and 4: 94 % used is under the cap and reads as before.
+    func testASeatUnderTheCapIsUnchanged() throws {
+        let f = "(function() { var f = feed(); f.accounts.accounts[1].windows = wins(94); return f; })()"
+        let alt = altRow(try stage(f, surface: "dial"))
+        XCTAssertTrue(alt.contains(">6 %<") && !alt.contains("capped"), alt)
+    }
+
+    /// Row 6, yai2g: the live active seat at 76 % used reads as it did before (24 % left, no stale, no capped).
+    func testTheLiveActiveSeatRowIsUnchanged() throws {
+        let f = "(function() { var f = feed(); f.accounts.accounts[0].windows = wins(76); return f; })()"
+        let markup = try stage(f, surface: "dial")
+        let main = dialRow(markup, "main")
+        XCTAssertTrue(main.contains(">24 %<"), main)
+        XCTAssertFalse(main.contains("stale") || main.contains("capped") || main.contains("/login"), main)
+    }
+
+    /// Row 9, the footer: ops6 (100 %) is named with the other seats over the mark.
+    func testTheFooterNamesAStaleFullSeatToo() throws {
+        let both = """
+        (function() { var f = feed(); var a = f.accounts.accounts[1]; a.lastError = 'not polled';
+          a.windows = [{name: '7d', percentUsed: 100, resetsAt: iso(now + 2 * 864e5), trust: 'stale'}]; a.capturedAt = iso(now - 145 * 6e4);
+          f.alerts.accounts = [{nickname: 'main', provider: 'claude', crossing: 'red', announced: [], pending: []},
+                               {nickname: 'alt', provider: 'claude', crossing: 'red', announced: [], pending: []}]; return f; })()
+        """
+        XCTAssertTrue(try stage(both, surface: "dial").contains("main, alt used 90 % or more"))
+    }
+
+    /// Row 10: memory used and total, and compressed apart. "30 of 25 GB" set compressed memory against a gate mark.
+    func testMemoryReadsUsedOfTotalAndCompressedApart() throws {
+        let machine = """
+        (function() { var f = feed(); f.room = {machine: {load1: 8, compressorGiB: 30, swapUsedGiB: 0, swapTotalGiB: 1, memUsedGiB: 41, memTotalGiB: 64, level: 'red', line: '', gate: {load1: 120, compressorGiB: 25}}}; return f; })()
+        """
+        for surface in surfaces {
+            let markup = try stage(machine, surface: surface)
+            XCTAssertTrue(markup.contains("mem 41 of 64 GB, compressed 30 GB"), "\(surface): \(markup.suffix(600))")
+            XCTAssertFalse(markup.contains("30 of 25"), surface)
+        }
+    }
+
+    /// Row 10, an old feed with no total memory: compressed memory with its gate, never "of" a gate as if it were the total.
+    func testMemoryWithoutATotalSaysCompressedAndItsGate() throws {
+        let machine = "(function() { var f = feed(); f.room = {machine: {load1: 8, compressorGiB: 30, swapUsedGiB: 0, swapTotalGiB: 1, level: 'red', line: '', gate: {load1: 120, compressorGiB: 25}}}; return f; })()"
+        let markup = try stage(machine, surface: "dial")
+        XCTAssertTrue(markup.contains("mem compressed 30 GB, gate 25"), String(markup.suffix(600)))
+        XCTAssertFalse(markup.contains("30 of 25"))
+    }
+
+    /// Row 11: "runs out lasts". The headline is a sentence in every case.
+    func testTheHeadlineIsNeverRunsOutLasts() throws {
+        let slow = try stage("feed()", surface: "dial")
+        XCTAssertFalse(slow.contains("runs out lasts"), "broken text")
+        XCTAssertTrue(slow.contains("burning 0.7× the even rate, lasts past its reset"), String(slow.prefix(1500)))
+        let fast = "(function() { var f = feed(); f.accounts.accounts[0].windows = wins(80); return f; })()"
+        let markup = try stage(fast, surface: "dial")
+        XCTAssertTrue(markup.contains("burning 1.4× the even rate, runs out in ~24h"), String(markup.prefix(1500)))
+        XCTAssertFalse(markup.contains("runs out ~"))
+    }
+
+    // MARK: Rows 7 and 8, the manual entry
+
+    private static let manualFeed = """
+    (function() { var f = feed(); f.manual = {source: 'manual entry, his screens, 18.11.2026 09:09 to 09:11', live: false, enteredAt: iso(now - 3 * 36e5),
+      resets: [{nickname: 'ops3', kind: 'Fable', count: 2, expires: '2027-03-09'}, {nickname: 'ops3', kind: 'New model', count: 2, expires: '2027-03-09'},
+               {nickname: 'ops5', kind: 'Fable', count: 2, expires: '2027-03-09'}, {nickname: 'ops5', kind: 'New model', count: 2, expires: '2027-03-09'},
+               {nickname: 'ops6', kind: 'Fable', count: 1, expires: '2027-03-09'}, {nickname: 'ops7', kind: 'Fable', count: 1, expires: '2027-03-09'}],
+      credits: [{nickname: 'ops7', balanceUSD: 170.88, switch: 'off'}]}; return f; })()
+    """
+
+    func testTheManualEntryIsDrawnWithItsLabelAndAge() throws {
+        for surface in surfaces {
+            let markup = try stage(Self.manualFeed, surface: surface)
+            XCTAssertTrue(markup.contains("Free resets and credits: manual entry, his screens, 18.11.2026 09:09 to 09:11, entered 3h 0m ago, not a live reading"), surface)
+            XCTAssertTrue(markup.contains("ops3: 2 Fable, 2 New model, expire 9.3.2027"), surface)
+            XCTAssertTrue(markup.contains("ops5: 2 Fable, 2 New model, expire 9.3.2027"), surface)
+            XCTAssertTrue(markup.contains("ops6: 1 Fable, expire 9.3.2027"), surface)
+            XCTAssertTrue(markup.contains("ops7: 1 Fable, expire 9.3.2027"), surface)
+            XCTAssertTrue(markup.contains("ops7: credits $170.88, switch off"), surface)
+        }
+    }
+
+    /// Control: no manual entry in the feed, nothing drawn and nothing invented.
+    func testNoManualEntryDrawsNothing() throws {
+        for surface in surfaces {
+            XCTAssertFalse(try stage("feed()", surface: surface).contains("Free resets and credits"), surface)
+        }
+    }
+
+    // MARK: Row 12, readings older than the resting line
+
+    private static let oldCursor = """
+    (function() { var f = feed(); var c = seat('alt', 'cursor', [{name: 'Cursor Models', percentUsed: 0, resetsAt: iso(now + 20 * 864e5), trust: 'stale'}], false);
+      c.capturedAt = '2026-10-23T16:38:00Z'; c.lastError = 'Cursor session refused (HTTP 401) on the editor usage route'; f.accounts.accounts = [f.accounts.accounts[0], c]; return f; })()
+    """
+
+    func testAReadingOlderThanADayShowsStaleSinceAndNoNumber() throws {
+        let markup = try stage(Self.oldCursor, surface: "dial")
+        let alt = altRow(markup)
+        XCTAssertTrue(alt.contains("stale since Fri 23.10 19:38"), alt)
+        XCTAssertTrue(alt.contains("class=\"n sec\">?<"), "an unreadable value is a question mark: \(alt)")
+        XCTAssertFalse(alt.contains("100 %") || alt.contains("≤0") , alt)
+        XCTAssertTrue(markup.contains("refresh: sign in again in Cursor"), "the one step that refreshes it")
+    }
+
+    func testDevinsStaleReadingNamesItsOwnStep() throws {
+        let devin = "(function() { var f = feed(); var d = seat('alt', 'devin', [{name: 'Weekly', percentUsed: 0, resetsAt: iso(now + 5 * 864e5), trust: 'stale'}], false); d.capturedAt = iso(now - 2 * 864e5); f.accounts.accounts = [f.accounts.accounts[0], d]; return f; })()"
+        let markup = try stage(devin, surface: "dial")
+        XCTAssertTrue(markup.contains("refresh: start a Devin session"), String(markup.prefix(800)))
+        XCTAssertTrue(altRow(markup).contains("stale since Thu 05.11 12:00"), altRow(markup))
+    }
+
+    /// Control: a reading 19 hours old keeps its number as an upper bound (the existing rule), with "stale since".
+    func testAReadingUnderADayKeepsItsUpperBound() throws {
+        let f = "(function() { var f = feed(); var a = f.accounts.accounts[1]; a.windows = wins(40, 'stale'); a.capturedAt = iso(now - 19 * 36e5); return f; })()"
+        let alt = altRow(try stage(f, surface: "dial"))
+        XCTAssertTrue(alt.contains("≤60 %"), alt)
     }
 }
