@@ -979,12 +979,16 @@ enum OpenRouter {
     /// The account publishes its own ceiling, so read it rather than guess; the manual
     /// `monthlyBudgetUSD` key stays as an override for a self-imposed cap.
     static func fetch(
+        isConfigured: @escaping () -> Bool = { KeySource.current().isConfigured },
         readKey: @escaping () -> String? = { apiKey() },
         clearCache: @escaping () -> Bool = { clearKeyCache() },
         request: @escaping (URLRequest) async throws -> (Data, URLResponse) = { request in
             try await URLSession.shared.data(for: request)
         }
     ) async -> Outcome {
+        // No source at all means this user does not use OpenRouter: hide the section.
+        // A configured source that yields nothing is a failure and stays visible.
+        guard isConfigured() else { return .notConfigured }
         guard let key = readKey(), let url = URL(string: endpoint) else { return .unavailable }
         let fingerprint = Self.fingerprint(for: key)
         let lastSuccess = lastSuccessTime()

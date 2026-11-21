@@ -25,7 +25,10 @@ struct TowerMCPService: MCPService {
         /// renew need it; nothing else calls it.
         var activeCredential: () -> ClaudeCredential?
         var vault: ClaudeSeatVault
-        var renew: (ClaudeCredential) async throws -> ClaudeCredential
+        /// Defaulted so fixtures that predate tower_renew still build.
+        var renew: (ClaudeCredential) async throws -> ClaudeCredential = { _ in
+            throw ClaudeSeatRenewal.Unavailable(message: "renewal not injected")
+        }
         var defaults: UserDefaults
         var launchAtLogin: () -> Bool
         var setLaunchAtLogin: (Bool) -> String?

@@ -15,15 +15,15 @@ final class SharedNicknameTests: XCTestCase {
     func testASharedNicknameCarriesItsProduct() {
         let claude = seat("eve", nil)
         let codex = seat("eve", .codex)
-        let rows = [claude, codex, seat("account-b", nil)]
+        let rows = [claude, codex, seat("ops3", nil)]
         XCTAssertEqual(AccountSnapshot.listName(claude, among: rows), "eve · claude")
         XCTAssertEqual(AccountSnapshot.listName(codex, among: rows), "eve · codex")
     }
 
     func testAUniqueNicknameStaysBare() {
-        let rows = [seat("eve", nil), seat("eve", .codex), seat("account-b", nil)]
-        XCTAssertEqual(AccountSnapshot.listName(rows[2], among: rows), "account-b")
-        XCTAssertEqual(AccountSnapshot.listName(seat("ana", nil), among: [seat("ana", nil)]), "ana")
+        let rows = [seat("eve", nil), seat("eve", .codex), seat("ops3", nil)]
+        XCTAssertEqual(AccountSnapshot.listName(rows[2], among: rows), "ops3")
+        XCTAssertEqual(AccountSnapshot.listName(seat("alt3", nil), among: [seat("alt3", nil)]), "alt3")
     }
 
     func testTheSameSeatTwiceIsNotADuplicate() {

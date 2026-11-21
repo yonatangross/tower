@@ -66,9 +66,9 @@ final class SessionAttributionTests: XCTestCase {
 
     func testDefaultConfigSwitchDoesNotRelabelAnExistingSession() throws {
         let fixture = try Fixture()
-        try fixture.writeConfig(email: "user-e@example.com", owner: "session-owner",
+        try fixture.writeConfig(email: "user-c@example.com", owner: "session-owner",
                                 at: fixture.configRoot.appendingPathComponent("accounts/old.json"))
-        try fixture.writeConfig(email: "user-a@example.com", owner: "active-owner")
+        try fixture.writeConfig(email: "user-f@example.com", owner: "active-owner")
         try fixture.writeTranscript(bridge("session-owner"))
         let first = try fixture.summary()
         XCTAssertEqual(first.groups.first?.accountEmail, "user-e@example.com")
@@ -130,14 +130,14 @@ final class SessionAttributionTests: XCTestCase {
         let fixture = try Fixture()
         let reset = Date(timeIntervalSince1970: 2_000_010_800)
         try fixture.writeQuotaCache([
-            "fay@example.com": snapshot(email: "fay@example.com", reset: reset),
+            "main@example.com": snapshot(email: "main@example.com", reset: reset),
             "other@example.com": snapshot(email: "other@example.com", reset: reset.addingTimeInterval(3_600)),
         ])
         try fixture.writeTranscript("{\"type\":\"assistant\",\"quotaLimits\":{\"resetsAt\":2000010800000}}")
 
         let group = try XCTUnwrap(fixture.summary().groups.first)
-        XCTAssertEqual(group.accountEmail, "fay@example.com")
-        XCTAssertEqual(group.accountLabel, "fay")
+        XCTAssertEqual(group.accountEmail, "main@example.com")
+        XCTAssertEqual(group.accountLabel, "main")
         XCTAssertEqual(try fixture.summary().interactive.first?.accountEvidence, "inferred from transcript reset")
     }
 
@@ -279,12 +279,12 @@ final class SessionAttributionTests: XCTestCase {
         let fixture = try Fixture()
         let reset = Date(timeIntervalSince1970: 2_000_010_800)
         try fixture.writeQuotaCache([
-            "fay@example.com": snapshot(email: "fay@example.com", reset: reset),
+            "main@example.com": snapshot(email: "main@example.com", reset: reset),
             "decoy@example.com": snapshot(email: "decoy@example.com", reset: reset.addingTimeInterval(3_600),
                                           weekly: reset),
         ])
         try fixture.writeTranscript("{\"quotaLimits\":{\"resetsAt\":2000010800,\"rateLimitType\":\"five_hour\"}}")
-        XCTAssertEqual(try fixture.summary().groups.first?.accountEmail, "fay@example.com")
+        XCTAssertEqual(try fixture.summary().groups.first?.accountEmail, "main@example.com")
     }
 
     func testUnknownTranscriptRateLimitTypeIsUnusableAndNeverFallsBack() throws {
@@ -293,7 +293,7 @@ final class SessionAttributionTests: XCTestCase {
             let fixture = try Fixture()
             try fixture.writeConfig(email: "old@example.com", owner: "old-owner")
             try fixture.writeQuotaCache([
-                "fay@example.com": snapshot(email: "fay@example.com", reset: reset, weekly: reset),
+                "main@example.com": snapshot(email: "main@example.com", reset: reset, weekly: reset),
             ])
             try fixture.writeTranscript(bridge("old-owner")
                 + "\n{\"quotaLimits\":{\"resetsAt\":2000010800,\"rateLimitType\":\(type)}}")
@@ -309,29 +309,29 @@ final class SessionAttributionTests: XCTestCase {
         let fixture = try Fixture()
         let reset = Date(timeIntervalSince1970: 2_000_010_800)
         try fixture.writeQuotaCache([
-            "fay@example.com": snapshot(email: "fay@example.com", reset: reset),
+            "main@example.com": snapshot(email: "main@example.com", reset: reset),
             "other@example.com": snapshot(email: "other@example.com", reset: reset.addingTimeInterval(3_600)),
         ])
         try fixture.writeTranscript("{\"type\":\"user\"}\n{\"type\":\"custom-title\"}")
         try fixture.writeAnchor("2000010800|2000097200|1790000000\n")
 
         let session = try XCTUnwrap(fixture.summary().interactive.first)
-        XCTAssertEqual(session.accountEmail, "fay@example.com")
+        XCTAssertEqual(session.accountEmail, "main@example.com")
         XCTAssertEqual(session.accountEvidence, "inferred from statusline reset")
-        XCTAssertEqual(try fixture.summary().groups.first?.accountLabel, "fay")
+        XCTAssertEqual(try fixture.summary().groups.first?.accountLabel, "main")
 
         try FileManager.default.removeItem(at: fixture.transcript)
-        XCTAssertEqual(try fixture.summary().groups.first?.accountEmail, "fay@example.com",
+        XCTAssertEqual(try fixture.summary().groups.first?.accountEmail, "main@example.com",
                        "the anchor is keyed by session id and needs no transcript")
     }
 
     func testStatuslineAnchorKeepsTheNinetySecondTolerance() throws {
         let fixture = try Fixture()
         try fixture.writeQuotaCache([
-            "fay@example.com": snapshot(email: "fay@example.com", reset: Date(timeIntervalSince1970: 2_000_010_800)),
+            "main@example.com": snapshot(email: "main@example.com", reset: Date(timeIntervalSince1970: 2_000_010_800)),
         ])
         try fixture.writeAnchor("2000010845||1790000000")
-        XCTAssertEqual(try fixture.summary().groups.first?.accountEmail, "fay@example.com")
+        XCTAssertEqual(try fixture.summary().groups.first?.accountEmail, "main@example.com")
         try fixture.writeAnchor("2000011100||1790000000")
         XCTAssertNil(try fixture.summary().groups.first?.accountEmail)
     }

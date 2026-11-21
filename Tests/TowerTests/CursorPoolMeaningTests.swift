@@ -4,15 +4,15 @@ import XCTest
 
 /// 2026-09-22: the Cursor row at 97 to 100 % was the METERED pool that Opus spends, while
 /// Cursor Auto is unmetered. The row said "capped 100%" under dashboard names ("Cursor
-/// Models", "Other Models"), and conductors twice read the seat as dead.
+/// Models", "Other Models"), and reviewers twice read the seat as dead.
 final class CursorPoolMeaningTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
 
     private func cursor(auto: Double?, metered: Double?, capturedAgo: TimeInterval = 30) -> AccountSnapshot {
-        let reading = CursorUsage.Reading(email: "user-e@example.com", plan: "ultra",
+        let reading = CursorUsage.Reading(email: "user-c@example.com", plan: "ultra",
                                           cursorModelsPct: auto, otherModelsPct: metered,
                                           periodResetsAt: now.addingTimeInterval(86_400))
-        var snap = AccountSnapshot(email: reading.email, nickname: "ben", plan: "ultra")
+        var snap = AccountSnapshot(email: reading.email, nickname: "alt4", plan: "ultra")
         CursorUsage.apply(reading, to: &snap, now: now.addingTimeInterval(-capturedAgo))
         return snap
     }
