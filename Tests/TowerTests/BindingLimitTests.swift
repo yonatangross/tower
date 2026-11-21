@@ -21,9 +21,9 @@ final class BindingLimitTests: XCTestCase {
     func testNamedCappedSeatsChooseTheirActualBindingAggregate() throws {
         let expected: [(AccountSnapshot, AccountSnapshot.BindingLimit)] = [
             (seat("eve", five: 100, weekly: 40), .fiveHour),
-            (seat("ana", five: 95, weekly: 30), .fiveHour),
-            (seat("ben", five: 20, weekly: 100), .sevenDay),
-            (seat("dee", five: 10, weekly: 95), .sevenDay),
+            (seat("alt3", five: 95, weekly: 30), .fiveHour),
+            (seat("alt4", five: 20, weekly: 100), .sevenDay),
+            (seat("alt2", five: 10, weekly: 95), .sevenDay),
         ]
 
         for (account, limit) in expected {
@@ -36,7 +36,7 @@ final class BindingLimitTests: XCTestCase {
     }
 
     func testFableAtOneHundredWinsAndNamesAlternateModels() throws {
-        let account = seat("cal", five: 1, weekly: 100, fable: 100)
+        let account = seat("alt1", five: 1, weekly: 100, fable: 100)
         let binding = try XCTUnwrap(account.bindingQuota(now: now))
 
         XCTAssertEqual(binding.limit, .fable, "Fable cap takes precedence over aggregate caps")

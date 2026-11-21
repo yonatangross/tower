@@ -127,7 +127,7 @@ extension JSON: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral,
 /// The handful of JSON Schema checks the tests and the server apply to their own
 /// payloads: type, required keys, enum, and nested properties and items. This is not
 /// a full validator; it is enough to prove every `structuredContent` a tool returns
-/// matches the `outputSchema` it advertised, which is the contract a conductor reads.
+/// matches the `outputSchema` it advertised, which is the contract a client reads.
 enum JSONSchemaCheck {
     struct Failure: Error, CustomStringConvertible {
         let path: String

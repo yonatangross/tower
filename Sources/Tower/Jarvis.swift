@@ -96,7 +96,7 @@ struct AgentSummary: Equatable {
             && a.anchorsPublished == b.anchorsPublished
     }
 
-    /// "dee 9 · ben 4", sessions per resolved account, most first, with any unresolved
+    /// "alt2 9 · alt4 4", sessions per resolved account, most first, with any unresolved
     /// ones counted as "? N". nil when nothing resolved: `unattributedReason` speaks then.
     var accountTally: String? {
         var counts: [String: Int] = [:]

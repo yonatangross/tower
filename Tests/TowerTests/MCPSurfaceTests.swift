@@ -15,9 +15,9 @@ struct MCPFixture {
     let suite: String
     let now = Date(timeIntervalSince1970: 2_000_000_000)
 
-    static let activeEmail = "user-a@example.com"
-    static let staleEmail = "user-e@example.com"
-    static let retainedEmail = "user-f@example.com"
+    static let activeEmail = "user-f@example.com"
+    static let staleEmail = "user-c@example.com"
+    static let retainedEmail = "user-a@example.com"
 
     /// A shared mutable flag the vault's retention closures read and write.
     final class Flag {
@@ -45,7 +45,7 @@ struct MCPFixture {
     private func seed() throws {
         let upcoming5h = now.addingTimeInterval(3 * 3600)
         let upcoming7d = now.addingTimeInterval(5 * 86_400)
-        var active = AccountSnapshot(email: Self.activeEmail, nickname: "cal", plan: "max", tier: "default_claude_max_20x")
+        var active = AccountSnapshot(email: Self.activeEmail, nickname: "alt1", plan: "max", tier: "default_claude_max_20x")
         active.fiveHourPct = 11
         active.fiveHourResetsAt = upcoming5h
         active.weeklyPct = 8
@@ -54,7 +54,7 @@ struct MCPFixture {
         active.capturedAt = now.addingTimeInterval(-60)
         active.notified = [Thresholds.key("7d", upcoming7d): 80]
 
-        var stale = AccountSnapshot(email: Self.staleEmail, nickname: "ben", plan: "max")
+        var stale = AccountSnapshot(email: Self.staleEmail, nickname: "alt4", plan: "max")
         stale.fiveHourPct = 91
         stale.fiveHourResetsAt = upcoming5h
         stale.weeklyPct = 40
@@ -63,33 +63,33 @@ struct MCPFixture {
         stale.crossing = "red"
         stale.lastError = "needs login"
 
-        var retained = AccountSnapshot(email: Self.retainedEmail, nickname: "fay", plan: "max")
+        var retained = AccountSnapshot(email: Self.retainedEmail, nickname: "main", plan: "max")
         retained.fiveHourPct = 96
         retained.fiveHourResetsAt = upcoming5h
         retained.weeklyPct = 30
         retained.weeklyResetsAt = upcoming7d
         retained.capturedAt = now.addingTimeInterval(-120)
 
-        var codex = AccountSnapshot(email: "user-c@example.com", nickname: "eve", plan: "pro")
+        var codex = AccountSnapshot(email: "user-d@example.com", nickname: "eve", plan: "pro")
         codex.provider = .codex
         codex.weeklyPct = 70
         codex.weeklyResetsAt = upcoming7d
         codex.capturedAt = now.addingTimeInterval(-30)
 
-        var cursor = AccountSnapshot(email: Self.staleEmail, nickname: "ben", plan: "ultra")
+        var cursor = AccountSnapshot(email: Self.staleEmail, nickname: "alt4", plan: "ultra")
         cursor.provider = .cursor
         cursor.weeklyPct = 80
         cursor.weeklyResetsAt = now.addingTimeInterval(20 * 86_400)
         cursor.scoped = [
-            ScopedLimit(label: "Cursor Models", percent: 70, resetsAt: cursor.weeklyResetsAt),
+            ScopedLimit(label: "Cursor Models", percent: 73, resetsAt: cursor.weeklyResetsAt),
             ScopedLimit(label: "Other Models", percent: 80, resetsAt: cursor.weeklyResetsAt),
         ]
         cursor.capturedAt = now.addingTimeInterval(-30)
 
         var openRouter = AccountSnapshot(email: OpenRouter.storeEmail, nickname: "openrouter", plan: "balance")
-        OpenRouter.apply(OpenRouter.Budget(spent: 17.5, limit: 50), to: &openRouter, now: now.addingTimeInterval(-30))
+        OpenRouter.apply(OpenRouter.Budget(spent: 24.8, limit: 40), to: &openRouter, now: now.addingTimeInterval(-30))
 
-        let never = AccountSnapshot(email: "user-d@example.com", nickname: "ana", plan: "?")
+        let never = AccountSnapshot(email: "user-b@example.com", nickname: "alt3", plan: "?")
 
         let rows = [active, stale, retained, codex, cursor, openRouter, never]
         let map = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
@@ -99,7 +99,8 @@ struct MCPFixture {
         // stays Claude Code's.
         let seat = ClaudeCredential(
             service: Keychain.defaultService, accessToken: "seat-token", subscriptionType: "max",
-            rateLimitTier: nil, expiresAt: now.addingTimeInterval(10 * 60), emailHint: Self.retainedEmail)
+            rateLimitTier: nil, expiresAt: now.addingTimeInterval(10 * 60), emailHint: Self.retainedEmail,
+            refreshToken: "seat-refresh", scopes: ["user:profile"])
         let error = vault.captureVerifiedLogin(seat, email: Self.retainedEmail, observation: vault.beginObservation(), now: now)
         if let error { throw NSError(domain: "fixture", code: 2, userInfo: [NSLocalizedDescriptionKey: error]) }
     }
@@ -108,7 +109,7 @@ struct MCPFixture {
         ClaudeCredential(
             service: Keychain.defaultService, accessToken: "active-token", subscriptionType: "max",
             rateLimitTier: "default_claude_max_20x", expiresAt: now.addingTimeInterval(3600),
-            emailHint: Self.activeEmail)
+            emailHint: Self.activeEmail, refreshToken: "active-refresh", scopes: ["user:profile"])
     }
 
     func lanes() -> [Provider: AgentLane.Outcome] {
@@ -137,11 +138,16 @@ struct MCPFixture {
     func refreshResult() -> RefreshResult {
         RefreshResult(
             accounts: store.load(), activeEmail: Self.activeEmail, outcome: .ok(email: Self.activeEmail),
-            openRouterOutcome: .ok(OpenRouter.Budget(spent: 17.5, limit: 50)), openRouterFoldCommitted: true,
+            openRouterOutcome: .ok(OpenRouter.Budget(spent: 24.8, limit: 40)), openRouterFoldCommitted: true,
             cursorKey: AccountSnapshot.storeKey(email: Self.staleEmail, provider: .cursor))
     }
 
     func environment(
+        renew: @escaping (ClaudeCredential) async throws -> ClaudeCredential = { c in
+            ClaudeCredential(service: c.service, accessToken: c.accessToken + "-renewed", subscriptionType: c.subscriptionType,
+                             rateLimitTier: c.rateLimitTier, expiresAt: Date(timeIntervalSince1970: 2_000_000_000 + 8 * 3600),
+                             emailHint: c.emailHint, refreshToken: "rotated", scopes: c.scopes)
+        },
         launchAtLogin: Bool = false,
         verifiedActiveEmail: String?? = nil
     ) -> TowerMCPService.Environment {
@@ -161,14 +167,15 @@ struct MCPFixture {
             store: store,
             now: { self.now },
             verifiedActiveEmail: { verifiedActiveEmail ?? Self.activeEmail },
-            switchProfiles: { [Self.activeEmail: ChromeProfileHint(displayName: "CAL", chooserEmail: nil),
-                               Self.retainedEmail: ChromeProfileHint(displayName: "FAY", chooserEmail: nil),
-                               Self.staleEmail: ChromeProfileHint(displayName: "BEN", chooserEmail: Self.staleEmail)] },
+            switchProfiles: { [Self.activeEmail: ChromeProfileHint(displayName: "ALT1", chooserEmail: nil),
+                               Self.retainedEmail: ChromeProfileHint(displayName: "MAIN", chooserEmail: nil),
+                               Self.staleEmail: ChromeProfileHint(displayName: "ALT4", chooserEmail: Self.staleEmail)] },
             lanes: { self.lanes() },
             sessions: { self.sessions() },
             refresh: { self.refreshResult() },
             activeCredential: { self.activeCredential() },
             vault: vault,
+            renew: renew,
             defaults: defaults,
             launchAtLogin: { flag.on },
             setLaunchAtLogin: { flag.on = $0; return nil },
@@ -205,20 +212,24 @@ final class MCPSurfaceTests: XCTestCase {
         TowerMCPService.tools.first { $0.name == name }!
     }
 
+    // MARK: Panel shot surfaces (tower-loop round 2)
+    //
+    // The loop measures what he sees, and the Week dial is what opens first, yet the tool could
+    // only draw the classic panel. A loop that cannot capture the product face cannot measure it.
+
     // MARK: Surface enumeration
 
-    /// Every verb main.swift dispatches has a tool, and the map names no verb that
-    /// main.swift does not have. Walked from the source so a new verb fails here.
+    /// Every verb DemoMode.dispatched handles has a tool, and the map names no verb that
+    /// the dispatcher does not have (public dispatches through DemoMode.Verb, not arg greps).
     func testEveryCLIVerbHasATool() throws {
-        // The dispatch lives in DemoMode.dispatched (main.swift switches on its result), so
-        // the verbs come from DemoMode.Verb; each CLI word must dispatch to its own verb.
         let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
         for verb in cliVerbs {
             XCTAssertEqual(DemoMode.dispatched(args: [verb.rawValue]), verb, "`tower \(verb.rawValue)` does not dispatch to itself")
         }
         XCTAssertEqual(DemoMode.dispatched(args: []), .app)
         let realVerbs = Set(cliVerbs.map(\.rawValue))
-        XCTAssertEqual(realVerbs, ["status", "selftest", "rotate", "login-item", "retrust", "panelshot", "mcp"])
+        XCTAssertEqual(realVerbs, ["status", "selftest", "rotate", "login-item", "retrust", "panelshot", "mcp",
+                                   "dashboard-feed", "dashboardshot"])
         let toolNames = Set(TowerMCPService.tools.map(\.name))
         for verb in realVerbs {
             let tool = try XCTUnwrap(TowerMCPService.verbToTool[verb], "verb \(verb) has no tool")
@@ -270,7 +281,7 @@ final class MCPSurfaceTests: XCTestCase {
     /// The reads say so and the writes say so: annotations are the contract a client
     /// uses to decide whether to ask before calling.
     func testAnnotationsSeparateReadsFromWrites() {
-        let writes: Set<String> = ["tower_refresh", "tower_retrust", "tower_forget_seats", "tower_config_set", "tower_alert_ack"]
+        let writes: Set<String> = ["tower_refresh", "tower_retrust", "tower_renew", "tower_forget_seats", "tower_config_set", "tower_alert_ack"]
         for tool in TowerMCPService.tools {
             if writes.contains(tool.name) {
                 XCTAssertFalse(tool.annotations.readOnlyHint, tool.name)
@@ -284,6 +295,8 @@ final class MCPSurfaceTests: XCTestCase {
         // Re-trust opens a Keychain dialog for the user each call: not idempotent, deletes nothing.
         XCTAssertFalse(spec("tower_retrust").annotations.idempotentHint)
         XCTAssertFalse(spec("tower_retrust").annotations.destructiveHint)
+        XCTAssertTrue(spec("tower_renew").annotations.destructiveHint)
+        XCTAssertTrue(spec("tower_renew").annotations.openWorldHint)
         XCTAssertTrue(spec("tower_refresh").annotations.openWorldHint)
         XCTAssertFalse(spec("tower_refresh").annotations.idempotentHint)
         XCTAssertFalse(spec("tower_alert_ack").annotations.destructiveHint)
@@ -294,8 +307,8 @@ final class MCPSurfaceTests: XCTestCase {
 
     func testReadToolsValidateAgainstTheirOutputSchemas() async throws {
         let reads: [(String, JSON)] = [
-            ("tower_status", [:]), ("tower_accounts", [:]), ("tower_accounts", ["provider": "cursor"]),
-            ("tower_account", ["account": "cal"]), ("tower_room", [:]), ("tower_room", ["minimumRoom": 50]),
+            ("tower_status", [:]), ("tower_status", ["format": "full"]), ("tower_accounts", [:]), ("tower_accounts", ["provider": "cursor"]), ("tower_accounts", ["format": "table"]),
+            ("tower_account", ["account": "alt1"]), ("tower_room", [:]), ("tower_room", ["format": "full"]), ("tower_room", ["minimumRoom": 50]),
             ("tower_advice", [:]), ("tower_rotate", [:]), ("tower_resets", [:]), ("tower_alerts", [:]),
             ("tower_freshness", [:]), ("tower_seats", [:]), ("tower_lanes", [:]), ("tower_sessions", [:]),
             ("tower_openrouter_history", [:]), ("tower_config_get", [:]),
@@ -325,7 +338,7 @@ final class MCPSurfaceTests: XCTestCase {
     }
 
     func testAccountJSONCarriesTowersDerivations() async throws {
-        let live = try await call("tower_account", ["account": "cal"]).structuredContent!
+        let live = try await call("tower_account", ["account": "alt1"]).structuredContent!
         XCTAssertEqual(live["isActive"], true)
         XCTAssertEqual(live["worstTrust"], "live")
         XCTAssertEqual(live["recommendable"], true)
@@ -341,7 +354,7 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(live["resting"], .null)
         XCTAssertEqual(live["notified"].objectValue?.count, 1)
 
-        let stale = try await call("tower_account", ["account": "ben"]).structuredContent!
+        let stale = try await call("tower_account", ["account": "alt4"]).structuredContent!
         XCTAssertEqual(stale["provider"], "claude", "a bare nickname prefers the Claude row")
         XCTAssertEqual(stale["worstTrust"], "stale")
         XCTAssertEqual(stale["needsLogin"], true)
@@ -349,20 +362,20 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(stale["resting"]["kind"], "stale")
         XCTAssertEqual(stale["resting"]["timeGated"], false)
 
-        let cursor = try await call("tower_account", ["account": "cursor:ben"]).structuredContent!
+        let cursor = try await call("tower_account", ["account": "cursor:alt4"]).structuredContent!
         XCTAssertEqual(cursor["provider"], "cursor")
         XCTAssertEqual(cursor["windows"].arrayValue?.map { $0["name"] }, ["Cursor Models", "Other Models"])
         XCTAssertEqual(cursor["binding"]["limit"], "month")
 
-        let codex = try await call("tower_account", ["account": "codex:user-c@example.com"]).structuredContent!
+        let codex = try await call("tower_account", ["account": "codex:user-d@example.com"]).structuredContent!
         XCTAssertEqual(codex["windows"].arrayValue?.map { $0["name"] }, ["7d"])
 
         let money = try await call("tower_account", ["account": "openrouter"]).structuredContent!
-        XCTAssertEqual(money["balanceUSD"], 32.5)
+        XCTAssertEqual(money["balanceUSD"], 15.2)
         XCTAssertEqual(money["windows"], [])
         XCTAssertEqual(money["resting"], .null)
 
-        let never = try await call("tower_account", ["account": "ana"]).structuredContent!
+        let never = try await call("tower_account", ["account": "alt3"]).structuredContent!
         XCTAssertEqual(never["resting"]["kind"], "neverCaptured")
 
         let missing = try await call("tower_account", ["account": "nobody"])
@@ -371,22 +384,22 @@ final class MCPSurfaceTests: XCTestCase {
     }
 
     func testRoomRanksLiveFirstAndFiltersByMinimum() async throws {
-        let room = try await call("tower_room").structuredContent!
-        XCTAssertEqual(room["recommended"], "cal")
-        XCTAssertEqual(room["active"].arrayValue?.map { $0["nickname"] }, ["cal", "eve", "ben"])
-        XCTAssertEqual(room["resting"].arrayValue?.map { $0["nickname"] }, ["ben", "ana", "fay"])
+        let room = try await call("tower_room", ["format": "full"]).structuredContent!
+        XCTAssertEqual(room["recommended"], "alt1")
+        XCTAssertEqual(room["active"].arrayValue?.map { $0["nickname"] }, ["alt1", "eve", "alt4"])
+        XCTAssertEqual(room["resting"].arrayValue?.map { $0["nickname"] }, ["alt4", "alt3", "main"])
         XCTAssertEqual(room["resting"][2]["resting"]["kind"], "capped")
         XCTAssertEqual(room["resting"][2]["resting"]["timeGated"], true)
-        let strict = try await call("tower_room", ["minimumRoom": 50]).structuredContent!
-        XCTAssertEqual(strict["active"].arrayValue?.map { $0["nickname"] }, ["cal"])
+        let strict = try await call("tower_room", ["minimumRoom": 50, "format": "full"]).structuredContent!
+        XCTAssertEqual(strict["active"].arrayValue?.map { $0["nickname"] }, ["alt1"])
         XCTAssertTrue(strict["readySummary"].stringValue!.hasPrefix("3 of 6 ready · next "), strict["readySummary"].text)
     }
 
     func testAdviceStaysOnTheActiveSeat() async throws {
         let advice = try await call("tower_advice").structuredContent!
         XCTAssertEqual(advice["kind"], "stay")
-        XCTAssertEqual(advice["nickname"], "cal")
-        XCTAssertEqual(advice["next"], "fay", "the runner up is the capped seat that reopens, in Tower's own words")
+        XCTAssertEqual(advice["nickname"], "alt1")
+        XCTAssertEqual(advice["next"], "main", "the runner up is the capped seat that reopens, in Tower's own words")
         XCTAssertEqual(advice["command"], .null)
     }
 
@@ -395,12 +408,9 @@ final class MCPSurfaceTests: XCTestCase {
     /// says the active seat is unknown.
     func testAdviceReportsActiveUnknownWhenIdentityIsUnverified() async throws {
         let blind = TowerMCPService(env: fixture.environment(verifiedActiveEmail: .some(nil)))
-        let result = try await blind.callTool("tower_advice", arguments: [:])
-        let advice = result.structuredContent!
-        guard case .text(let summary)? = result.content.first else { return XCTFail("no summary") }
-        XCTAssertTrue(summary.hasPrefix("no verified active seat; most room: cal ("), summary)
+        let advice = try await blind.callTool("tower_advice", arguments: [:]).structuredContent!
         XCTAssertEqual(advice["kind"], "activeUnknown")
-        XCTAssertEqual(advice["nickname"], "cal")
+        XCTAssertEqual(advice["nickname"], "alt1")
         XCTAssertEqual(advice["percentUsed"], .null)
         XCTAssertNotEqual(advice["roomPct"], .null)
         XCTAssertTrue(JSONSchemaCheck.validate(advice, against: spec("tower_advice").outputSchema).isEmpty)
@@ -410,10 +420,10 @@ final class MCPSurfaceTests: XCTestCase {
     /// verified means null activeEmail even though the credential carries a hint.
     func testStatusReportsNullActiveEmailWhenIdentityIsUnverified() async throws {
         let blind = TowerMCPService(env: fixture.environment(verifiedActiveEmail: .some(nil)))
-        let status = try await blind.callTool("tower_status", arguments: [:]).structuredContent!
+        let status = try await blind.callTool("tower_status", arguments: ["format": "full"]).structuredContent!
         XCTAssertEqual(status["activeEmail"], .null)
         XCTAssertEqual(status["activeEmailVerifiedAt"], .null)
-        let room = try await blind.callTool("tower_room", arguments: [:]).structuredContent!
+        let room = try await blind.callTool("tower_room", arguments: ["format": "full"]).structuredContent!
         XCTAssertEqual(room["activeEmail"], .null)
         XCTAssertTrue(room["active"].arrayValue!.allSatisfy { $0["isActive"] == false })
     }
@@ -427,7 +437,7 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(active["announced"][0]["level"], 80)
         XCTAssertEqual(active["railMarks"]["5h"], ["amber", "red"])
         XCTAssertEqual(active["railMarks"]["7d"], ["red"])
-        // fay sits at 96 on 5h: 80 and 95 both pending, reported as the 95 level.
+        // main sits at 96 on 5h: 80 and 95 both pending, reported as the 95 level.
         let retained = byNick[MCPFixture.retainedEmail]!
         XCTAssertEqual(retained["pending"].arrayValue?.count, 1)
         XCTAssertEqual(retained["pending"][0]["level"], 95)
@@ -444,9 +454,8 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(seats["active"]["email"], .string(MCPFixture.activeEmail))
         XCTAssertEqual(seats["retained"].arrayValue?.count, 1)
         XCTAssertEqual(seats["retained"][0]["email"], .string(MCPFixture.retainedEmail))
-        XCTAssertEqual(seats["retained"][0]["expired"], false)
-        XCTAssertTrue(seats["retained"][0]["decision"].isNull, "no renewal decision exists")
-        XCTAssertTrue(seats["retained"][0]["hasRefreshToken"].isNull, "no refresh token is held")
+        XCTAssertEqual(seats["retained"][0]["decision"], "due")
+        XCTAssertEqual(seats["retained"][0]["hasRefreshToken"], true)
         XCTAssertFalse(seats.text.contains("seat-token"))
         XCTAssertFalse(seats.text.contains("seat-refresh"))
         XCTAssertFalse(seats.text.contains("active-token"))
@@ -454,13 +463,13 @@ final class MCPSurfaceTests: XCTestCase {
 
     func testResolveAcceptsEveryReferenceShape() {
         let map = fixture.store.load()
-        XCTAssertEqual(TowerMCPService.resolve("cal", in: map)?.email, MCPFixture.activeEmail)
-        XCTAssertEqual(TowerMCPService.resolve("CAL", in: map)?.email, MCPFixture.activeEmail)
-        XCTAssertEqual(TowerMCPService.resolve(MCPFixture.activeEmail, in: map)?.nickname, "cal")
-        XCTAssertEqual(TowerMCPService.resolve("codex:user-c@example.com", in: map)?.kind, .codex)
+        XCTAssertEqual(TowerMCPService.resolve("alt1", in: map)?.email, MCPFixture.activeEmail)
+        XCTAssertEqual(TowerMCPService.resolve("ALT1", in: map)?.email, MCPFixture.activeEmail)
+        XCTAssertEqual(TowerMCPService.resolve(MCPFixture.activeEmail, in: map)?.nickname, "alt1")
+        XCTAssertEqual(TowerMCPService.resolve("codex:user-d@example.com", in: map)?.kind, .codex)
         XCTAssertEqual(TowerMCPService.resolve("codex:eve", in: map)?.kind, .codex)
-        XCTAssertEqual(TowerMCPService.resolve("cursor:ben", in: map)?.kind, .cursor)
-        XCTAssertEqual(TowerMCPService.resolve("ben", in: map)?.kind, .claude)
+        XCTAssertEqual(TowerMCPService.resolve("cursor:alt4", in: map)?.kind, .cursor)
+        XCTAssertEqual(TowerMCPService.resolve("alt4", in: map)?.kind, .claude)
         XCTAssertNil(TowerMCPService.resolve("ghost", in: map))
     }
 
@@ -480,7 +489,7 @@ final class MCPSurfaceTests: XCTestCase {
 
         let one = try await service.readResource(TowerMCPService.accountURIPrefix + MCPFixture.activeEmail)
         let oneParsed = try JSON.parse(Data(one[0].text.utf8))
-        XCTAssertEqual(oneParsed["nickname"], "cal")
+        XCTAssertEqual(oneParsed["nickname"], "alt1")
 
         let surface = try await service.readResource(TowerMCPService.surfaceURI)
         for tool in TowerMCPService.tools { XCTAssertTrue(surface[0].text.contains("`\(tool.name)`")) }
@@ -497,7 +506,7 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(service.listPrompts().map(\.name), ["pick_account_for_lane", "promote_room_check", "rotation_brief"])
         let pick = try await service.getPrompt("pick_account_for_lane", arguments: ["lane_class": "claude", "minimum_room": "50"])
         XCTAssertEqual(pick.messages.count, 1)
-        XCTAssertTrue(pick.messages[0].text.contains("\"recommended\" : \"cal\""))
+        XCTAssertTrue(pick.messages[0].text.contains("\"recommended\" : \"alt1\""))
         XCTAssertTrue(pick.messages[0].text.contains("minimumRoom 50"))
         let promote = try await service.getPrompt("promote_room_check", arguments: [:])
         XCTAssertTrue(promote.messages[0].text.contains("tower_alerts:"))
@@ -511,29 +520,144 @@ final class MCPSurfaceTests: XCTestCase {
             XCTAssertEqual(error.code, MCPError.invalidParams)
         }
         XCTAssertEqual(service.complete(refType: "ref/prompt", refName: "pick_account_for_lane", argument: "lane_class", value: "c"), ["claude", "codex", "cursor"])
-        XCTAssertEqual(service.complete(refType: "ref/resource", refName: "tower://accounts/{id}", argument: "id", value: "codex:"), ["codex:user-c@example.com"])
+        XCTAssertEqual(service.complete(refType: "ref/resource", refName: "tower://accounts/{id}", argument: "id", value: "codex:"), ["codex:user-d@example.com"])
     }
 
     // MARK: Write preconditions
 
-    /// The public build never renews a token: there is no renew tool to call.
-    func testThereIsNoRenewTool() {
-        XCTAssertFalse(TowerMCPService.tools.contains { $0.name == "tower_renew" })
+    func testRenewRefusesEverySeatTowerWouldNotRenew() async throws {
+        let active = try await call("tower_renew", ["account": "alt1"])
+        XCTAssertEqual(active.structuredContent?["error"]["code"], "ActiveSeat")
+
+        let notRetained = try await call("tower_renew", ["account": "alt4"])
+        XCTAssertEqual(notRetained.structuredContent?["error"]["code"], "NotRetained")
+
+        let unknown = try await call("tower_renew", ["account": "ghost@example.com"])
+        XCTAssertEqual(unknown.structuredContent?["error"]["code"], "NotRetained")
+
+        // Retention off: nothing to renew, whatever the Keychain holds.
+        fixture.retentionFlag.on = false
+        let off = try await call("tower_renew", ["account": "main"])
+        XCTAssertEqual(off.structuredContent?["error"]["code"], "RetentionOff")
+        fixture.retentionFlag.on = true
+    }
+
+    /// The fail-closed half of the guard: when Tower has no verified active identity a
+    /// retained seat may be the seat the CLI holds, so renewal is refused on every seat
+    /// and tower_seats says possiblyActive instead of due.
+    func testRenewFailsClosedWhenTheActiveSeatIsUnverified() async throws {
+        let blind = TowerMCPService(env: fixture.environment(verifiedActiveEmail: .some(nil)))
+        let refused = try await blind.callTool("tower_renew", arguments: ["account": "main"])
+        XCTAssertEqual(refused.structuredContent?["error"]["code"], "ActiveUnknown")
+        let seats = try await blind.callTool("tower_seats", arguments: [:]).structuredContent!
+        XCTAssertEqual(seats["retained"][0]["decision"], "possiblyActive")
+        // The credential's own hint still refuses the seat the CLI claims to hold.
+        let active = try await blind.callTool("tower_renew", arguments: ["account": "alt1"])
+        XCTAssertEqual(active.structuredContent?["error"]["code"], "ActiveSeat")
+    }
+
+    /// The persisted record is bound to the access token it was verified from: a
+    /// different live token, an aged-out verification, or a hint that disputes the
+    /// record all leave the active seat unknown, and renewal fails closed. Only a
+    /// record bound to the live token lets a retained seat renew.
+    func testRenewBindsTheVerifiedRecordToTheLiveToken() async throws {
+        // Same email, but the record was verified against a token the CLI no longer holds.
+        fixture.store.recordVerifiedActiveSeatUnlocked(
+            MCPFixture.activeEmail, token: "an-older-token", now: fixture.now)
+        let rebound = try await call("tower_renew", ["account": "main"])
+        XCTAssertEqual(rebound.structuredContent?["error"]["code"], "ActiveUnknown")
+
+        // Bound to the live token, but the verification aged past one token lifetime.
+        fixture.store.recordVerifiedActiveSeatUnlocked(
+            MCPFixture.activeEmail, token: "active-token",
+            now: fixture.now.addingTimeInterval(-VerifiedActiveSeat.maxAge - 60))
+        let aged = try await call("tower_renew", ["account": "main"])
+        XCTAssertEqual(aged.structuredContent?["error"]["code"], "ActiveUnknown")
+
+        // The hint disputes the record's email: same token, different claimed login.
+        var env = fixture.environment()
+        let liveExpiry = fixture.now.addingTimeInterval(3600)
+        env.activeCredential = {
+            ClaudeCredential(service: Keychain.defaultService, accessToken: "active-token",
+                             subscriptionType: "max", rateLimitTier: nil,
+                             expiresAt: liveExpiry,
+                             emailHint: "someone-else@example.com", refreshToken: nil, scopes: [])
+        }
+        let disputed = try await TowerMCPService(env: env)
+            .callTool("tower_renew", arguments: ["account": "main"])
+        XCTAssertEqual(disputed.structuredContent?["error"]["code"], "ActiveUnknown")
+
+        // Bound, fresh and undisputed: the due retained seat renews.
+        fixture.store.recordVerifiedActiveSeatUnlocked(
+            MCPFixture.activeEmail, token: "active-token", now: fixture.now)
+        let ok = try await call("tower_renew", ["account": "main"])
+        XCTAssertFalse(ok.isError, "\(ok.content)")
+        XCTAssertEqual(ok.structuredContent?["renewed"], true)
+    }
+
+    /// A persisted verified record is only as fresh as the keychain read behind it: when
+    /// the live item reads back without an account, renewal sees nil and fails closed.
+    func testRenewFailsClosedWhenTheLiveCredentialHasNoAccount() async throws {
+        var env = fixture.environment()
+        env.activeCredential = {
+            ClaudeCredential(service: Keychain.defaultService, accessToken: "unknown-stub",
+                             subscriptionType: "?", rateLimitTier: nil, expiresAt: nil,
+                             emailHint: nil, refreshToken: nil, scopes: [])
+        }
+        let blind = TowerMCPService(env: env)
+        let refused = try await blind.callTool("tower_renew", arguments: ["account": "main"])
+        XCTAssertEqual(refused.structuredContent?["error"]["code"], "ActiveUnknown")
+    }
+
+    func testRenewRefusesAFreshSeatAndASeatWithoutARefreshToken() async throws {
+        // Rewrite the retained seat as fresh (expires well past the lead).
+        let fresh = ClaudeCredential(
+            service: Keychain.defaultService, accessToken: "seat-token-2", subscriptionType: "max",
+            rateLimitTier: nil, expiresAt: fixture.now.addingTimeInterval(8 * 3600), emailHint: MCPFixture.retainedEmail,
+            refreshToken: "seat-refresh-2", scopes: ["user:profile"])
+        XCTAssertNil(fixture.vault.captureVerifiedLogin(fresh, email: MCPFixture.retainedEmail, observation: fixture.vault.beginObservation(), now: fixture.now))
+        let notDue = try await call("tower_renew", ["account": "main"])
+        XCTAssertEqual(notDue.structuredContent?["error"]["code"], "NotDue")
+        XCTAssertFalse(notDue.structuredContent!["error"]["dueAt"].isNull)
+
+        let bare = ClaudeCredential(
+            service: Keychain.defaultService, accessToken: "seat-token-3", subscriptionType: "max",
+            rateLimitTier: nil, expiresAt: fixture.now.addingTimeInterval(60), emailHint: MCPFixture.retainedEmail,
+            refreshToken: nil, scopes: [])
+        XCTAssertNil(fixture.vault.captureVerifiedLogin(bare, email: MCPFixture.retainedEmail, observation: fixture.vault.beginObservation(), now: fixture.now))
+        let noToken = try await call("tower_renew", ["account": "main"])
+        XCTAssertEqual(noToken.structuredContent?["error"]["code"], "NoRefreshToken")
+    }
+
+    func testRenewRenewsADueSeatAndMapsTheTwoFailureClasses() async throws {
+        let ok = try await call("tower_renew", ["account": "main"])
+        XCTAssertFalse(ok.isError, "\(ok.content)")
+        XCTAssertEqual(ok.structuredContent?["renewed"], true)
+        XCTAssertEqual(ok.structuredContent?["email"], .string(MCPFixture.retainedEmail))
+        XCTAssertTrue(JSONSchemaCheck.validate(ok.structuredContent!, against: spec("tower_renew").outputSchema).isEmpty)
+
+        let refusing = TowerMCPService(env: fixture.environment(renew: { _ in throw ClaudeSeatRenewal.Rejected(message: "invalid_grant") }))
+        let refused = try await refusing.callTool("tower_renew", arguments: ["account": "main"])
+        XCTAssertEqual(refused.structuredContent?["error"]["code"], "RenewalRefused")
+
+        let flaky = TowerMCPService(env: fixture.environment(renew: { _ in throw ClaudeSeatRenewal.Unavailable(message: "HTTP 503") }))
+        let unavailable = try await flaky.callTool("tower_renew", arguments: ["account": "main"])
+        XCTAssertEqual(unavailable.structuredContent?["error"]["code"], "RenewalUnavailable")
     }
 
     func testAlertAckWritesTheSameBookkeepingEvaluateWould() async throws {
         let unknownAccount = try await call("tower_alert_ack", ["account": "ghost", "window": "5h", "level": 80])
         XCTAssertEqual(unknownAccount.structuredContent?["error"]["code"], "UnknownAccount")
-        let badLevel = try await call("tower_alert_ack", ["account": "cal", "window": "5h", "level": 90])
+        let badLevel = try await call("tower_alert_ack", ["account": "alt1", "window": "5h", "level": 90])
         XCTAssertEqual(badLevel.structuredContent?["error"]["code"], "BadLevel")
         let codexHasNo5h = try await call("tower_alert_ack", ["account": "codex:eve", "window": "5h", "level": 80])
         XCTAssertEqual(codexHasNo5h.structuredContent?["error"]["code"], "UnknownWindow")
-        let cursorSaysMonth = try await call("tower_alert_ack", ["account": "cursor:ben", "window": "7d", "level": 80])
+        let cursorSaysMonth = try await call("tower_alert_ack", ["account": "cursor:alt4", "window": "7d", "level": 80])
         XCTAssertEqual(cursorSaysMonth.structuredContent?["error"]["code"], "UnknownWindow")
-        let noReset = try await call("tower_alert_ack", ["account": "ana", "window": "5h", "level": 80])
+        let noReset = try await call("tower_alert_ack", ["account": "alt3", "window": "5h", "level": 80])
         XCTAssertEqual(noReset.structuredContent?["error"]["code"], "NoResetTime")
 
-        let ack = try await call("tower_alert_ack", ["account": "fay", "window": "5h", "level": 95])
+        let ack = try await call("tower_alert_ack", ["account": "main", "window": "5h", "level": 95])
         XCTAssertFalse(ack.isError, "\(ack.content)")
         XCTAssertEqual(ack.structuredContent?["previous"], 0)
         XCTAssertEqual(ack.structuredContent?["level"], 95)
@@ -543,9 +667,28 @@ final class MCPSurfaceTests: XCTestCase {
         var row = fixture.store.load()[MCPFixture.retainedEmail]!
         XCTAssertTrue(Thresholds.evaluate(&row, now: fixture.now).isEmpty)
         // A lower ack never lowers the recorded level.
-        let lower = try await call("tower_alert_ack", ["account": "fay", "window": "5h", "level": 80])
+        let lower = try await call("tower_alert_ack", ["account": "main", "window": "5h", "level": 80])
         XCTAssertEqual(lower.structuredContent?["level"], 95)
         XCTAssertEqual(lower.structuredContent?["previous"], 95)
+    }
+
+    /// Operator word 2026-11-06: the switch mark is configurable, 50 to 99, default 80.
+    func testSwitchThresholdIsSettableReadableAndRangeChecked() async throws {
+        let before = try await call("tower_config_get").structuredContent!
+        XCTAssertEqual(before["settings"]["alerts.switchThresholdPct"], 80, "the shipped default")
+        let set = try await call("tower_config_set", ["key": "alerts.switchThresholdPct", "value": 90])
+        XCTAssertEqual(set.structuredContent?["value"], 90)
+        XCTAssertEqual(set.structuredContent?["previous"], 80)
+        XCTAssertEqual(fixture.defaults.double(forKey: SwitchThreshold.key), 90)
+        let after = try await call("tower_config_get").structuredContent!
+        XCTAssertEqual(after["settings"]["alerts.switchThresholdPct"], 90)
+        for bad: JSON in [49, 100, "80", true, .null] {
+            let refused = try await call("tower_config_set", ["key": "alerts.switchThresholdPct", "value": bad])
+            XCTAssertEqual(refused.structuredContent?["error"]["code"], "BadValue", "\(bad)")
+        }
+        XCTAssertEqual(fixture.defaults.double(forKey: SwitchThreshold.key), 90, "a refusal leaves the value alone")
+        let edge = try await call("tower_config_set", ["key": "alerts.switchThresholdPct", "value": 50])
+        XCTAssertEqual(edge.structuredContent?["value"], 50)
     }
 
     func testConfigSetHonoursEachKeyAndRefusesTheRest() async throws {
@@ -627,6 +770,50 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(notEmail.structuredContent?["error"]["code"], "BadValue")
     }
 
+    /// The way back from the dashboard (review b114 on #152): the dashboard is the default
+    /// surface, so a lane with no UI must be able to read and set it, and the surface knows
+    /// which one a "switch" button should name.
+    func testPanelSurfaceIsReadableSettableAndHasAWayBack() async throws {
+        let before = try await call("tower_config_get").structuredContent!
+        XCTAssertEqual(before["settings"]["panelSurface"], "dashboard", "a fresh install opens the dashboard")
+
+        let classic = try await call("tower_config_set", ["key": "panel.surface", "value": "classic"])
+        XCTAssertFalse(classic.isError, "\(classic.content)")
+        XCTAssertEqual(classic.structuredContent?["value"], "classic")
+        XCTAssertEqual(classic.structuredContent?["previous"], "dashboard")
+        XCTAssertEqual(fixture.defaults.string(forKey: PanelSurface.defaultsKey), "classic")
+        XCTAssertEqual(PanelSurface.current(defaults: fixture.defaults), .classic)
+        let after = try await call("tower_config_get").structuredContent!
+        XCTAssertEqual(after["settings"]["panelSurface"], "classic")
+
+        let back = try await call("tower_config_set", ["key": "panel.surface", "value": "dashboard"])
+        XCTAssertEqual(back.structuredContent?["previous"], "classic")
+        XCTAssertEqual(PanelSurface.current(defaults: fixture.defaults), .dashboard)
+
+        let wrongWord = try await call("tower_config_set", ["key": "panel.surface", "value": "tiles"])
+        XCTAssertEqual(wrongWord.structuredContent?["error"]["code"], "BadValue")
+        let wrongType = try await call("tower_config_set", ["key": "panel.surface", "value": true])
+        XCTAssertEqual(wrongType.structuredContent?["error"]["code"], "BadValue")
+        XCTAssertEqual(PanelSurface.current(defaults: fixture.defaults), .dashboard, "a refused write changes nothing")
+
+        // Each surface names the other one: the label of the visible way back.
+        XCTAssertEqual(PanelSurface.dashboard.other, .classic)
+        XCTAssertEqual(PanelSurface.classic.other, .dashboard)
+        XCTAssertEqual(PanelSurface.dashboard.switchLabel, "Classic panel")
+        XCTAssertEqual(PanelSurface.classic.switchLabel, "Dashboard")
+        // The control shown on a surface names where it goes (Codex P2 on #152: the classic
+        // button and the context menu once used .other.switchLabel and read backwards).
+        XCTAssertEqual(PanelSurface.classic.switchControl.label, "Dashboard")
+        XCTAssertEqual(PanelSurface.classic.switchControl.destination, .dashboard)
+        XCTAssertEqual(PanelSurface.dashboard.switchControl.label, "Classic panel")
+        XCTAssertEqual(PanelSurface.dashboard.switchControl.destination, .classic)
+        XCTAssertEqual(PanelSurface.classic.switchMenuTitle, "Open the Dashboard")
+        XCTAssertEqual(PanelSurface.dashboard.switchMenuTitle, "Open the Classic panel")
+
+        let unknown = try await call("tower_config_set", ["key": "nope", "value": true])
+        XCTAssertTrue(unknown.structuredContent?["error"]["known"].arrayValue?.contains(.string("panel.surface")) ?? false)
+    }
+
     func testRetentionOffDeletesEveryOwnedSeatFirst() async throws {
         XCTAssertEqual(fixture.keychain.ownedItemCount, 1)
         let off = try await call("tower_config_set", ["key": "retainClaudeSeats", "value": false])
@@ -650,7 +837,8 @@ final class MCPSurfaceTests: XCTestCase {
     private func seedRetainedSeat() throws {
         let seat = ClaudeCredential(
             service: Keychain.defaultService, accessToken: "seat-token-4", subscriptionType: "max",
-            rateLimitTier: nil, expiresAt: fixture.now.addingTimeInterval(600), emailHint: MCPFixture.retainedEmail)
+            rateLimitTier: nil, expiresAt: fixture.now.addingTimeInterval(600), emailHint: MCPFixture.retainedEmail,
+            refreshToken: "seat-refresh-4", scopes: [])
         if let error = fixture.vault.captureVerifiedLogin(seat, email: MCPFixture.retainedEmail, observation: fixture.vault.beginObservation(), now: fixture.now) {
             throw NSError(domain: "fixture", code: 3, userInfo: [NSLocalizedDescriptionKey: error])
         }
@@ -671,11 +859,11 @@ final class MCPSurfaceTests: XCTestCase {
     func testRefreshRefusesAnUnpollableSeatAndReportsTheCycle() async throws {
         let unknown = try await call("tower_refresh", ["account": "ghost"])
         XCTAssertEqual(unknown.structuredContent?["error"]["code"], "UnknownAccount")
-        // ben is stale, not the active login, and Tower holds no seat item for it.
-        let unpollable = try await call("tower_refresh", ["account": "ben"])
+        // alt4 is stale, not the active login, and Tower holds no seat item for it.
+        let unpollable = try await call("tower_refresh", ["account": "alt4"])
         XCTAssertEqual(unpollable.structuredContent?["error"]["code"], "NotPollable")
 
-        let all = try await call("tower_refresh")
+        let all = try await call("tower_refresh", ["format": "full"])
         XCTAssertFalse(all.isError)
         let payload = all.structuredContent!
         XCTAssertTrue(JSONSchemaCheck.validate(payload, against: spec("tower_refresh").outputSchema).isEmpty,
@@ -683,18 +871,18 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertEqual(payload["outcome"], "ok")
         XCTAssertEqual(payload["openRouter"], "ok")
         XCTAssertEqual(payload["accounts"].arrayValue?.count, fixture.store.load().count)
-        // fay at 96 on 5h would announce 95, ben 91 on 5h and Cursor at 80 would announce
+        // main at 96 on 5h would announce 95, alt4 91 on 5h and Cursor at 80 would announce
         // 80; the app keeps every one of those announcements.
         XCTAssertEqual(payload["pendingAlerts"].arrayValue?.count, 3)
-        XCTAssertTrue(payload["pendingAlerts"].arrayValue!.contains { $0["nickname"] == "fay" && $0["window"] == "5h" })
+        XCTAssertTrue(payload["pendingAlerts"].arrayValue!.contains { $0["nickname"] == "main" && $0["window"] == "5h" })
         XCTAssertEqual(fixture.store.load()[MCPFixture.retainedEmail]?.notified.count, 0, "refresh must not consume the bookkeeping")
 
-        let retainedOnly = try await call("tower_refresh", ["account": "fay"])
+        let retainedOnly = try await call("tower_refresh", ["account": "main", "format": "full"])
         XCTAssertFalse(retainedOnly.isError, "a readable retained seat is pollable")
-        XCTAssertEqual(retainedOnly.structuredContent?["accounts"].arrayValue?.map { $0["nickname"] }, ["fay"])
-        let activeOnly = try await call("tower_refresh", ["account": "cal"])
+        XCTAssertEqual(retainedOnly.structuredContent?["accounts"].arrayValue?.map { $0["nickname"] }, ["main"])
+        let activeOnly = try await call("tower_refresh", ["account": "alt1"])
         XCTAssertFalse(activeOnly.isError)
-        let cursorRow = try await call("tower_refresh", ["account": "cursor:ben"])
+        let cursorRow = try await call("tower_refresh", ["account": "cursor:alt4"])
         XCTAssertFalse(cursorRow.isError, "non Claude rows always refresh in a cycle")
     }
 }

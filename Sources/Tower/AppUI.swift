@@ -7,20 +7,97 @@ import UserNotifications
 
 // MARK: - Launch at login
 
+/// Start at login has two mechanisms. The login item (SMAppService) cannot restart the app after a crash;
+/// the LaunchAgent that `scripts/install.sh` writes can (KeepAlive on an unsuccessful exit), and the
+/// installer switches the login item off so login does not start two instances. So the agent counts as
+/// start at login, and turning start at login off removes the agent as well.
 enum LaunchAtLogin {
-    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    static let agentLabel = "ai.yonatan-hq.claude-limits"
 
-    static func set(_ on: Bool) -> String? {
+    static func agentPlist(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent("Library/LaunchAgents/\(agentLabel).plist")
+    }
+
+    static func agentInstalled(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        FileManager.default.fileExists(atPath: agentPlist(home: home).path)
+    }
+
+    static func enabled(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                        serviceEnabled: Bool = SMAppService.mainApp.status == .enabled) -> Bool {
+        agentInstalled(home: home) || serviceEnabled
+    }
+
+    static var isEnabled: Bool { enabled() }
+
+    /// Boots the agent out of launchd for this user. Best effort: an agent that is not loaded is fine.
+    static func bootout(_ label: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["bootout", "gui/\(getuid())/\(label)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+    }
+
+    /// Removes the LaunchAgent plist and unloads it. Nothing installed is nothing to do.
+    static func removeAgent(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                            unload: (String) -> Void = LaunchAtLogin.bootout) -> String? {
+        guard agentInstalled(home: home) else { return nil }
+        // Persist first: when Tower runs under this agent, the unload below ends the app that called it,
+        // so anything after it may never run. With the plist gone, a login no longer starts Tower.
         do {
-            if on {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
+            try FileManager.default.removeItem(at: agentPlist(home: home))
+        } catch {
+            return error.localizedDescription
+        }
+        unload(agentLabel)
+        return nil
+    }
+
+    /// Only the SMAppService login item. The installer calls this after it loads the agent.
+    static func unregisterService() -> String? {
+        do {
+            try SMAppService.mainApp.unregister()
             return nil
         } catch {
             return error.localizedDescription
         }
+    }
+
+    /// Where "the user turned start at login off" is remembered, beside the store. install.sh reads the same
+    /// file name, so an update does not recreate and load an agent the user switched off.
+    static let offMarkerName = "start-at-login-off"
+
+    static func defaultSupport() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/\(ProductIdentity.supportDirectoryName)")
+    }
+
+    static func markedOff(support: URL = defaultSupport()) -> Bool {
+        FileManager.default.fileExists(atPath: support.appendingPathComponent(offMarkerName).path)
+    }
+
+    static func markOff(_ off: Bool, support: URL = defaultSupport()) {
+        let marker = support.appendingPathComponent(offMarkerName)
+        if off {
+            try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+            try? Data().write(to: marker)
+        } else {
+            try? FileManager.default.removeItem(at: marker)
+        }
+    }
+
+    static func set(_ on: Bool) -> String? {
+        markOff(!on)
+        if on {
+            // An installed agent already starts Tower at login; a second login item would start two.
+            if agentInstalled() { return nil }
+            do { try SMAppService.mainApp.register(); return nil } catch { return error.localizedDescription }
+        }
+        // Login item first, agent last: removing the agent unloads it, which ends this app when it runs under it.
+        let serviceError = unregisterService()
+        if let error = removeAgent() { return error }
+        return serviceError
     }
 }
 
@@ -58,6 +135,23 @@ enum Notifier {
         let req = UNNotificationRequest(
             identifier: "\(a.nickname)-\(a.window)-\(Int(a.pct))",
             content: c, trigger: nil)
+        UNUserNotificationCenter.current().add(req) { error in
+            if let error {
+                FileHandle.standardError.write(
+                    Data("notification post failed: \(error.localizedDescription)\n".utf8))
+            }
+        }
+    }
+
+    /// The switch notice: the active seat reached the operator's switch mark. Stable per seat and
+    /// window, so a later window replaces the banner instead of stacking.
+    static func post(_ s: SwitchAlert) {
+        let content = UNMutableNotificationContent()
+        content.title = s.title
+        content.body = s.body
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: "switch-\(s.nickname)-\(s.window)",
+                                        content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req) { error in
             if let error {
                 FileHandle.standardError.write(
@@ -162,6 +256,7 @@ final class LimitsModel: ObservableObject {
     @Published var seatRetentionError: String?
     /// #121: the panel's text size, stored in the shared settings domain.
     @Published var textSize = TowerTextSize.stored()
+    @Published var panelSurface = PanelSurface.current()
     /// nil = the probe failed or has not run; the UI must say "unavailable",
     /// not render an empty list as "nothing running".
     @Published var agents: AgentSummary?
@@ -472,9 +567,43 @@ final class LimitsModel: ObservableObject {
     /// cannot be refreshed from the queue afterwards.
     /// Stores the size, re-renders the panel from its root, then refits the window to the
     /// new content size.
+    /// Stores what a menu bar click opens; read at the next click, so no refit is needed.
+    func setPanelSurface(_ surface: PanelSurface) {
+        PanelSurface.set(surface)
+        panelSurface = PanelSurface.current()
+        // Swapped on the next turn: the click that got us here is inside the view being replaced.
+        DispatchQueue.main.async { AppDelegate.shared?.surfaceChanged() }
+    }
+
     func setTextSize(_ size: TowerTextSize) {
         TowerTextSize.store(size)
         textSize = TowerTextSize.stored()
+        DispatchQueue.main.async { AppDelegate.shared?.fitPanel() }
+    }
+
+    /// `alerts.switchThresholdPct`, shared with `tower mcp` through the one settings domain. The
+    /// panel's advice and the switch notification both read it.
+    @Published var switchThresholdPct = SwitchThreshold.read(TowerPreferences.shared)
+
+    /// What the settings domain holds right now. `tower mcp` writes the same key, so the panel
+    /// takes it from here on every refresh instead of trusting its launch time copy.
+    nonisolated static func currentSwitchThreshold(_ defaults: UserDefaults) -> Double {
+        SwitchThreshold.read(defaults)
+    }
+
+    func setSwitchThreshold(_ pct: Double) {
+        guard let valid = SwitchThreshold.parse(pct) else { return }
+        TowerPreferences.shared.set(valid, forKey: SwitchThreshold.key)
+        switchThresholdPct = SwitchThreshold.read(TowerPreferences.shared)
+    }
+
+    /// Full or compact panel, stored beside the other Tower settings. Compact folds the
+    /// settings rows away; every board and every error still renders.
+    @Published var density = PanelDensity.stored(defaults: TowerPreferences.shared)
+
+    func setDensity(_ next: PanelDensity) {
+        TowerPreferences.shared.set(next.rawValue, forKey: PanelDensity.preferenceKey)
+        density = next
         DispatchQueue.main.async { AppDelegate.shared?.fitPanel() }
     }
 
@@ -596,15 +725,29 @@ final class LimitsModel: ObservableObject {
         if let cursorKey = result.cursorKey { keys.append(cursorKey) }
         var railToasts: [RailCrossing] = []
         var railClears: [(nickname: String, standing: Rail.Level)] = []
+        var switchAlerts: [SwitchAlert] = []
+        // `tower mcp` can set the mark too, so take it from the settings domain on every refresh and
+        // publish it: the panel's advice and Stepper then show the stored value, and a Stepper tap
+        // starts from it instead of writing a stale one back (b111 HOLD on #150).
+        let switchPct = Self.currentSwitchThreshold(TowerPreferences.shared)
+        switchThresholdPct = switchPct
+        var activeClaudeEmail: String?
+        if case .ok(let email) = result.outcome { activeClaudeEmail = email }
         if !keys.isEmpty {
             let alertSettings = AlertSettings.current()
             let (after, saveError) = Store.shared.mutate { accounts in
+                // Threshold toasts and the switch notice, on the copy the lock hands over: the
+                // switch roster is the stored state at this moment, not the refresh result read
+                // earlier (b111 HOLD 6691664074). Only the rows this cycle observed can raise one.
+                let notices = SwitchAlert.notices(
+                    in: &accounts, keys: keys, activeEmail: activeClaudeEmail, thresholdPct: switchPct)
+                alerts += notices.plain
+                switchAlerts += notices.switches
                 // The rail machine runs for EVERY row: the railed windows of an inactive
                 // account can still end while it rests, and a standing flag must clear
                 // when that happens instead of waiting for the account to be refreshed.
-                // Only a capture can raise a level, so toasts stay tied to the rows this
-                // cycle actually observed. Same save as the threshold bookkeeping, so
-                // the flag and the numbers it was derived from never disagree on disk.
+                // Same save as the threshold bookkeeping, so the flag and the numbers it
+                // was derived from never disagree on disk.
                 for key in Array(accounts.keys) {
                     guard var snap = accounts[key] else { continue }
                     if keys.contains(key) { alerts += Thresholds.evaluate(&snap, settings: alertSettings) }
@@ -654,6 +797,7 @@ final class LimitsModel: ObservableObject {
         }
         if bookkeepingError == nil {
             for a in alerts { Notifier.post(a) }
+            for s in switchAlerts { Notifier.post(s) }
             for c in railToasts { Notifier.post(c) }
             for c in railClears { Notifier.clearRail(nickname: c.nickname, standing: c.standing) }
         }
@@ -717,8 +861,9 @@ final class LimitsModel: ObservableObject {
     var title: String {
         // Match the PROVIDER too. One email can hold both a Claude subscription and a
         // ChatGPT one, so an email-only lookup picked whichever
-        // row happened to sort first. Observed 2026-08-03: the menubar showed the Codex
-        // weekly figure instead of the active Claude account's own figure.
+        // row happened to sort first. Observed live 2026-08-03: the menubar read
+        // "🟢eve 8%", the Codex weekly figure, while the active Claude account it is
+        // supposed to describe was at 61%.
         guard let activeEmail,
               let a = accounts.first(where: { $0.email == activeEmail && $0.kind == .claude })
         else { return refreshError == nil ? "CC ??" : "CC ⚠️" }
@@ -1057,7 +1202,7 @@ struct RecommendBanner: View {
     static let stayLabel = "keychain holds"
 
     /// The answer line when the active seat's reply carried no 5h window.
-    static func fiveHourUnknownLine(nick: String, weekRoom: Double?) -> String {
+    nonisolated static func fiveHourUnknownLine(nick: String, weekRoom: Double?) -> String {
         "\(nick): 5h unknown, week " + (weekRoom.map { "\(Int($0.rounded()))% room" } ?? "? room")
     }
 
@@ -1066,6 +1211,22 @@ struct RecommendBanner: View {
     /// on every fresh Mac and every demo, where an unverified seat is the normal state.
     static func unverifiedActiveLine(nick: String, roomPct: Double?) -> String {
         "no verified active seat; most room: \(nick)" + (roomPct.map { " (\(Int($0.rounded()))%)" } ?? "")
+    }
+
+    /// The answer, first line of the panel (approved mockup 2026-11-01): the pick and its ROOM
+    /// in words. Room, not used: "99% room" is the number the decision turns on.
+    nonisolated static func headline(_ advice: AccountSnapshot.Advice) -> String {
+        func room(_ used: Double?) -> String { used.map { " · \(Int(max(0, 100 - $0).rounded()))% room" } ?? "" }
+        switch advice {
+        case .stay(let nick, let pct, _): return "Stay on \(nick)" + room(pct)
+        case .switchTo(let nick, let pct, _): return "Switch to \(nick)" + room(pct)
+        case .activeUnknown(let nick, let roomPct, _):
+            return "Active seat unknown · most room \(nick)" + (roomPct.map { " \(Int($0.rounded()))%" } ?? "")
+        // main's case (added after #140 branched): the same words the banner shows for it.
+        case .activeFiveHourUnknown(let nick, let weekRoom, _):
+            return fiveHourUnknownLine(nick: nick, weekRoom: weekRoom)
+        case .allResting: return "No ready Claude seat"
+        }
     }
     let advice: AccountSnapshot.Advice
     /// Set briefly after a click so the banner can confirm what it put on the clipboard.
@@ -1105,24 +1266,15 @@ struct RecommendBanner: View {
     @ViewBuilder
     private var label: some View {
         switch advice {
-        case .stay(let nick, let pct, let next):
-            Text(Self.stayLabel).font(TowerType.font(.body)).foregroundStyle(TowerType.secondary)
-            Text(nick).font(TowerType.font(.body, weight: .bold)).foregroundStyle(.green)
-            if let pct {
-                Text("· \(Int(pct.rounded()))% used")
-                    .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
-            }
+        case .stay(_, _, let next):
+            // the answer first, in room terms, at the header size (approved mockup 2026-11-01)
+            Text(Self.headline(advice)).font(TowerType.font(.header, weight: .semibold)).foregroundStyle(.green)
             if let next {
                 Text("· next \(next)")
                     .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
             }
-        case .switchTo(let nick, let pct, let via):
-            Text("switch to").font(TowerType.font(.body)).foregroundStyle(TowerType.secondary)
-            Text(nick).font(TowerType.font(.body, weight: .bold)).foregroundStyle(Color.accentColor)
-            if let pct {
-                Text("· \(Int(pct.rounded()))% used")
-                    .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
-            }
+        case .switchTo(_, _, let via):
+            Text(Self.headline(advice)).font(TowerType.font(.header, weight: .semibold)).foregroundStyle(Color.accentColor)
             // The switch is `/login` and then a sign-in in the right Chrome profile, so
             // naming the profile is the half the operator cannot look up from here.
             if let via {
@@ -1137,8 +1289,8 @@ struct RecommendBanner: View {
                     .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
             }
         case .activeFiveHourUnknown(let nick, let weekRoom, let next):
-            // "<seat>: 5h unknown, week <n>% room": the seat in use, what is not known, and
-            // the room that is
+            // "eve: 5h unknown, week 92% room" (review, 2026-11-01): the seat he is on,
+            // what is not known, and the room that is
             Text(Self.fiveHourUnknownLine(nick: nick, weekRoom: weekRoom))
                 .font(TowerType.font(.body, weight: .semibold)).foregroundStyle(.orange)
             if let next {
@@ -1877,14 +2029,14 @@ struct AgentLaneSection: View {
             OpenRouterProblem(message: why, hint: "the file exists but is not valid JSON",
                               tint: .orange)
         case .ok(let reading):
-            ProviderHeader(provider: provider, detail: AgentLane.headerDetail(reading))
+            ProviderHeader(provider: provider, detail: AgentLane.headerDetail(reading, now: now))
             VStack(alignment: .leading, spacing: 1) {
                 Text(AgentLane.modelLine(reading))
                     .font(TowerType.font(.small, design: .monospaced))
                 Text(AgentLane.dispatchLine(reading, now: now))
                     .font(TowerType.font(.small))
                     .foregroundStyle(TowerType.secondary)
-                if let line = AgentLane.usageLine(reading) {
+                if let line = AgentLane.usageLine(reading, now: now) {
                     Text(line)
                         .font(TowerType.font(.small))
                         .foregroundStyle(TowerType.secondary)
@@ -1935,9 +2087,32 @@ struct FleetRoom: View {
     let blast: BlastRadius?
     let machine: MachineLoad?
     let read: CLI.FleetRead
+    /// The seats and clock behind the near-cap line (approved mockup: one warning line per kind).
+    var accounts: [AccountSnapshot] = []
+    var now: Date = Date()
+
+    /// "3 seats near their cap: alt3 97% · ops1 93% · ops2 90%", fullest first, or nil. Live weekly
+    /// readings only: an old number is not a warning about now.
+    nonisolated static func nearCapLine(_ accounts: [AccountSnapshot], now: Date) -> String? {
+        let near = accounts.compactMap { a -> (String, Double)? in
+            guard a.kind == .claude, a.trustWeekly(now: now) == .live,
+                  let pct = a.effectiveWeekly(now: now).pct, pct >= 90 else { return nil }
+            return (a.nickname, pct)
+        }.sorted { $0.1 > $1.1 }
+        guard !near.isEmpty else { return nil }
+        let names = near.map { "\($0.0) \(Int($0.1.rounded()))%" }.joined(separator: " · ")
+        return "\(near.count) seat\(near.count == 1 ? "" : "s") near their cap: " + names
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
+            if let near = Self.nearCapLine(accounts, now: now) {
+                Text("⚠️ " + near)
+                    .font(TowerType.font(.small, weight: .medium))
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
             ForEach(CLI.fleetLines(blast: blast, machine: machine, read: read), id: \.self) { line in
                 Text(line.trimmingCharacters(in: .whitespaces))
                     .font(TowerType.font(.small, weight: .medium))
@@ -2050,7 +2225,7 @@ struct MenuContent: View {
                 // #121: a larger text size can make the boards taller than the screen, so
                 // the live panel scrolls them under a fixed header and footer. panelshot
                 // renders the full height.
-                BoardScroll(capped: refreshMode == .live) {
+                BoardScroll(capped: refreshMode == .live, density: model.density) {
                 TimelineView(.periodic(from: .now, by: 30)) { timeline in
                     let t = timeline.date
                     VStack(alignment: .leading, spacing: 5) {
@@ -2059,13 +2234,15 @@ struct MenuContent: View {
                                 activeEmail: model.activeEmail,
                                 accounts: model.accounts,
                                 switchProfiles: model.switchProfiles,
+                                switchThresholdPct: model.switchThresholdPct,
                                 rule: .either,
                                 now: t),
                             copied: Binding(get: { model.copiedCommand },
                                             set: { model.copiedCommand = $0 }))
 
                         FleetRoom(blast: model.blastRadius(now: t), machine: model.machine,
-                                  read: model.probed ? .done(sessions: model.agents != nil) : .notYet)
+                                  read: model.probed ? .done(sessions: model.agents != nil) : .notYet,
+                                  accounts: model.accounts, now: t)
 
                         SeatBoard(
                             model: model,
@@ -2088,11 +2265,13 @@ struct MenuContent: View {
                         // OpenRouter balance above.
                         LaneBoard(outcomes: model.laneOutcomes, now: t,
                                   cursorSeat: model.accounts.first { $0.kind == .cursor },
-                                  openRouter: model.orOutcome)
+                                  openRouter: model.orOutcome,
+                                  open: model.disclosure("lanes.open"))
 
                         // Load, as one more section in the same list.
                         SessionsBoard(agents: model.agents, probed: model.probed,
-                                      idleOpen: model.disclosure("sessions.idle"))
+                                      idleOpen: model.disclosure("sessions.idle"),
+                                      listOpen: model.disclosure("sessions.list"))
                     }
                 }
                 }
@@ -2100,17 +2279,20 @@ struct MenuContent: View {
 
             Divider()
 
+            if model.density.showsSettings {
             Toggle("Start at login", isOn: Binding(
                 get: { model.launchAtLogin },
                 set: { model.toggleLaunchAtLogin($0) }
             ))
             .toggleStyle(.checkbox)
             .font(TowerType.font(.body))
+            }
 
             if let e = model.loginError {
                 Text(e).font(TowerType.font(.small)).foregroundStyle(.red)
             }
 
+            if model.density.showsSettings {
             HStack(spacing: 6) {
                 Toggle("Remember Claude seats", isOn: Binding(
                     get: { model.retainClaudeSeats },
@@ -2125,15 +2307,31 @@ struct MenuContent: View {
                 Button("Forget") { model.forgetRetainedClaudeSeats() }
                     .font(TowerType.font(.body))
             }
-            Text("Keeps each seat's access token in your Keychain to read its usage until it expires.")
+            Text("Stores each seat's token pair in your Keychain and renews it before it expires.")
                 .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
+            }
             if let error = model.seatRetentionError {
                 Text("Seat retention: \(error)")
                     .font(TowerType.font(.small)).foregroundStyle(.red).lineLimit(2)
             }
 
+            if model.density.showsSettings {
+            HStack(spacing: 6) {
+                Stepper(
+                    "Switch alert at \(Int(model.switchThresholdPct)) %",
+                    value: Binding(get: { model.switchThresholdPct },
+                                   set: { model.setSwitchThreshold($0) }),
+                    in: SwitchThreshold.range, step: 5)
+                    .font(TowerType.font(.body))
+                Spacer()
+            }
+            Text("Tower says switch, and notifies once per window, when the active seat reaches this.")
+                .font(TowerType.font(.small)).foregroundStyle(TowerType.secondary)
+            }
+
             // #121: the operator could not read the 8 to 12 pt panel. The size applies at
             // once and is stored beside the other Tower settings.
+            if model.density.showsSettings {
             HStack(spacing: 6) {
                 Text("Text size").font(TowerType.font(.body))
                 Picker("Text size", selection: Binding(
@@ -2150,19 +2348,49 @@ struct MenuContent: View {
                 .font(TowerType.font(.body))
                 Spacer()
             }
+            }
+
+            // Round 5: what a click on the menu bar item opens.
+            if model.density.showsSettings {
+            HStack(spacing: 6) {
+                Text("Menu bar opens").font(TowerType.font(.body))
+                Picker("Menu bar opens", selection: Binding(
+                    get: { model.panelSurface },
+                    set: { model.setPanelSurface($0) }
+                )) {
+                    Text("Dashboard").tag(PanelSurface.dashboard)
+                    Text("Classic panel").tag(PanelSurface.classic)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .font(TowerType.font(.body))
+                Spacer()
+            }
+            }
 
             HStack(spacing: 6) {
                 Button("Refresh") { Task { await model.refresh() } }
                     .font(TowerType.font(.body))
                 Button("Settings…") { SetupWindows.shared.openSettings(model: model) }
+                // Compact folds the settings rows above; Full brings them back.
+                Button(model.density == .full ? "Compact" : "Full") {
+                    model.setDensity(model.density == .full ? .compact : .full)
+                }
+                .font(TowerType.font(.body))
+                // Visible in both densities: the settings row above folds away in Compact,
+                // and this is the way to the dashboard from the classic panel (review b114).
+                Button(model.panelSurface.switchControl.label) { model.setPanelSurface(model.panelSurface.switchControl.destination) }
                     .font(TowerType.font(.body))
                 Spacer()
+                if model.density.showsSettings {
                 // The two panel-level bindings, next to the panel's own
                 // controls: one opens and closes it from anywhere, the other
                 // dismisses it while it has focus.
                 KeyHint("⌘. toggle")
                 KeyHint("esc close")
                 Spacer()
+                }
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .font(TowerType.font(.body))
             }
@@ -2194,14 +2422,17 @@ private struct BoardHeightKey: PreferenceKey {
 /// so the content's measured height sets the frame, capped by the screen.
 struct BoardScroll<Content: View>: View {
     let capped: Bool
+    var density: PanelDensity = .full
     @ViewBuilder let content: () -> Content
     @State private var contentHeight: CGFloat = 0
 
     /// Room left for the boards: the screen's visible height minus the header, the footer
     /// and the panel's distance from the menubar, all of which grow with the text size.
     /// Pure arithmetic, so it stays off the View's main actor and tests can call it directly.
-    nonisolated static func cap(visibleHeight: CGFloat, textFactor: CGFloat) -> CGFloat {
-        max(240, visibleHeight - 300 * textFactor)
+    nonisolated static func cap(visibleHeight: CGFloat, textFactor: CGFloat,
+                                density: PanelDensity = .full) -> CGFloat {
+        PanelHeight.boardsCap(visibleHeight: visibleHeight, textFactor: textFactor,
+                              chrome: density.chrome)
     }
 
     var body: some View {
@@ -2214,7 +2445,8 @@ struct BoardScroll<Content: View>: View {
             }
             .frame(height: min(max(contentHeight, 1), Self.cap(
                 visibleHeight: NSScreen.main?.visibleFrame.height ?? 800,
-                textFactor: TowerTextSize.current * TowerType.layoutScale)))
+                textFactor: TowerTextSize.current * TowerType.layoutScale,
+                density: density)))
             .onPreferenceChange(BoardHeightKey.self) { height in
                 guard abs(height - contentHeight) > 0.5 else { return }
                 contentHeight = height
@@ -2223,15 +2455,6 @@ struct BoardScroll<Content: View>: View {
         } else {
             content()
         }
-    }
-}
-
-final class StatusPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-
-    override func cancelOperation(_ sender: Any?) {
-        AppDelegate.shared?.hidePanel()
     }
 }
 
@@ -2272,6 +2495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var statusItem: NSStatusItem?
     private(set) var panel: StatusPanel?
     private var dismissMonitor: Any?
+    private var reopenGuard = PanelReopenGuard()
     private var titleCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -2315,7 +2539,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.title = LimitsModel.shared.title
             button.target = self
             button.action = #selector(statusItemClicked(_:))
-            button.sendAction(on: [.leftMouseUp])
+            // Right click (or control click) opens the small menu with the way between surfaces.
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         self.statusItem = item
 
@@ -2328,19 +2553,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
     }
 
-    private func setupPanel() {
-        let hosting = NSHostingController(rootView: MenuContent(model: LimitsModel.shared))
-        if #available(macOS 13.0, *) {
-            hosting.sizingOptions = [.preferredContentSize]
-        }
+    /// The full dashboard (round 5 pick) when the surface setting says so, the default; the
+    /// classic SwiftUI panel otherwise. Both live in the same StatusPanel, so Esc, focus loss
+    /// and the reopen guard behave the same.
+    private var dashboard: DashboardController?
+    private var shownSurface: PanelSurface?
 
+    /// Puts the content for the stored surface into the panel. Runs at launch and at every
+    /// open, so a change made anywhere (the footer button, the right click menu, the classic
+    /// panel's button, `tower_config_set panel.surface` from a lane) shows at the next open.
+    /// The setting used to be read once at launch (review b114 on #152).
+    private func applySurface() {
+        guard let panel = self.panel else { return }
+        let surface = PanelSurface.current()
+        let decision = PanelSurface.decide(shown: shownSurface, stored: surface)
+        // Always publish: a change made outside the app (tower_config_set) must reach the model,
+        // or the switch button and the picker keep naming the surface that was shown before.
+        if LimitsModel.shared.panelSurface != decision.publish { LimitsModel.shared.panelSurface = decision.publish }
+        guard decision.swapContent else { return }
+        shownSurface = surface
+        dashboard?.stop()
+        switch surface {
+        case .dashboard:
+            let d = DashboardController(service: TowerMCPService(env: .live()))
+            d.onSwitch = { LimitsModel.shared.setPanelSurface(PanelSurface.dashboard.other) }
+            d.onQuit = { NSApplication.shared.terminate(nil) }
+            // The page's buttons. Re-trust is the one place the Keychain dialog may appear (one
+            // approval for every remembered seat); both end in a refresh, which pushes the page.
+            d.onAction = { action in
+                switch action {
+                case .retrust: LimitsModel.shared.retrustRetainedClaudeSeats()
+                case .refresh: Task { await LimitsModel.shared.refresh() }
+                }
+            }
+            dashboard = d
+            panel.contentViewController = d
+        case .classic:
+            dashboard = nil
+            let hosting = NSHostingController(rootView: MenuContent(model: LimitsModel.shared))
+            if #available(macOS 13.0, *) {
+                hosting.sizingOptions = [.preferredContentSize]
+            }
+            panel.contentViewController = hosting
+        }
+    }
+
+    /// The surface setting changed while the app runs: swap now when the panel is open,
+    /// otherwise at the next open.
+    func surfaceChanged() {
+        applySurface()
+        guard let panel, panel.isVisible else { return }
+        fitPanel()
+        dashboard?.start()
+    }
+
+    private func setupPanel() {
         let p = StatusPanel(
             contentRect: NSRect(x: 0, y: 0, width: TowerTextSize.pt(TowerType.panelWidth), height: 200),
             styleMask: [.titled, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        p.contentViewController = hosting
+        p.onDismiss = { [weak self] reason in self?.hidePanel(reason) }
         p.isFloatingPanel = true
         p.level = .floating
         p.titleVisibility = .hidden
@@ -2354,31 +2628,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.hasShadow = true
         p.backgroundColor = .windowBackgroundColor
         self.panel = p
+        applySurface()
     }
 
     @objc func statusItemClicked(_ sender: Any?) {
         Self.panelLog.notice("status item clicked: panel visible=\(self.panel?.isVisible ?? false, privacy: .public)")
+        if let event = NSApp.currentEvent,
+           event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            showContextMenu()
+            return
+        }
         togglePanel()
+    }
+
+    /// The small menu on the status item: the other surface, and Quit (the dashboard page has
+    /// no Quit of its own). Shown by attaching it for one click, the usual status item trick.
+    private func showContextMenu() {
+        guard let item = statusItem, let button = item.button else { return }
+        let menu = NSMenu()
+        let switchItem = NSMenuItem(title: PanelSurface.current().switchMenuTitle, action: #selector(switchSurfaceFromMenu), keyEquivalent: "")
+        switchItem.target = self
+        menu.addItem(switchItem)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit Tower", action: #selector(quitFromMenu), keyEquivalent: "")
+        quit.target = self
+        menu.addItem(quit)
+        item.menu = menu
+        button.performClick(nil)
+        item.menu = nil
+    }
+
+    @objc private func switchSurfaceFromMenu() {
+        LimitsModel.shared.setPanelSurface(PanelSurface.current().other)
+    }
+
+    @objc private func quitFromMenu() {
+        NSApplication.shared.terminate(nil)
     }
 
     func togglePanel() {
         if let panel = self.panel, panel.isVisible {
             hidePanel()
-        } else {
+        } else if reopenGuard.clickShouldOpen(at: Date()) {
             showPanel()
         }
     }
 
     func showPanel() {
         guard let panel = self.panel else { return }
+        applySurface()
         fitPanel()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        dashboard?.start()
         Task { await LimitsModel.shared.refreshIfStale() }
     }
 
-    func hidePanel() {
-        panel?.orderOut(nil)
+    func hidePanel(_ reason: PanelDismissal? = nil) {
+        guard let panel, panel.isVisible else { return }
+        panel.orderOut(nil)
+        // A hidden dashboard stops rebuilding its feed (it ran AgentProbe.fetch on every change).
+        dashboard?.stop()
+        reopenGuard.noteHidden(reason, at: Date())
     }
 
     /// Sizes the panel to its content and re-anchors it under the menubar item. Runs on
@@ -2386,7 +2697,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func fitPanel() {
         guard let panel = self.panel else { return }
         if let hosting = panel.contentViewController {
-            let targetSize = hosting.view.fittingSize
+            // The dashboard has a fixed size; a plain container view reports no fitting size.
+            let targetSize = hosting === dashboard ? DashboardController.panelSize : hosting.view.fittingSize
             if targetSize.width > 0 && targetSize.height > 0 {
                 panel.setContentSize(targetSize)
             }
@@ -2418,7 +2730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
             guard let self = self, let panel = self.panel, panel.isVisible else { return }
-            self.hidePanel()
+            self.hidePanel(.outsideClick)
         }
     }
 }
