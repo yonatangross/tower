@@ -375,6 +375,14 @@ struct SeatBoard: View {
         AccountSnapshot.partition(accounts, rule: .either, now: now)
     }
 
+    private var summaryText: String {
+        // Ready means a quota seat you can act on; money rows like OpenRouter are
+        // not quota and never count.
+        MenuContent.readySummary(ready: split.active.filter { $0.kind.isRankable }.count,
+                               total: accounts.filter { $0.kind.isRankable }.count,
+                               resting: split.resting, now: now)
+    }
+
     /// A seat that is only stale (no reading, no ceiling) has nothing to say until it is
     /// refreshed, so it folds into one "+ N stale" line. A capped seat stays in the list:
     /// its reopening clock is the information the row exists to give.
