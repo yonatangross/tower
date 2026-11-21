@@ -6,11 +6,11 @@ are in [playbooks/](playbooks/).
 > Ships as `Tower.app`. It covers Claude Code accounts, Codex, Cursor, and the
 > OpenRouter balance, so it is not Claude-specific.
 
-macOS menubar app that answers one question before you start work: **which account can
-take this, and what is already running?**
+macOS menubar app that answers three questions before you start work: **what has each
+account used, what is left, and when does it reset?**
 
-It reads **real** Claude Code usage limits across all your accounts, so switching between
-them stops being a guessing game, and it carries the rest of the picture alongside them:
+It reads **real** Claude Code usage limits across all your accounts and carries the rest
+of the picture alongside them:
 Codex tier, Cursor model-pool usage, OpenRouter balance and spend trend, live agent sessions per
 repo, and threshold alerts. Hence "Tower", not "Limits": it is air-traffic control
 for the fleet, not a gauge.
