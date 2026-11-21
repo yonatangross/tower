@@ -19,6 +19,10 @@ struct AgentInfo: Decodable, Identifiable, Hashable {
     /// Whether Tower matched the session's current transcript reset or only its older
     /// bridge ownership record. The former is an inference, never a credential read.
     var accountEvidence: String? = nil
+    /// The model the session's own transcript records on its newest assistant turn.
+    /// Session-scoped: a mid-session /model changes this on the next turn, which is
+    /// exactly the drift a launch-time label cannot see.
+    var modelNow: String? = nil
     /// Optional process metadata from `claude agents`. When present, it scopes transcript
     /// and saved-identity reads to that session's configuration root.
     var configDir: String? = nil
@@ -30,7 +34,7 @@ struct AgentInfo: Decodable, Identifiable, Hashable {
     init(kind: String? = nil, status: String? = nil, cwd: String? = nil,
          sessionId: String? = nil, name: String? = nil, pid: Int? = nil,
          startedAt: String? = nil, accountEmail: String? = nil, accountEvidence: String? = nil,
-         configDir: String? = nil) {
+         modelNow: String? = nil, configDir: String? = nil) {
         self.kind = kind
         self.status = status
         self.cwd = cwd
@@ -40,6 +44,7 @@ struct AgentInfo: Decodable, Identifiable, Hashable {
         self.startedAt = startedAt
         self.accountEmail = accountEmail
         self.accountEvidence = accountEvidence
+        self.modelNow = modelNow
         self.configDir = configDir
     }
 
@@ -286,15 +291,10 @@ struct SessionAccountResolver {
         case .absent:
             break
         }
-        let fm = FileManager.default
-        let projects = (try? fm.contentsOfDirectory(
-            at: root.appendingPathComponent("projects"), includingPropertiesForKeys: nil)) ?? []
-        let transcripts = projects.map { $0.appendingPathComponent("\(sessionID).jsonl") }
-            .filter { fm.fileExists(atPath: $0.path) }
-        guard transcripts.count == 1 else { return nil }
-        let transcript = transcripts[0]
+        guard let transcript = Self.transcript(for: sessionID, root: root) else { return nil }
 
         // Saved configs are identity mappings only, never a source of active-account state.
+        let fm = FileManager.default
         let saved = (try? fm.contentsOfDirectory(
             at: root.appendingPathComponent("accounts"), includingPropertiesForKeys: nil)) ?? []
         let identityFiles = [config] + saved.filter({ $0.pathExtension == "json" })
@@ -380,6 +380,18 @@ struct SessionAccountResolver {
         if fields[1].isEmpty { return .anchor(fiveHour: fiveHour, sevenDay: nil) }
         guard let sevenDay = Int64(fields[1]), sevenDay > 0 else { return .unusable }
         return .anchor(fiveHour: fiveHour, sevenDay: sevenDay)
+    }
+
+    /// The one transcript `projects/` holds for a session id, nil when the count
+    /// is anything but exactly one: zero means nothing to read, two would be a
+    /// guess (the same ambiguity rule the account resolution above enforces).
+    static func transcript(for sessionID: String, root: URL) -> URL? {
+        let fm = FileManager.default
+        let projects = (try? fm.contentsOfDirectory(
+            at: root.appendingPathComponent("projects"), includingPropertiesForKeys: nil)) ?? []
+        let hits = projects.map { $0.appendingPathComponent("\(sessionID).jsonl") }
+            .filter { fm.fileExists(atPath: $0.path) }
+        return hits.count == 1 ? hits[0] : nil
     }
 
     private static func validEmail(_ raw: String) -> String? {
@@ -473,6 +485,37 @@ struct SessionAccountResolver {
     }
 }
 
+/// The model a session is running now, from its own transcript: assistant
+/// records carry `message.model` on every turn, so the newest such record is
+/// what a mid-session /model switched to. Same roots and the same ambiguity
+/// rule as the account resolver; nil is "not measured", never a guess.
+struct SessionModelResolver {
+    let home: URL
+
+    func resolve(_ session: AgentInfo) -> String? {
+        guard let sessionID = session.sessionId, !sessionID.isEmpty,
+              sessionID.unicodeScalars.allSatisfy({
+                  CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_"
+              }) else { return nil }
+        let root: URL
+        if let directory = session.configDir {
+            guard directory.hasPrefix("/") else { return nil }
+            root = URL(fileURLWithPath: directory)
+        } else {
+            root = home.appendingPathComponent(".claude")
+        }
+        guard let transcript = SessionAccountResolver.transcript(for: sessionID, root: root),
+              let line = ["\"type\":\"assistant\"", "\"type\": \"assistant\""]
+                  .lazy.compactMap({ AgentLane.lastLine(containing: $0, in: transcript) }).first,
+              let data = String(line).data(using: .utf8),
+              let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = record["message"] as? [String: Any],
+              let model = message["model"] as? String, !model.isEmpty
+        else { return nil }
+        return model
+    }
+}
+
 enum AgentProbe {
     /// Fixture home is injectable; no subprocess, keychain or account API is needed.
     static func summarize(_ data: Data,
@@ -482,12 +525,14 @@ enum AgentProbe {
         }
         var out = AgentSummary()
         let resolver = SessionAccountResolver(home: home)
+        let modelResolver = SessionModelResolver(home: home)
         out.interactive = rows.filter { $0.isInteractive }
             .map { row in
             var session = row
                 let resolution = resolver.resolve(session)
                 session.accountEmail = resolution?.email
                 session.accountEvidence = resolution?.evidence
+                session.modelNow = modelResolver.resolve(session)
                 return session
             }
             .sorted { a, b in

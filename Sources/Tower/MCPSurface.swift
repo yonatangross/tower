@@ -599,7 +599,7 @@ struct TowerMCPService: MCPService {
                 "properties": [
                     "generatedAt": ["type": "string"],
                     "lanes": ["type": "array", "items": [
-                        "type": "object", "required": ["provider", "label", "state", "error", "headerDetail", "modelPin", "configModel", "lastDispatch", "lastLimitHit", "usage", "opusFlag", "roomPct", "recommendable"],
+                        "type": "object", "required": ["provider", "label", "state", "error", "headerDetail", "modelPin", "configModel", "modelNow", "modelNowSource", "lastDispatch", "lastLimitHit", "usage", "opusFlag", "roomPct", "recommendable"],
                         "properties": [
                             "roomPct": ["type": ["number", "null"], "description": "percent of room left, null (unknown) when the reading is older than the freshness TTL or the lane exposes no usage"],
                             "recommendable": ["type": "boolean", "description": "false whenever room is unknown; a stale reading is never a recommendation"],
@@ -608,6 +608,8 @@ struct TowerMCPService: MCPService {
                             "opusFlag": ["type": ["string", "null"], "description": "Cursor only: set when the metered pool refuses Opus; Auto still runs"],
                             "error": ["type": ["string", "null"]], "headerDetail": ["type": ["string", "null"]],
                             "modelPin": ["type": ["string", "null"]], "configModel": ["type": ["string", "null"]],
+                            "modelNow": ["type": ["string", "null"], "description": "newest live evidence of the running model; null when the engine exposes no readable model record (agy: ~/.gemini is operator-auth territory)"],
+                            "modelNowSource": ["type": ["string", "null"], "description": "where modelNow came from: selection (engine's own pick record), config (global default reread live; a mid-session switch the tool does not write back is invisible)"],
                             "lastDispatch": ["type": ["object", "null"]], "lastLimitHit": ["type": ["object", "null"]],
                             "usage": ["type": ["object", "null"]],
                         ],
@@ -1654,6 +1656,7 @@ struct TowerMCPService: MCPService {
             var row: [String: JSON] = [
                 "provider": .string(provider.rawValue), "label": .string(provider.label),
                 "error": .null, "headerDetail": .null, "roomPct": .null, "recommendable": .bool(false), "modelPin": .null, "configModel": .null,
+                "modelNow": .null, "modelNowSource": .null,
                 "lastDispatch": .null, "lastLimitHit": .null, "usage": .null, "opusFlag": .null,
             ]
             switch outcome {
@@ -1673,6 +1676,11 @@ struct TowerMCPService: MCPService {
                 row["recommendable"] = .bool(AgentLane.isRecommendable(r, cursorSeat: seat, now: now))
                 row["modelPin"] = .string(r.modelPin)
                 row["configModel"] = .string(r.configModel)
+                // Live model evidence, labelled by provenance: the launch pin
+                // is frozen, so a mid-session /model switch makes it lie.
+                // modelNowSource says how strong the evidence is.
+                row["modelNow"] = .string(r.modelNow?.model)
+                row["modelNowSource"] = .string(r.modelNow?.source)
                 if provider == .cursor {
                     // The metered pool refuses Opus while Auto keeps running; the refusal
                     // itself is never on disk, so the flag comes from the measured pool.
@@ -1756,6 +1764,7 @@ struct TowerMCPService: MCPService {
                  "sessionId": .string(s.sessionId), "name": .string(s.sessionName),
                  "label": .string(s.displayName), "pid": s.pid.map { .int($0) } ?? .null,
                  "startedAt": .string(s.startedAt), "accountEmail": .string(s.accountEmail),
+                 "modelNow": .string(s.modelNow), "modelNowSource": .string(s.modelNow == nil ? nil : "transcript"),
                  "accountEvidence": .string(s.accountEvidence), "busy": .bool(s.isBusy)]
             }),
             "groups": .array(summary.groups.map { g in
