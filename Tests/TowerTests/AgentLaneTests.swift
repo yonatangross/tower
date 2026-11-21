@@ -204,16 +204,13 @@ final class AgentLaneTests: XCTestCase {
     func testAgyDispatchIsReadUnderEitherKind() throws {
         let home = try makeHome()
         try write("#!/bin/sh\n", ".local/bin/agy", in: home, executable: true)
-        try write(Self.ledger,
-                  ".config/dispatcher/plugins/hq-crossrepo/.state/dispatch-worktrees.jsonl",
-                  in: home)
+        try write(Self.ledger, "ledgers/dispatch-worktrees.jsonl", in: home)
         let stationLine = """
         {"lane": "agy-2638", "branch": "fix/x", "kind": "agy", "model": "", "opened_at": "2026-10-31T08:41:00Z"}
         """
-        try write(Self.lanesLedger + "\n" + stationLine + "\n",
-                  ".config/dispatcher/plugins/hq-crossrepo/.state/lanes.jsonl", in: home)
+        try write(Self.lanesLedger + "\n" + stationLine + "\n", "ledgers/lanes.jsonl", in: home)
 
-        guard case .ok(let agy) = AgentLane.read(.agy, home: home, env: [:]) else {
+        guard case .ok(let agy) = AgentLane.read(.agy, home: home, env: Self.ledgerEnv(home)) else {
             return XCTFail("agy should read")
         }
         XCTAssertEqual(agy.lastDispatch?.at, DateParse.parse("2026-10-31T08:41:00Z"))

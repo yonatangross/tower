@@ -1944,6 +1944,13 @@ enum AgentLane {
         lane == .agy ? "gemini" : lane.rawValue
     }
 
+    /// Every `kind` a lane's dispatches are recorded under. agy has two: the dispatcher
+    /// writes "gemini" and its shell wrapper writes "agy" (2026-10-31: an agy station ran
+    /// all morning while the row still showed a dispatch from 10-11).
+    static func ledgerKinds(_ lane: Provider) -> [String] {
+        lane == .agy ? ["gemini", "agy"] : [ledgerKind(lane)]
+    }
+
     /// Settings key for the optional dispatch ledger directory.
     static let dispatchLedgerDirectoryKey = "dispatchLedgerDirectory"
 
@@ -2544,13 +2551,15 @@ enum AgentLane {
         // Two ledgers record a dispatch: worktree dispatches in dispatch-worktrees.jsonl
         // and conveyor-opened lanes in lanes.jsonl. Neither is complete alone (devin lanes
         // only ever reach the second), so the newest of both wins.
-        let worktreeDispatch = ledgerDir.flatMap { dir in (try? String(
+        let kinds = ledgerKinds(lane)
+        let worktreeNewest = ledgerDir.flatMap { dir in (try? String(
             contentsOf: dir.appendingPathComponent("dispatch-worktrees.jsonl"),
-            encoding: .utf8)).flatMap { newestDispatches(ledger: $0)[ledgerKind(lane)] } }
-        let laneDispatch = ledgerDir.flatMap { dir in (try? String(
+            encoding: .utf8)).map { newestDispatches(ledger: $0) } } ?? [:]
+        let laneNewest = ledgerDir.flatMap { dir in (try? String(
             contentsOf: dir.appendingPathComponent("lanes.jsonl"),
-            encoding: .utf8)).flatMap { newestLaneEntries(ledger: $0)[ledgerKind(lane)] } }
-        let dispatch = [worktreeDispatch, laneDispatch].compactMap { $0 }.max { $0.at < $1.at }
+            encoding: .utf8)).map { newestLaneEntries(ledger: $0) } } ?? [:]
+        let dispatch = kinds.flatMap { [worktreeNewest[$0], laneNewest[$0]] }
+            .compactMap { $0 }.max { $0.at < $1.at }
 
         let usage: UsageRead
         switch lane {

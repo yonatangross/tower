@@ -52,9 +52,30 @@ final class BrandMarkTests: XCTestCase {
         XCTAssertNil(Provider.muse.brandIconName)
     }
 
-    func testEveryEngineMapsToAnAssetThatExistsInTheBundle() {
+    /// The repo ships no product icons. A checkout that ran
+    /// scripts/extract-brand-marks.sh has them, and then every mapped mark must exist.
+    private func skipUnlessPresent(_ directory: String) throws {
+        let dir = resourcesDir.appendingPathComponent(directory)
+        let pngs = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?
+            .filter { $0.hasSuffix(".png") } ?? []
+        try XCTSkipIf(pngs.isEmpty, "no icons under Resources/\(directory); the bundle falls back to monograms")
+    }
+
+    func testExtractedAppIconsCoverEveryProductMark() throws {
+        try skipUnlessPresent("BrandMarks")
         for provider in Provider.allCases {
-            for name in [provider.brandIconName, provider.vendorIconName].compactMap({ $0 }) {
+            guard let name = provider.brandIconName, !name.hasPrefix("icon-") else { continue }
+            let file = iconFile(name)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                          "\(provider) maps to \(name) but \(file.lastPathComponent) is missing")
+        }
+    }
+
+    func testTemplateMarksExistWhenShipped() throws {
+        try skipUnlessPresent("icons")
+        for provider in Provider.allCases {
+            for name in [provider.brandIconName, provider.vendorIconName].compactMap({ $0 })
+            where name.hasPrefix("icon-") {
                 let file = iconFile(name)
                 XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
                               "\(provider) maps to \(name) but \(file.lastPathComponent) is missing")
@@ -65,7 +86,8 @@ final class BrandMarkTests: XCTestCase {
     /// Marks under icons/ render `.template`, which paints every pixel that is not
     /// transparent in the tint. An opaque asset is a solid square on screen: the
     /// OpenRouter money row was a blank white tile until 2026-09-27.
-    func testTemplateMarksCarryTransparency() {
+    func testTemplateMarksCarryTransparency() throws {
+        try skipUnlessPresent("icons")
         for provider in Provider.allCases {
             for name in [provider.brandIconName, provider.vendorIconName].compactMap({ $0 })
             where name.hasPrefix("icon-") {
@@ -98,7 +120,8 @@ final class BrandMarkTests: XCTestCase {
 
     /// Real app icons also carry a 128 px @2x rep next to the 64 px base, so
     /// rows stay crisp on Retina displays.
-    func testRealAppIconsShipARetinaRep() {
+    func testRealAppIconsShipARetinaRep() throws {
+        try skipUnlessPresent("BrandMarks")
         for provider in Provider.allCases {
             guard let name = provider.brandIconName, !name.hasPrefix("icon-") else { continue }
             let retina = iconFile("\(name)@2x")

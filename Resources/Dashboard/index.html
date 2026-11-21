@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Tower</title>
+<style>
+:root{
+  color-scheme:dark;
+  --base:#08090b;--s1:#0f1114;--s2:#15181c;--s3:#1c2026;
+  --hair:#ffffff14;--hair2:#ffffff24;
+  --ink:#f7f8f8;--ink2:#d0d6e0;--mute:#8a8f98;
+  --accent:#7c7cff;--accent2:#a3a3ff;
+  --good:#62c073;--warn:#f2a20d;--crit:#f34e52;--info:#52a8ff;--ice:#aab2c0;
+  --r1:4px;--r2:8px;--r3:12px;--r4:16px;
+  --sp1:4px;--sp2:8px;--sp3:12px;--sp4:16px;--sp5:24px;--sp6:32px;
+  --t-fast:120ms;--t-mid:240ms;--t-slow:700ms;--ease:cubic-bezier(.23,1,.32,1);--stag:25ms;
+  --e1:inset 0 1px 0 #ffffff0d,0 0 0 1px #ffffff14;
+  --e2:inset 0 1px 0 #ffffff14,0 0 0 1px #ffffff14,0 2px 32px #00000040;
+  --e3:inset 0 1px 0 #ffffff1a,0 0 0 1px #ffffff1f,0 24px 64px #000000a6;
+  --round:-apple-system,"SF Pro Display",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:radial-gradient(900px 500px at 70% -10%,#7c7cff1c,transparent 65%),var(--base);color:var(--ink);font:17px/1.65 system-ui,-apple-system,"Arial Hebrew",sans-serif}
+.layout{display:grid;grid-template-columns:150px minmax(0,1064px);gap:30px;max-width:1290px;margin:0 auto;padding:30px 20px 90px;justify-content:center}
+.rail{position:sticky;top:20px;align-self:start;font-size:15px}
+.rail a{display:block;padding:6px 12px;color:var(--mute);text-decoration:none;border-inline-start:2px solid var(--hair)}
+.rail a.on{color:var(--ink);border-inline-start-color:var(--accent);font-weight:600}
+a:focus-visible,button:focus-visible,label:focus-within{outline:2px solid var(--accent2);outline-offset:2px}
+.railbtn{display:none}
+@media(max-width:1000px){.layout{grid-template-columns:minmax(0,1fr);gap:0}.rail{top:0;z-index:9;background:var(--base);padding:8px 0}.rail nav{display:none}.rail.open nav{display:block}.railbtn{display:block;background:var(--s2);color:var(--ink);border:1px solid var(--hair);border-radius:9px;padding:6px 14px;font:inherit}}
+h1{font-size:40px;line-height:1.15;margin:0 0 10px;font-weight:700}
+h2{font-size:27px;margin:0 0 6px;line-height:1.25}
+h3{font-size:16px;margin:0 0 8px;color:var(--ink2);font-weight:600}
+section{padding:42px 0;scroll-margin-top:20px}
+section:first-of-type{padding-top:0}
+p{margin:0 0 12px;color:var(--ink2);max-width:70ch}
+.lead{font-size:20px;color:var(--ink)}
+.notice{border-inline-start:3px solid var(--warn);padding:4px 14px;margin:14px 0}
+.surf{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:18px 0 8px}
+.surf button{background:var(--s1);border:0;box-shadow:var(--e1);border-radius:var(--r3);padding:0 0 6px;color:var(--ink2);font:inherit;font-size:14px;cursor:pointer;overflow:hidden;transition:box-shadow var(--t-mid) var(--ease),transform var(--t-fast) var(--ease)}
+.surf button:hover{transform:translateY(-1px)}
+.surf button[aria-pressed=true]{box-shadow:inset 0 0 0 1.5px var(--accent),0 0 18px #7c7cff33;color:var(--ink)}
+.surf .win{display:block;height:128px;overflow:hidden;position:relative;direction:ltr;margin-bottom:5px;pointer-events:none}
+.surf .win .p{position:absolute;left:0;top:0;width:440px;max-width:none;transform:scale(.37);transform-origin:top left;box-shadow:none}
+.surf .win .p.dash,.surf .win .p.dialhero{width:1040px;transform:scale(.157)}
+.surf .win *{animation:none!important}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;padding:8px 0;align-items:center}
+.tabs span{color:var(--mute);font-size:15px;margin-inline-end:6px}
+.tabs button,.tabs2 button{background:var(--s2);border:1px solid var(--hair);color:var(--ink2);border-radius:20px;padding:4px 14px;font:inherit;font-size:15px;cursor:pointer}
+.tabs button[aria-pressed=true],.tabs2 button[aria-pressed=true]{background:var(--ink);color:#0f1114;border-color:var(--ink);font-weight:600}
+#stage{display:flex;justify-content:center;min-height:300px;margin-top:10px}
+.about{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:18px}
+.about h3{font-size:14px;color:var(--mute);font-weight:500;margin:0}.about p{font-size:15px;color:var(--ink);margin:0}
+.tok{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:22px}
+.sw{background:var(--s1);box-shadow:var(--e1);border-radius:var(--r2);padding:8px;font-size:13px;direction:ltr;text-align:left}
+.sw i{display:block;height:34px;border-radius:var(--r1);margin-bottom:6px}
+.sw code{font:12px ui-monospace,Menlo,monospace;color:var(--mute)}
+.gal{display:grid;grid-template-columns:120px repeat(5,minmax(0,1fr));gap:8px;align-items:center;direction:ltr;text-align:center;background:var(--s1);box-shadow:var(--e1);border-radius:var(--r3);padding:12px;margin-bottom:12px}
+.gal>b{font-size:13px;color:var(--mute);font-weight:500;text-align:left}
+.gal>span.h{font-size:13px;color:var(--mute)}
+.gal .cellg{display:flex;justify-content:center;align-items:center;min-height:44px;font:13px var(--round);color:var(--ink)}
+.solo{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.solo>div{background:var(--s1);box-shadow:var(--e1);border-radius:var(--r3);padding:12px;direction:ltr;text-align:left;font:13px var(--round);min-width:0}
+.solo h4{margin:0 0 6px;font-size:12px;font-weight:500;color:var(--mute)}
+.demo{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.demo>div{background:var(--s1);box-shadow:var(--e1);border-radius:var(--r3);padding:14px;min-height:180px}
+.demo button,.go{background:linear-gradient(#8d8dff,#6a6af0);color:#fff;border:0;padding:7px 16px;border-radius:var(--r2);font:inherit;font-size:15px;font-weight:600;cursor:pointer;box-shadow:inset 0 1px .4px #ffffffa0,0 0 14px #7c7cff40}
+.slides{position:relative;height:90px;direction:ltr;margin:10px 0;font:13px var(--round)}
+.slot{position:absolute;left:0;right:0;height:38px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--s3);border-radius:var(--r2);box-shadow:var(--e1);transition:transform var(--t-slow) var(--ease)}
+.slot.a{transform:translateY(0)}.slot.b{transform:translateY(46px)}
+.ltab{width:100%;border-collapse:collapse;font-size:15px}
+.ltab th,.ltab td{text-align:start;padding:7px 8px;border-top:1px solid var(--hair);color:var(--ink2);vertical-align:top}
+.ltab th{color:var(--mute);font-weight:500;border-top:0}
+ul.need{margin:0;padding-inline-start:20px;color:var(--ink2);max-width:70ch}
+.pick{display:grid;gap:8px;margin-bottom:14px;max-width:640px}
+.pick label{display:flex;gap:10px;align-items:baseline;background:var(--s2);padding:9px 14px;border-radius:var(--r2);cursor:pointer}
+textarea{width:100%;max-width:640px;min-height:70px;background:var(--s2);border:1px solid var(--hair);border-radius:var(--r2);color:var(--ink);font:inherit;padding:10px;margin-bottom:12px;display:block}
+pre.prompt{direction:ltr;text-align:left;background:var(--s1);padding:14px;border-radius:var(--r2);white-space:pre-wrap;font:13px/1.55 ui-monospace,Menlo,monospace;color:var(--ink2);margin:0 0 12px;max-width:640px}
+#copied{color:var(--good);margin-inline-start:10px;font-size:15px}
+.tabs2{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.tabs2 button{font-size:14px;padding:3px 12px}
+.fbox{max-height:420px;overflow:auto;border:1px solid var(--hair);border-radius:var(--r3)}
+.fbox table{border-collapse:collapse;direction:ltr;font-size:14px;width:100%}.fbox th,.fbox td{text-align:left;padding:4px 8px;border-top:1px solid var(--hair);color:var(--ink2);white-space:nowrap}.fbox th{position:sticky;top:0;background:var(--s2);color:var(--mute);font-weight:500}
+details summary{cursor:pointer;color:var(--accent2)}
+/* the mock: English, left to right, 440 pt like TowerType.panelWidth */
+.p{direction:ltr;text-align:left;width:440px;max-width:100%;
+   background:linear-gradient(180deg,#1f2738 0,#171e2d 100%);border:1px solid #39435c;border-radius:14px;
+   box-shadow:0 22px 50px #0009,inset 0 1px 0 #ffffff14;
+   font:13px/1.3 var(--round);color:var(--ink);padding:12px;position:relative}
+.p svg{display:block;overflow:visible}
+.p text{font-family:var(--round);fill:var(--ink)}
+.p text.dim{fill:var(--mute)}
+.p .n{font-variant-numeric:tabular-nums;white-space:nowrap}
+.bar{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.bar b{font-size:14px}.bar span{font-size:12px;color:var(--mute);white-space:nowrap}
+.dim{color:var(--mute)}.sec{color:var(--ink2)}
+.btn{display:inline-block;background:#2f7be0;color:#fff;border-radius:8px;padding:6px 13px;font-weight:700;white-space:nowrap;box-shadow:inset 0 1px 0 #ffffff33}
+.t-good{color:var(--good)}.t-warn{color:var(--warn)}.t-crit{color:var(--crit)}.t-idle{color:var(--ink2)}
+.foot{display:flex;justify-content:space-between;gap:10px;color:var(--ink2);font-size:12px;margin-top:9px;white-space:nowrap}
+.tr{stroke:#ffffff17;fill:none}
+.v{fill:none;stroke-linecap:round}
+.s-good{stroke:var(--good)}.s-warn{stroke:var(--warn)}.s-crit{stroke:var(--crit)}.s-idle{stroke:var(--ice)}
+.s-hgood{stroke:url(#hgood)}.s-hwarn{stroke:url(#hwarn)}.s-hcrit{stroke:url(#hcrit)}.s-hidle{stroke:url(#hidle)}
+.glow{filter:drop-shadow(0 0 7px var(--gl))}
+@keyframes sweep{from{stroke-dasharray:0 100}}
+@keyframes swing{from{transform:rotate(-90deg)}}
+@keyframes rise{from{transform:translateY(100%)}}
+.v.anim{animation:sweep 900ms cubic-bezier(.2,.8,.2,1) both}
+.needle{animation:swing 1100ms cubic-bezier(.2,1.3,.4,1) both}
+.fill{animation:rise 800ms cubic-bezier(.2,.8,.2,1) both}
+@media(prefers-reduced-motion:reduce){.v.anim,.needle,.fill{animation:none}}
+
+/* 1 orbit */
+.o1 .hero{display:grid;grid-template-columns:186px 1fr;gap:12px;align-items:center}
+.o1 .say{font-size:30px;font-weight:800;line-height:1.02}
+.o1 .who{font-size:13px;color:var(--ink2);margin:2px 0 7px;white-space:nowrap}
+.o1 .lg{display:grid;grid-template-columns:10px 40px 1fr;gap:2px 6px;align-items:center;font-size:12px;margin-bottom:8px}
+.o1 .lg i{width:9px;height:9px;border-radius:50%}
+.o1 .moons{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-top:8px;padding-top:8px;border-top:1px solid #ffffff14}
+.o1 .moon{text-align:center;min-width:0}
+.o1 .moon svg{margin:0 auto}
+.o1 .moon b{display:block;font-size:12px;margin-top:2px}
+.o1 .moon span{display:block;font-size:10.5px;color:var(--mute);white-space:nowrap}
+
+/* 2 week dial */
+.o2 .hero{display:grid;grid-template-columns:272px 1fr;gap:6px;align-items:center}
+.o2 .list{font-size:12px}
+.o2 .list h4{margin:0 0 3px;font-size:12px;font-weight:500;color:var(--mute)}
+.o2 .row{display:flex;justify-content:space-between;gap:6px;padding:2.5px 0;white-space:nowrap}
+.o2 .ribbon{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.o2 .ribbon b{font-size:16px;white-space:nowrap}
+
+/* 3 fleet board */
+.o3 .top{display:grid;grid-template-columns:156px 1fr;gap:12px;align-items:center}
+.o3 .say{font-size:17px;font-weight:800;margin-bottom:6px;white-space:nowrap}
+.o3 .tiles{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.o3 .tile{background:#ffffff0b;border-radius:9px;padding:6px 7px;box-shadow:inset 0 1px 0 #ffffff0f}
+.o3 .tile b{display:block;font-size:17px;line-height:1.15;white-space:nowrap}
+.o3 .tile span{font-size:11px;color:var(--mute);white-space:nowrap}
+.o3 .dl{display:grid;grid-template-columns:1fr 1fr;gap:1px 8px;font-size:11.5px;margin-top:7px}
+.o3 .dl div{display:flex;gap:5px;align-items:center;white-space:nowrap}
+.o3 .dl i{width:8px;height:8px;border-radius:2px;flex:none}
+.chart-t{font-size:12px;color:var(--ink2);margin:9px 0 2px;display:flex;justify-content:space-between;white-space:nowrap}
+
+/* 4 heat week */
+.o4 .big{display:flex;align-items:baseline;gap:9px;white-space:nowrap}
+.o4 .big b{font-size:32px;font-weight:800;line-height:1.05}
+.o4 .sub{font-size:12px;color:var(--ink2);margin:2px 0 7px;white-space:nowrap}
+.scale{display:flex;align-items:center;gap:3px;font-size:11px;color:var(--mute);white-space:nowrap}
+.scale i{width:14px;height:8px;border-radius:2px}
+
+/* 5 cockpit */
+.o5 .hero{display:grid;grid-template-columns:244px 1fr;gap:8px;align-items:end}
+.o5 .read b{display:block;font-size:24px;font-weight:800;line-height:1.1;white-space:nowrap}
+.o5 .read span{display:block;font-size:12px;color:var(--ink2);margin-bottom:7px;white-space:nowrap}
+.o5 .tanks{display:grid;grid-template-columns:repeat(8,1fr);gap:3px 2px;margin-top:6px}
+.o5 .tank{text-align:center;min-width:0}
+.o5 .tank svg{margin:0 auto}
+.o5 .tank text{paint-order:stroke;stroke:#0c1220;stroke-width:3px;stroke-linejoin:round}
+.o5 .tank span{display:block;font-size:10.5px;color:var(--ink2);white-space:nowrap;overflow:hidden}
+.o5 .spark{display:grid;grid-template-columns:1fr 150px;gap:8px;align-items:center;font-size:12px;margin-top:8px;white-space:nowrap}
+
+.p svg.ic{display:inline-block;vertical-align:-3px;flex:none}
+.d{display:inline-block;width:7px;height:7px;border-radius:50%;flex:none}
+.adv{display:flex;gap:6px;align-items:center;font-size:12.5px;color:var(--ink);margin-bottom:6px;white-space:nowrap}
+.tray{margin-top:8px;padding-top:7px;border-top:1px solid #ffffff14;font-size:11.5px;color:var(--ink2);display:grid;gap:4px}
+.tray>div{display:flex;align-items:center;gap:5px;white-space:nowrap}
+.tray .sep,.dh .sep{flex:1}
+.o1 .hero{grid-template-columns:172px 1fr}.o1 .moon span.n{color:var(--ink2)}
+.o3 .dl{grid-template-columns:1fr}.o3 .dl div{gap:6px}.o3 .dl .gn{width:80px}.o3 .dl .st{display:flex;gap:2px}
+.mgs{display:flex;gap:8px;align-items:center;margin-top:6px}.mg{text-align:center;font-size:10.5px;color:var(--ink2)}.mg svg{margin:0 auto}
+.mt{margin-left:auto;font-size:12px;text-align:right;white-space:nowrap}.mt svg{margin-left:auto}
+.dash{width:1040px;max-width:none}
+.dash .dh{display:flex;align-items:center;gap:12px;margin-bottom:10px;white-space:nowrap}.dash .dh .say{font-size:24px;font-weight:800}.dash .adv{margin:0}
+.dg{display:grid;grid-template-columns:176px 652px 156px;gap:14px}.dg>div{min-width:0}
+.dash h4{margin:10px 0 3px;font-size:12px;font-weight:600;color:var(--mute)}
+.dash table{font-size:11.5px;width:652px;direction:ltr;max-width:none}
+.dash th{font-size:11px;padding:2px 4px}.dash td{padding:1px 4px;border-top:1px solid #ffffff10;color:var(--ink);vertical-align:middle}
+.dash tr.on td{background:#ffffff0c}
+.chip{font-size:11px;color:var(--ink2);white-space:nowrap}.chip.act{background:#2f7be0;color:#fff;border-radius:5px;padding:1px 6px;font-weight:700}
+.ml{display:flex;gap:6px;align-items:center;font-size:12px;padding:1.5px 0;white-space:nowrap}.ml .lab{flex:1;font-size:11px}
+.tabs2{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.tabs2 button{background:var(--lift);border:1px solid var(--rim);color:var(--ink2);border-radius:16px;padding:3px 12px;font:inherit;font-size:14px;cursor:pointer}.tabs2 button[aria-pressed=true]{background:var(--ink);color:#0c1220}
+.fbox{max-height:440px;overflow:auto;border:1px solid var(--rim);border-radius:10px}.fbox table{max-width:none}.fbox th{position:sticky;top:0;background:var(--deep)}
+
+/* round 6: provider groups in orbit, fleet, heat, cockpit */
+.gh.tight{margin:4px 0 2px;padding:3px 6px}
+.gh.tight .tile{width:18px;height:18px}
+.gh .gl .pl{margin:0;display:flex;gap:3px;flex-wrap:wrap}
+.orbits .og{min-width:0}
+.orbits .og.wide{grid-column:1/-1}
+.orbits{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px;margin-top:6px}
+.orbits .og .moons{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 0 4px}
+.orbits .moon{display:flex;flex-direction:column;align-items:center;font-size:11px;min-width:48px}
+.orbits .moon.on b{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.orbits .more{align-self:center;font-size:11px;color:var(--ink2)}
+.o3 .fgs{display:flex;flex-direction:column;gap:3px;margin-top:6px}
+.o3 .top>div{min-width:0}
+.gh.tight .gl{flex-wrap:wrap;white-space:normal}
+.o3 .fg{display:grid;grid-template-columns:22px 100px minmax(0,1fr);align-items:center;gap:6px;padding:2px 6px;border-radius:6px;box-shadow:inset 2px 0 0 var(--tint);background:linear-gradient(90deg,color-mix(in srgb,var(--tint) 12%,transparent),transparent 70%)}
+.o3 .fg .pl{display:flex;gap:3px;flex-wrap:wrap}
+.o5 .banks{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.o5 .bank{flex:1 1 0;min-width:0}
+.o5 .bank.wide{flex-basis:100%}
+.o5 .bank{border-radius:8px;padding:4px 6px;box-shadow:inset 2px 0 0 var(--tint);background:linear-gradient(90deg,color-mix(in srgb,var(--tint) 10%,transparent),transparent 70%)}
+.o5 .bank .bl{display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:3px}
+.o5 .bank .tanks{display:flex;gap:6px;flex-wrap:wrap}
+
+/* design system overrides on the shared mock styles */
+.p{background:linear-gradient(137deg,#16191e 5%,#0e1013 76%);border:0;box-shadow:var(--e3);border-radius:var(--r4);font:13px/1.32 var(--round)}
+.p text{font-family:var(--round)}
+.p .say,.p b{letter-spacing:-.01em}
+.btn{background:linear-gradient(#8d8dff,#6a6af0);box-shadow:inset 0 1px .4px #ffffffa0,inset 0 -1px .4px #00000033,0 0 14px #7c7cff40;border-radius:var(--r2);transition:transform var(--t-fast) var(--ease)}
+.btn:hover{transform:translateY(-1px)}
+.tr{stroke:#ffffff12}
+.halo{filter:url(#soft);opacity:.34}
+.breathe{animation:breathe 4s ease-in-out infinite}
+@keyframes breathe{50%{opacity:.12}}
+@keyframes sweep{from{stroke-dasharray:0 100}}
+@keyframes arcin{from{stroke-dasharray:0 100}to{stroke-dasharray:100 0}}
+@keyframes swingh{from{transform:rotate(-140deg)}}
+@keyframes up{from{opacity:0;transform:translateY(6px)}}
+@keyframes fadein{from{opacity:0}}
+.v.anim{animation:sweep var(--t-slow) var(--ease) both}
+.v.arcin{animation:arcin var(--t-slow) var(--ease) both}
+.knob{animation:fadein var(--t-mid) var(--ease) .5s both;filter:drop-shadow(0 0 2px #0008)}
+.hand{animation:swingh 1000ms var(--ease) both}
+.needle{animation:swing 1100ms var(--ease) both}
+.fill{animation:rise var(--t-slow) var(--ease) both}
+.drow,.dash tr{animation:up var(--t-mid) var(--ease) both}
+.cell{background:linear-gradient(137deg,#ffffff08,#ffffff03);box-shadow:var(--e1);border-radius:var(--r3);padding:var(--sp3);min-width:0;position:relative;overflow:hidden}
+.bento{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--sp3)}
+.c-a{grid-column:1/5}.c-b{grid-column:5/9;display:flex;justify-content:center;align-items:center}.c-c{grid-column:9/13}.c-d{grid-column:9/13}.c-e{grid-column:1/10}.c-f{grid-column:10/13}.c-g{grid-column:1/13}
+.c-a,.c-b{grid-row:1/3}
+.c-a .av{display:grid;grid-template-columns:176px 1fr;gap:var(--sp2);align-items:center;height:100%}
+.c-a .say{font-size:21px;font-weight:700;display:block;white-space:nowrap}
+.dash h4{margin:0 0 4px;font-size:12px;font-weight:500;color:var(--mute)}.dash .cell h4:not(:first-child){margin-top:10px}
+.dash .who{white-space:nowrap;margin:2px 0;color:var(--ink2)}
+.mchip{display:inline-block;font-size:11px;padding:1px 6px;border-radius:5px;background:radial-gradient(75% 75% at 50% 92%,#1b1e24,#121418);box-shadow:inset 0 1px 1px #ffffff26,0 0 0 1px #000;color:var(--ink2);white-space:nowrap}
+.stat{margin-top:6px}.stat b{display:block;font-size:20px;font-weight:600;line-height:1.1;white-space:nowrap}.stat span{font-size:11px;color:var(--mute)}
+.tile{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;border-radius:6px;background:radial-gradient(75% 75% at 50% 92%,#1b1e24,#121418);box-shadow:inset 0 1px 1px #ffffff1f,0 0 0 1px #000;vertical-align:middle}
+.nm-t{font-size:15px;font-weight:600;margin-bottom:8px}
+.alert{display:flex;justify-content:space-between;padding:3px 7px;border-radius:5px;background:#f34e5218;color:#ff8f92;font-size:12px;margin-bottom:3px;white-space:nowrap}
+.dash{width:1040px;max-width:none}
+.dash table{font-size:12px;width:100%;direction:ltr;border-collapse:collapse}
+.dash th{font-size:11px;padding:2px 4px;text-align:left;color:var(--mute);font-weight:500;white-space:nowrap}.dash td{padding:1px 4px;border-top:1px solid #ffffff0c;color:var(--ink);vertical-align:middle;white-space:nowrap}
+.dash tr.on td{background:#ffffff0a}
+.dialhero{width:1040px;max-width:none}
+.dhead{display:flex;align-items:center;gap:12px;margin-bottom:10px;white-space:nowrap}.dhead .say{font-size:26px;font-weight:700}.dhead .sep{flex:1}.dhead .adv{margin:0}
+.dbody{display:grid;grid-template-columns:372px 1fr;gap:var(--sp3);align-items:center}.dstage{display:flex;justify-content:center}
+/* A picture older than the freshness line: the headline (CAN'T TELL, its age, Refresh) stays sharp, the body behind it is dimmed. */
+.oldfeed .dbody,.oldfeed .tray,.oldfeed .bento>.cell:not(.c-a){opacity:.35;filter:grayscale(1)}
+.dcol h4{margin:6px 0 4px;font-size:12px;font-weight:500;color:var(--mute)}
+.drow{display:grid;grid-template-columns:26px 1fr 84px 52px;gap:6px;align-items:center;padding:3px 6px;border-radius:6px;white-space:nowrap}
+.drow.on{background:#ffffff0c}.drow .nm{display:flex;gap:6px;align-items:baseline;min-width:0}.drow .nm{overflow:hidden}.drow .rd.old{color:var(--warn,#e0a040)}.drow .rd{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.drow .gain{text-align:right;color:var(--good)}
+.big-n{letter-spacing:-.03em}
+.pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;background:#ffffff0f;color:var(--ink2);white-space:nowrap}
+.p-good{background:#62c07324;color:#9be3a8}.p-warn{background:#f2a20d24;color:#ffd06b}.p-crit{background:#f34e5224;color:#ff8f92}.p-info{background:#52a8ff24;color:#9ccbff}.p-out{background:#d9592624;color:#f3a07c}.p-idle{background:#ffffff12;color:var(--ink2)}
+.phd{display:flex;align-items:center;gap:7px;padding:5px 6px;margin-top:4px;border-radius:7px;background:linear-gradient(90deg,color-mix(in srgb,var(--tint) 16%,transparent),transparent 70%);box-shadow:inset 2px 0 0 var(--tint);cursor:pointer;white-space:nowrap}
+.phd .sep{flex:1}.phd b{font-size:13px}.phd .car{color:var(--mute);width:10px;transition:transform var(--t-fast) var(--ease)}.phd.shut .car{transform:rotate(-90deg)}
+.dash tr.ph td{border-top:0;padding:0}.dash td.ind{padding-left:30px}
+.gh{margin:8px 0 2px;padding:5px 7px;border-radius:7px;background:linear-gradient(90deg,color-mix(in srgb,var(--tint) 16%,transparent),transparent 75%);box-shadow:inset 2px 0 0 var(--tint)}
+.gh .gl{display:flex;align-items:center;gap:7px;white-space:nowrap}.gh .gl .sep{flex:1}.gh .pl{display:flex;gap:4px;flex-wrap:wrap;margin:4px 0 0 29px}
+.dialhero .drow{grid-template-columns:1fr 84px 72px;padding-left:36px}
+.dialhero .drow>.n:last-child{text-align:right}.drow .act{color:var(--info);font-weight:600}
+.drow.dhd{font-size:11px;color:var(--mute);padding-top:0;padding-bottom:0}
+.rl{fill:var(--ink2);paint-order:stroke;stroke:#0f1114;stroke-width:3px}
+.dnote{font-size:11px;color:var(--mute);margin:6px 0 0 36px}
+.resetplan .rrow{display:flex;gap:10px;align-items:baseline}.resetplan .rrow b{min-width:48px;color:var(--ink,inherit)}
+.dialhero .dbody{grid-template-columns:400px 1fr}
+.dstage{flex-direction:column;align-items:center}
+.plegend{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;font-size:12px;color:var(--ink2);margin-top:4px}.plegend span{display:flex;align-items:center;gap:4px;white-space:nowrap}.plegend i{width:10px;height:10px;border-radius:3px}
+#comps text,#motion text{fill:var(--ink);font-family:var(--round)}#comps text.dim{fill:var(--mute)}
+#comps svg{display:block;overflow:visible}#comps svg.ic{display:inline-block;vertical-align:-3px}
+.gal .tank{text-align:center;font-size:11px}.gal .tank span{display:block;color:var(--ink2)}.gal .tank svg{margin:0 auto}
+#solo .mgs{gap:12px}#solo .mg{text-align:center}
+.p .t-good{color:var(--good)}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+.tip{position:fixed;z-index:30;pointer-events:none;background:#05060a;border:1px solid var(--hair2);color:#fff;font:12px/1.45 -apple-system,sans-serif;padding:6px 9px;border-radius:8px;direction:ltr;text-align:left;display:none;max-width:280px;white-space:pre-line}
+
+body{margin:0;padding:0;background:var(--base);font-size:15px}
+.app{direction:ltr;text-align:left;padding:10px}
+.sw2{display:flex;gap:6px;margin:0 0 8px}
+.sw2 button{background:var(--s2);border:1px solid var(--hair);color:var(--ink2);border-radius:20px;padding:3px 12px;font:inherit;font-size:13px;cursor:pointer}
+.sw2 button[aria-pressed=true]{background:var(--ink);color:#0f1114;border-color:var(--ink);font-weight:600}
+#stage{display:block;margin:0;min-height:0}
+.empty{color:var(--mute);padding:40px;text-align:center}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs id="defs">
+<filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4"/></filter>
+<linearGradient id="ggood" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9be3a8"/><stop offset="1" stop-color="#62c073"/></linearGradient>
+<linearGradient id="gwarn" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd06b"/><stop offset="1" stop-color="#f2a20d"/></linearGradient>
+<linearGradient id="gcrit" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8f92"/><stop offset="1" stop-color="#f34e52"/></linearGradient>
+</defs></svg>
+<div class="tip" id="tip"></div>
+<div class="app">
+<div class="sw2" id="switch"></div>
+<div id="stage"><div class="empty">Waiting for Tower's first read.</div></div>
+</div>
+<script>
+(function(){
+'use strict';
+let SNAP=null;
+let NOW=0;
+/* The wall clock. Every age on the page is measured against it, never against the feed's own generatedAt: a feed
+   built a day ago must not look fresh. A test (or a capture) injects its own clock as window.towerClock. */
+const wall=()=>typeof window.towerClock==='function'?window.towerClock():Date.now();
+/* The freshness line: the TTL the feed carries (rules.freshnessTTLSeconds), Tower's 15 minutes until one arrives. */
+let TTL=900;
+const FEED_TTL=()=>TTL*1000;
+const H=36e5,DAY=24*H,WEEK=7*DAY;
+const tz={timeZone:'Asia/Jerusalem'};
+const fDay=d=>new Date(d).toLocaleDateString('en-GB',{...tz,weekday:'short'});
+const fClock=d=>fDay(d)+' '+new Date(d).toLocaleTimeString('en-GB',{...tz,hour:'2-digit',minute:'2-digit'});
+function span(ms){const m=Math.max(1,Math.round(Math.abs(ms)/6e4));if(m<60)return m+'m';const h=Math.floor(m/60);if(h<48)return h+'h '+(m%60)+'m';return Math.floor(h/24)+'d '+(h%24)+'h'}
+const short=ms=>{const h=ms/H;if(h<1)return Math.max(1,Math.round(ms/6e4))+'m';return h<48?Math.round(h)+'h':Math.round(h/24)+'d'};
+const mark={claude:'cc',codex:'cx',cursor:'cu',muse:'mu',devin:'dv',agy:'ag'};
+const PRIMARY={claude:'7d',codex:'7d',muse:'Weekly',devin:'Weekly',cursor:'Cursor Models',agy:'Argon weekly'};
+const tones={good:'#62c073',warn:'#f2a20d',crit:'#f34e52',idle:'#aab2c0'};
+document.getElementById('defs').insertAdjacentHTML('beforeend',Object.keys(tones).map(k=>`<pattern id="h${k}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="${tones[k]}" opacity=".28"/><rect width="3" height="6" fill="${tones[k]}"/></pattern>`).join(''));
+
+let ICONS={};
+/* Tower's cap (AccountSnapshot.cappedPct), carried in the feed; 95 only until the first feed arrives. */
+let CAPPED=95;
+
+function seat(s,now){
+  const w=s.windows.filter(x=>x.name!=='Fable'&&x.pct!=null&&!(x.resetsAt&&new Date(x.resetsAt).getTime()<=now)).sort((a,b)=>b.pct-a.pct)[0]||s.windows.find(x=>x.name===PRIMARY[s.provider])||s.windows[0]||{name:'?',pct:null,resetsAt:null,trust:'unknown'};
+  const at=w.resetsAt?new Date(w.resetsAt).getTime():null;
+  const passed=at!==null&&at<=now;
+  const used=passed?0:w.pct;
+  /* A window the reply did not carry ("notReported", the 5h window of a Claude capture that has a week) is not an old read: it does not lower a live seat. */
+  const live=s.windows.length>0&&s.windows.filter(x=>x.name!=='Fable'&&x.trust!=='notReported').every(x=>x.trust==='live');
+  /* exact: every reading the seat has is live, so its number is not an upper bound. A window with no reading has nothing to age; it still keeps the seat out of ready (live). */
+  const read=s.windows.filter(x=>x.name!=='Fable'&&x.pct!=null),exact=read.length>0&&read.every(x=>x.trust==='live');
+  const room=used==null?null:Math.round(100-used);
+  let bucket;
+  /* A seat's sign-in error comes before its old full reading: the fix is the sign-in, and the reading is not current. */
+  if(s.active)bucket='inuse';
+  else if(s.error==='connect-cursor')bucket='connect';
+  else if(s.error==='keychain-locked')bucket='retrust';
+  else if(s.error==='needs-login')bucket='login';
+  else if(used>=CAPPED)bucket='full';
+  else if(!s.windows.length)bucket='nodata';
+  else if(live)bucket='ready';else bucket='cached';
+  const L={'5h':5*H,'7d':WEEK,'Weekly':WEEK}[w.name],elapsed=L&&at&&!passed?(L-(at-now))/DAY:null;
+  const burn=elapsed>0&&used>0?used/(elapsed/(L/DAY)*100):null;
+  const runout=burn?(100-used)/(used/elapsed)*DAY:null;
+  const tone=room==null?'idle':room<=5?'crit':room<=20?'warn':exact?'good':'idle';
+  return{...s,w,at:passed?null:at,passed,used,room,live,exact,bucket,burn,runout,tone,
+    read:readAge(s.capturedAt,wall()),val:room==null?(bucket==='nodata'?'not yet seen':'?'):(exact?'':'≤')+room+' %',num:room==null?'?':(exact?'':'≤')+room,
+    cls:'s-'+(exact?'':'h')+tone};
+}
+function transform(state){
+  const d=JSON.parse(JSON.stringify(SNAP));
+  const set=(s,err,trust,cap)=>{s.error=err;s.errorText=err;s.capturedAt=cap;s.windows.forEach(w=>{w.trust=trust;if(w.pct===null&&trust==='live')w.pct=0})};
+  if(state==='noready')d.seats.forEach((s,i)=>{set(s,null,'live',new Date(NOW-6e4).toISOString());
+    const w=s.windows.find(x=>x.name===PRIMARY[s.provider])||s.windows[0];w.pct=97;
+    if(new Date(w.resetsAt||0).getTime()<=NOW)w.resetsAt=new Date(NOW+(3+i%3)*DAY).toISOString()});
+  if(state==='allstale')d.seats.forEach(s=>{const c=Math.min(new Date(s.capturedAt).getTime(),NOW-3*H-72e4);set(s,null,'stale',new Date(c).toISOString())});
+  if(state==='keychain')d.seats.filter(s=>s.provider==='claude').forEach(s=>set(s,'keychain-locked','stale',s.capturedAt));
+  return d;
+}
+function model(state){
+  const d=transform(state),seats=d.seats.map(s=>seat(s,NOW)),by=b=>seats.filter(s=>s.bucket===b);
+  /* No verified Claude login: the independent sections still draw. The active seat is an unknown placeholder, not a throw. */
+  const active=seats.find(s=>s.active)||seat({nick:'?',provider:'claude',plan:'?',tier:null,active:false,capturedAt:new Date(NOW).toISOString(),error:null,errorText:null,model:null,windows:[]},NOW),claude=seats.filter(s=>s.provider==='claude');
+  const cand=claude.filter(s=>!s.active&&s.bucket!=='full'&&s.room!=null).sort((a,b)=>(b.live-a.live)||(b.room-a.room));
+  const firstFull=by('full').filter(s=>s.at).sort((a,b)=>a.at-b.at)[0];
+  const next=firstFull||claude.filter(s=>s.at).sort((a,b)=>a.at-b.at)[0]||null;
+  const others=seats.filter(s=>s.provider!=='claude'&&s.bucket==='ready');
+  const locked=claude.filter(s=>s.error==='keychain-locked').length,out=claude.filter(s=>s.error==='needs-login').length;
+  let v;
+  const wk=active.val+' of week';
+  /* The live verdict comes from tower_advice (Tower's own decision), never from the active seat alone:
+     stay, switch, wait or can't tell. A used-up active seat never reads YES. */
+  const real=state==='real'&&d.advice&&d.advice.kind?d.advice:null,k=real&&real.kind,exhausted=active.room!=null&&active.room<=0;
+  /* Nothing has ever been read (an empty store on a first open, or seats with no window at all): no verdict about room. */
+  const noReadings=state==='real'&&!seats.some(s=>s.windows.some(w=>w.pct!=null));
+  if(noReadings)v=locked
+    ?{tone:'warn',word:'NO READINGS',kind:'empty',line:'Tower has not read any seat yet, '+locked+' '+(locked===1?'seat is':'seats are')+' locked',btn:'Re-trust '+locked+' '+(locked===1?'seat':'seats'),hint:'Refresh cannot unlock them. One approval can'}
+    :{tone:'warn',word:'NO READINGS',kind:'empty',line:'Tower has not read any seat yet',btn:'Refresh now',hint:'Reads every seat it can reach'};
+  else if(real&&(k==='allResting'||(exhausted&&k!=='switch')))v={tone:'crit',word:'WAIT',kind:'wait',line:k==='allResting'?(locked?locked+' seats are locked, not empty':'Nothing has room')+(next&&next.at?'. First back '+next.nick+' '+fClock(next.at):real.earliestReset?'. First back '+fClock(new Date(real.earliestReset).getTime()):''):active.w.name+' is used up'+(active.at?', back '+fClock(active.at):''),btn:locked?'Re-trust '+locked+' seats':null,hint:locked?'One approval brings them back':'Nothing to press'};
+  else if(real&&k==='switch')v={tone:active.room!=null&&active.room<=5?'crit':'warn',word:'SWITCH',kind:'switch',target:real.nickname,line:real.nickname+' has more room than '+active.nick,btn:'/login to '+real.nickname,hint:'Then refresh'};
+  else if(state==='real'&&(k==='activeUnknown'||!active.windows.length))v={tone:'warn',word:"CAN'T TELL",kind:'unknown',line:'Tower cannot verify the active seat',btn:'Refresh now',hint:'Reads every seat it can reach'};
+  else if(real&&!active.live)v={tone:'warn',word:'PROBABLY',kind:'stale',line:'Tower stopped reading '+span(active.read)+' ago',btn:'Refresh now',hint:'Reads every seat it can reach'};
+  else if(state==='noready')v={tone:'crit',word:'WAIT',line:'Nothing has room. First back '+next.nick+' '+fClock(next.at),btn:null,hint:'Nothing to press'};
+  else if(state==='allstale')v={tone:'warn',word:'PROBABLY',line:'Tower stopped reading '+span(active.read)+' ago',btn:'Refresh now',hint:'Reads every seat it can reach'};
+  else if(state==='keychain')v={tone:'crit',word:"CAN'T TELL",line:'Keychain refused Tower, read '+span(active.read)+' ago',btn:'Re-trust '+locked+' seats',hint:'Then Always Allow'};
+  else{const t=active.room==null?'warn':active.room<=5?'crit':active.room<=20?'warn':'good';v={tone:active.live?t:'warn',word:'YES',line:active.val+' left in '+active.w.name+', read '+span(active.read)+' ago',btn:locked?'Re-trust '+locked+' seats':null,hint:locked?'Frees '+cand.filter(s=>s.bucket==='retrust').map(s=>s.nick).join(', '):'Nothing to press'};}
+  /* The headline is a verdict about ONE seat. It may name that seat only when three things hold (approved mockup): the feed is younger than the freshness line, the seat's own readings are not past it, and it is the
+     seat the menu bar title names. Otherwise: CAN'T TELL, the age, a Refresh, and no seat and no percent. */
+  const feedAge=wall()-NOW,old=state==='real'&&feedAge>FEED_TTL();
+  const named=seats.some(s=>s.active)?active:null;
+  const blindV=(why,line,hint)=>({tone:'idle',word:"CAN'T TELL",kind:'blind',blind:why,line,btn:'Refresh now',hint});
+  if(old)v=blindV('oldfeed','last read '+span(feedAge)+' ago','This picture is older than '+span(FEED_TTL()));
+  else if(state==='real'&&!noReadings&&named&&headStale(named))
+    v=blindV('stale',named.read==null?'not read yet':'last read '+span(named.read)+' ago','The active seat has no reading from the last '+span(FEED_TTL()));
+  else if(state==='real'&&!noReadings&&named&&!sameSeat(named,d.menubarTitle)){
+    if(typeof console!=='undefined'&&console.warn)console.warn('Tower: the headline seat '+named.nick+' differs from the menu bar title '+d.menubarTitle);
+    v=blindV('title','Tower and the menu bar name different logins','Refresh reads the login again');}
+  const cap=claude.filter(s=>s.used!=null);
+  const capAt=t=>!cap.length?0:cap.reduce((a,s)=>a+((s.at&&s.at<=t)?100:(s.room||0)),0)/(cap.length*100)*100;
+  return{state,d,seats,by,active,cand,next,others,v,locked,out,capAt,old};
+}
+/* The seat a menu bar title names: its one leading glyph and its trailing percent come off ("🟢alpha 79%" is alpha).
+   A feed that carries no title says nothing to compare, so it cannot disagree. */
+const titleSeat=t=>typeof t==='string'&&t.trim()?t.replace(/^[^A-Za-z0-9]+/,'').replace(/\s*\d+\s*%\s*$/,'').trim():null;
+const sameSeat=(s,title)=>{const n=titleSeat(title);return n===null||n===s.nick};
+/* A seat whose reading is past the freshness line. A window with no reading at all is unmeasured, not stale. */
+const headStale=s=>s.windows.some(w=>w.name!=='Fable'&&w.pct!=null&&w.trust==='stale');
+
+/* drawing helpers */
+let uid=0;
+function polar(cx,cy,r,deg){const a=(deg-90)*Math.PI/180;return[cx+r*Math.cos(a),cy+r*Math.sin(a)]}
+function arc(cx,cy,r,from,to){const[a,b]=polar(cx,cy,r,from),[c,d]=polar(cx,cy,r,to);return`M${a.toFixed(2)} ${b.toFixed(2)}A${r} ${r} 0 ${to-from>180?1:0} 1 ${c.toFixed(2)} ${d.toFixed(2)}`}
+/* What the last operator action left (a Re-trust that failed or left seats unreadable); text only, escaped by adapt(). */
+const noticeOf=m=>m.d.notice?`<div class="notice" style="color:#f2a20d;font-size:13px;padding:4px 2px">${m.d.notice}</div>`:'';
+const barTop=m=>`<div class="bar"><b>Tower</b><span>read ${span(wall()-NOW)} ago</span></div>${noticeOf(m)}`;
+const money=m=>usd(m.d.money.openrouter.balanceUSD);
+const tipOf=s=>[s.nick+' ('+s.provider+')',s.val+' left',s.at?'resets '+fClock(s.at):s.passed?'window already reset':'no reset known',(s.read==null?'never read':'read '+span(s.read)+' ago'),'model '+(s.model||'?'),s.windows.map(w=>w.name+' '+(w.pct==null?'?':Math.round(w.pct)+' %')).join(', '),s.errorText||s.note||'',
+  s.windows.some(w=>w.pct!=null&&w.trust==='stale')&&!DIAL_ACT[s.bucket]?'stale since '+staleAt(s)+'\nrefresh: '+(STALE_STEP[s.provider]||'open the app that reports it'):''].filter(Boolean).join('\n');
+const hint=s=>({retrust:'Re-trust',login:'/login',ready:'ready',cached:'cached',nodata:'no reading',connect:'Connect'}[s.bucket]||'');
+const paceTxt=a=>a.runout?'~'+short(a.runout):'?';
+
+
+const SYM={claude:'claude',codex:'chatgpt',cursor:'cursor',devin:'devin',agy:'antigravity',muse:'muse',pi:'pi',openrouter:'openrouter',gemini:'gemini'};
+const ic=(p,z=14)=>`<svg class="ic" width="${z}" height="${z}" aria-label="${p}"><use href="#i-${SYM[p]}" width="${z}" height="${z}"/></svg>`;
+const icAt=(p,x,y,z)=>`<use href="#i-${SYM[p]}" x="${x}" y="${y}" width="${z}" height="${z}"/>`;
+const modelOf=s=>s.model?s.model.replace('xiaomi/','').replace(/^auto$/,'Cursor Auto'):'?';
+const planOf=s=>s.provider==='claude'?(s.tier||'').replace('default_claude_','').replace('_',' ')||s.plan:(s.plan||'').replace('Muse Code Power Usage','Power').replace('unified_','');
+const burnTxt=s=>s.burn==null?'-':s.burn.toFixed(1)+'×';
+const outTxt=s=>s.bucket==='full'?'capped':s.runout==null?'-':s.runout>(s.at-NOW)?'lasts':'~'+short(s.runout);
+/* The run-out as a whole phrase, one template for every headline. outTxt is a cell value ("lasts", "~5h"); put after
+   "runs out" it read "runs out lasts" (18.11.2026). */
+const runsOutTxt=s=>s.bucket==='full'?'is capped':s.runout==null?'run-out unknown':s.runout>(s.at-NOW)?'lasts past its reset':'runs out in ~'+short(s.runout);
+/* A seat at or over Tower's cap, or with no room left, as words that carry the number. The bare word "full" was read as
+   100 % (18.11.2026: yg at 96 %). */
+const cappedTxt=s=>(s.room==null?'?':Math.max(0,s.room))+' % left, capped';
+/* The resting line (Core.restingStaleTTL, 24 h): a reading older than it is no number at all, only the time it was read. */
+const RESTING=DAY;
+const fDate=d=>new Date(d).toLocaleDateString('en-GB',{...tz,day:'2-digit',month:'2-digit'}).replace('/','.');
+/* "Sat 11:44" inside a day, "Fri 23.10 19:38" past it, so an old reading carries its date. */
+const fTime=d=>new Date(d).toLocaleTimeString('en-GB',{...tz,hour:'2-digit',minute:'2-digit'});
+const staleAt=s=>{const t=new Date(s.capturedAt).getTime();return Number.isFinite(t)?(wall()-t>RESTING?fDay(t)+' '+fDate(t)+' '+fTime(t):fClock(t)):'?'};
+/* The one step that refreshes a stale reading, by provider. Tower has no login-free read path for these. */
+const STALE_STEP={cursor:'sign in again in Cursor',devin:'start a Devin session',claude:'switch into the seat to read it'};
+const ancient=s=>!DIAL_ACT[s.bucket]&&s.read!=null&&s.read>RESTING&&s.windows.some(w=>w.pct!=null&&w.trust==='stale');
+/* Memory as used of total, with the compressed part apart. The compressor sits against the dispatch gate's compressor
+   mark (that mark drives the level), never against the total: "mem 30 of 25 GB" set one against the other (18.11.2026).
+   A feed with no total says compressed and its gate and claims no total. */
+const memTxt=k=>k.memTotalGiB!=null
+  ?(k.memUsedGiB==null?'?':Math.round(k.memUsedGiB))+' of '+Math.round(k.memTotalGiB)+' GB, compressed '+Math.round(k.compressorGiB)+' GB'
+  :'compressed '+Math.round(k.compressorGiB)+' GB, gate '+Math.round(k.gate.compressorGiB);
+const MACH=m=>{const k=m.d.machine;
+  /* A failed machine sample is unknown, never a healthy zero. */
+  if(k.available===false)return[['load',null,'?'],['mem',null,'?'],['swap',null,'?']];
+  return[['load',k.load1/k.gate.load1*100,Math.round(k.load1)+''],['mem',k.compressorGiB/k.gate.compressorGiB*100,memTxt(k)],['swap',k.swapUsedGiB/k.swapTotalGiB*100,Math.round(k.swapUsedGiB/k.swapTotalGiB*100)+' %'],k.disk?['disk',k.disk.pct,k.disk.pct+' %']:null].filter(Boolean)};
+/* How long ago a seat was read. A seat that was never captured has no capture time (epoch 0 on the wire): that is "never", not 20764 days. */
+const readAge=(c,now)=>{const t=new Date(c).getTime();return Number.isFinite(t)&&t>9.46e11?Math.max(0,now-t):null};
+const readTxt=s=>s.read==null?'never':span(s.read);
+/* Buttons. A click posts ONE word from a closed list to Swift (DashboardBridge.Action): retrust asks the Keychain once
+   for every remembered seat, refresh reads again now. A login is a terminal command, so it stays a label. */
+const actOf=m=>m.v.kind==='switch'?null:m.locked&&/^Re-trust/.test(m.v.btn||'')?'retrust':/^Refresh/.test(m.v.btn||'')?'refresh':null;
+const btnOf=m=>{if(!m.v.btn)return'';const a=actOf(m);return a?`<span class="btn" role="button" tabindex="0" data-act="${a}">${m.v.btn}</span>`:`<span class="btn">${m.v.btn}</span>`};
+const stateCell=s=>s.bucket==='retrust'?`<span class="btn" role="button" tabindex="0" data-act="retrust">Re-trust</span>`:stateBtn(s);
+/* Usable seats: ready ones, plus the active one only while it has room. An exhausted or unreadable active seat is in use, not usable. */
+const usableOf=m=>m.by('ready').length+m.by('inuse').filter(s=>s.used!=null&&s.used<CAPPED).length;
+/* A dollar figure, or ? when there is no measured value. Missing evidence is not a zero balance. */
+const usd=v=>v==null?'?':'$'+v.toFixed(2);
+/* The dial centre names the first full seat to come back when one is full, else the next reset; it says which (round 5). */
+const nextWord=n=>n&&isFull(n)?'next full seat back':'next reset';
+/* The OpenRouter balance names its service and its units (round 4: "$11.10, $0.58/d" said neither). */
+const orTxt=o=>o.balanceUSD==null?'OpenRouter balance not read':'OpenRouter '+usd(o.balanceUSD)+' left, $'+o.rate30d+' a day';
+const lvl=p=>p==null?'idle':p>=90?'crit':p>=70?'warn':'good';
+const dot=t=>`<i class="d" style="background:${tones[t]}"></i>`;
+const stateBtn=s=>({retrust:'Re-trust',login:'/login',connect:'Connect',full:s.at?fClock(s.at):'wait',inuse:'in use',ready:'ready',cached:'cached',nodata:'no reading'}[s.bucket]);
+function next(m){const a=m.active,c=m.cand[0];
+  if(m.v.kind==='blind')return'Press Refresh, then read this again';
+  if(m.v.kind==='empty')return m.locked?m.v.btn+' once, then press Refresh':'Tower is making its first read. Open it again in a minute';
+  if(m.v.kind==='switch')return'Switch to '+m.v.target+' with /login, then refresh';
+  if(m.v.kind==='wait')return m.v.line;
+  if(m.v.kind==='unknown')return m.v.line+'. '+m.v.btn;
+  if(m.v.kind==='stale')return'Press Refresh, then read this again';
+  if(m.state==='noready')return'Wait for '+m.next.nick+', '+fClock(m.next.at);
+  if(m.state==='allstale')return'Press Refresh, then read this again';
+  if(!m.v.btn)return'Stay on '+a.nick+(a.at?', '+a.w.name+' resets '+fClock(a.at):'');
+  if(m.state==='real'&&a.live)return'Stay on '+a.nick+(a.runout?(a.at&&a.runout>a.at-NOW?', lasts to reset':', ~'+short(a.runout)+' left at this pace'):'')+'. Then '+m.v.btn;
+  return m.v.btn+(c?', then /login to '+c.nick:'');}
+/* Free limit resets and credits: a dated manual entry (no source Tower reads carries them), drawn with its label and its
+   age and never as a live reading. Nothing is drawn when the feed has no entry. */
+const fExpiry=iso=>{const p=String(iso).split('-').map(Number);return p.length===3&&p.every(Number.isFinite)?p[2]+'.'+p[1]+'.'+p[0]:String(iso)};
+const manualTxt=m=>{const x=m.d.manual;if(!x)return'';
+  const by={};x.resets.forEach(r=>{(by[r.nickname]=by[r.nickname]||[]).push(r)});
+  const lines=Object.keys(by).map(n=>n+': '+by[n].map(r=>r.count+' '+r.kind).join(', ')+', expire '+fExpiry(by[n][0].expires))
+    .concat(x.credits.map(c=>c.nickname+': credits '+usd(c.balanceUSD)+', switch '+c.switch));
+  const age=x.enteredAt==null?'age unknown':'entered '+span(wall()-x.enteredAt)+' ago';
+  return`<div class="dnote manual"><b>Free resets and credits: ${x.source}, ${age}, not a live reading</b>${lines.map(l=>'<div>'+l+'</div>').join('')}</div>`};
+const ownerTxt=s=>s.unknown?s.unknown+' with no known account':'owner inferred';
+/* The footer names the seats past an alert mark (crossing is "nick level"), at most three by name, and says the
+   mark in percent (round 4: "over the red rail" was jargon). Marks: Rail.amberMark and Rail.redMark, Core.swift. */
+const MARK={amber:80,red:90};
+/* A signed-out seat's fix is the sign-in its row names, so the alert lists only seats you can use (round 5). */
+const alertsOf=m=>m.d.alerts.crossing.filter(x=>{const n=x.split(' ')[0];return!m.seats.some(s=>s.nick===n&&s.provider==='claude'&&DIAL_ACT[s.bucket])});
+const alertTxt=m=>{const c=alertsOf(m);if(!c.length)return'0 alerts';
+  const by={};c.forEach(x=>{const p=x.split(' ');(by[p[1]]=by[p[1]]||[]).push(p[0])});
+  return Object.keys(by).map(l=>{const n=by[l];/* every seat by name: a "+N" hid which seats were over the mark */return n.join(', ')+' used '+(MARK[l]||l)+' % or more'}).join(', ')};
+/* A failed session probe is "unavailable", never an idle machine with zero sessions. */
+const sessTxt=s=>s.available===false?'sessions unavailable':s.list.length+' sessions, '+s.list.filter(x=>x.busy).length+' busy, '+ownerTxt(s);
+const say=m=>`<div class="adv">${dot(m.v.tone)}<span>Next: ${next(m)}</span></div>`;
+/* A machine reading with its scale: load against its gate, compressed memory against its gate. */
+const gated=(m,x)=>{const k=m.d.machine;if(k.available===false||x[1]==null)return x[2];
+  /* load names its gate; mem already carries its own words from memTxt (used of total, or compressed and its gate) */
+  if(x[0]==='load')return x[2]+', gate '+Math.round(k.gate.load1);
+  return x[2]};
+function tray(m){const o=m.d.money.openrouter,s=m.d.sessions,busy=s.list.filter(x=>x.busy).length;
+  return`<div class="tray"><div>${ic('openrouter',13)}<span>${orTxt(o)}</span>${m.d.money.pi.absent?'':ic('pi',13)+'<span>$'+m.d.money.pi.monthUSD.toFixed(2)+' mo</span>'}<span class="sep"></span><span>${sessTxt(s)}</span></div>
+  <div>${MACH(m).map(x=>`${dot(lvl(x[1]))}<span>${x[0]} ${gated(m,x)}</span>`).join('')}<span class="sep"></span>${dot(alertsOf(m).length?'crit':'good')}<span>${alertTxt(m)}</span></div></div>`;}
+function o1(m){
+  const a=m.active,f5=a.windows.find(x=>x.name==='5h'),fa=a.windows.find(x=>x.name==='Fable');
+  const f5r=f5&&f5.pct!=null?100-f5.pct:null,far=fa&&fa.pct!=null?100-fa.pct:null,c=86;
+  const moons=m.cand.concat(m.others).slice(0,6).map(s=>`<div class="moon" data-tip="${tipOf(s)}"><svg width="50" height="50" viewBox="0 0 50 50">${ring(25,25,20,6,s.room,s.cls)}${icAt(s.provider,16,16,18)}</svg><b>${s.nick}</b><span class="n">${s.val}</span><span>${hint(s)}</span></div>`).join('');
+  const lg=(c2,l,v)=>`<i style="background:${c2}"></i><span class="dim">${l}</span><span class="n">${v}</span>`;
+  return`<div class="p o1">${barTop(m)}${say(m)}<div class="hero">
+  <svg width="172" height="172" viewBox="0 0 172 172" data-tip="${tipOf(a)}">${ring(c,c,76,16,a.room,a.cls,{glow:m.v.tone})}${ring(c,c,57,13,f5r,'s-hidle')}${ring(c,c,41,10,far,'s-hidle')}${icAt(a.provider,c-11,c-23,22)}
+   <text x="${c}" y="${c+17}" text-anchor="middle" font-size="17" font-weight="800">${a.num} %</text></svg>
+  <div><div class="say t-${m.v.tone}">${m.v.word}</div><div class="who">${ic(a.provider,14)} ${a.nick}, ${planOf(a)}, model ${modelOf(a)}</div>
+   <div class="lg">${lg(tones[m.v.tone],'7d all',a.val)}${lg(tones.idle,'5h',f5r==null?'?':'≤'+f5r+' %')}${lg(tones.idle,'Fable',far==null?'?':'≤'+far+' %')}</div>
+   <div class="who">${burnTxt(a)} pace, ${runsOutTxt(a)}</div>${m.v.btn?`${btnOf(m)}`:''}</div></div>
+  ${moons?`<div class="moons">${moons}</div>`:''}${tray(m)}</div>`;
+}
+function o3(m){
+  const groups=[['Locked','#3987e5',['retrust']],['Signed out','#d95926',['login','connect']],['Cached','#9085e9',['cached']],['Ready','#199e70',['ready']],['In use','#c98500',['inuse']],['Full','#d55181',['full']]]
+    .map(g=>({name:g[0],color:g[1],list:g[2].flatMap(b=>m.by(b))})).filter(g=>g.list.length);
+  const total=m.seats.length,c=66,r=52;let at=0;
+  const segs=groups.map(g=>{const p=g.list.length/total*100,gap=groups.length>1?1.4:0,o=`<circle class="v anim" cx="${c}" cy="${c}" r="${r}" stroke="${g.color}" stroke-width="15" style="stroke-linecap:butt" pathLength="100" stroke-dasharray="${p-gap} 100" stroke-dashoffset="${-at-gap/2}" transform="rotate(-90 ${c} ${c})" data-tip="${g.list.length} ${g.name}: ${g.list.map(s=>s.nick).join(', ')}"/>`;at+=p;return o}).join('');
+  const usable=usableOf(m),W=416,Hh=62,pts=[];for(let i=0;i<=56;i++){const t=NOW+i/56*WEEK;pts.push([i/56*W,Hh-m.capAt(t)/100*Hh])}
+  let path=`M0 ${Hh}`;pts.forEach((p,i)=>{if(i)path+=`L${p[0].toFixed(1)} ${pts[i-1][1].toFixed(1)}`;path+=`L${p[0].toFixed(1)} ${p[1].toFixed(1)}`});path+=`L${W} ${Hh}Z`;
+  const days=[];const d0=new Date(NOW);d0.setUTCHours(22,0,0,0);for(let t=d0.getTime();t+DAY/2<NOW+WEEK;t+=DAY)days.push(`<text x="${(t+DAY/2-NOW)/WEEK*W}" y="${Hh+12}" text-anchor="middle" font-size="10" class="dim">${fDay(t+3*H)}</text>`);
+  const c0=Math.round(m.capAt(NOW)),c7=Math.round(m.capAt(NOW+WEEK));
+  return`<div class="p o3">${barTop(m)}${say(m)}<div class="top"><svg width="132" height="132" viewBox="0 0 132 132">${segs}<text x="${c}" y="${c+3}" text-anchor="middle" font-size="24" font-weight="800">${usable}</text><text x="${c}" y="${c+17}" text-anchor="middle" font-size="10" class="dim">of ${total} usable</text></svg>
+  <div><div class="say t-${m.v.tone}">${m.v.word}, ${m.active.nick}, ${m.active.val}</div>
+  <div class="dl">${groups.map(g=>`<div data-tip="${g.list.map(s=>s.nick+' '+s.val).join('\n')}"><i style="background:${g.color}"></i><span class="gn">${g.list.length} ${g.name}</span><span class="st">${g.list.slice(0,6).map(s=>ic(s.provider,14)).join('')}</span></div>`).join('')}</div></div></div>
+  <div class="chart-t"><span>Claude room if nothing is used</span><span class="n">${c0} % now, ${c7} % in 7 days</span></div>
+  <svg width="${W}" height="${Hh+15}" viewBox="0 0 ${W} ${Hh+15}" data-tip="Each step is a seat resetting. Ceiling: cached readings count as their maximum."><path d="${path}" fill="#3987e5" fill-opacity=".28" stroke="#6da7ec" stroke-width="2"/>${days.join('')}</svg>
+  ${m.v.btn?`<div style="margin-top:4px">${btnOf(m)}</div>`:''}${tray(m)}</div>`;
+}
+const RAMP=r=>r==null?'#171a20':r<=5?'#1d1f33':r<=20?'#33336e':r<=50?'#4f4fb0':r<=80?'#6e6ee0':'#9a9af0';
+function heat(m,W,rh){
+  const PO=['claude','codex','cursor','devin','agy','muse','pi'],rows=m.seats.slice().sort((a,b)=>(PO.indexOf(a.provider)-PO.indexOf(b.provider))||(b.active-a.active)||((a.at||0)-(b.at||0))),cols=28,lab=118,cw=(W-lab)/cols;
+  const dayX=[];const d0=new Date(NOW);d0.setUTCHours(22,0,0,0);for(let t=d0.getTime();t<NOW+WEEK;t+=DAY)dayX.push(t);
+  const cells=rows.map((s,i)=>{const y=14+i*rh;let o=icAt(s.provider,0,y+.5,13)+`<text x="16" y="${y+11}" font-size="11" font-weight="${s.active?800:500}">${s.nick}</text><text x="${lab-4}" y="${y+11}" text-anchor="end" font-size="9.5" class="dim">${modelOf(s).replace('Cursor ','').replace('-1.3','').replace('Gemini 4 ','')}</text>`;
+    for(let c=0;c<cols;c++){const t=NOW+(c+.5)/cols*WEEK,r=(s.at&&t>=s.at)||s.passed?100:s.room;o+=`<rect x="${lab+c*cw}" y="${y}" width="${cw-1.6}" height="${rh-2}" rx="2.5" fill="${RAMP(r)}" ${s.live||t>=(s.at||Infinity)?'':'opacity=".72"'}/>`}
+    return`<g data-tip="${tipOf(s)}">${o}${s.active?`<rect x="${lab-2}" y="${y-1.5}" width="${cols*cw+2.5}" height="${rh+1}" rx="4" fill="none" stroke="${tones[m.v.tone]}" stroke-width="1.5" style="filter:drop-shadow(0 0 4px ${tones[m.v.tone]})"/>`:''}</g>`}).join('');
+  const heads=dayX.filter(t=>t+DAY/2<NOW+WEEK).map(t=>`<text x="${lab+(t+DAY/2-NOW)/WEEK*cols*cw}" y="9" text-anchor="middle" font-size="10" class="dim">${fDay(t+3*H)}</text>`).join('');
+  const H2=14+rows.length*rh+2;return`<svg width="${W}" height="${H2}" viewBox="0 0 ${W} ${H2}">${heads}${cells}</svg>`;
+}
+function o4(m){const n=m.next;
+  return`<div class="p o4">${barTop(m)}<div class="big"><b class="t-${m.v.tone}">${m.v.word}</b><span class="sec">${ic(m.active.provider,15)} ${m.active.nick}, ${m.active.val} left, ${m.active.w.name}</span></div>
+  <div class="sub">Reset ${n?fClock(n.at)+', '+n.nick+', in '+span(n.at-NOW):'?'}</div>${say(m)}${heat(m,416,16)}
+  <div class="foot" style="align-items:center"><div class="scale">no room<i style="background:#1d1f33"></i><i style="background:#33336e"></i><i style="background:#4f4fb0"></i><i style="background:#6e6ee0"></i><i style="background:#9a9af0"></i>full</div>${m.v.btn?`${btnOf(m)}`:''}</div>${tray(m)}</div>`;
+}
+function gauge(a,W,tone){const cx=W/2,cy=W*.5,R=W*.42,MAX=4,b=a.burn==null?0:Math.min(MAX,a.burn),ang=(b/MAX*180)-90;
+  const zone=(f,t,c)=>`<path d="${arc(cx,cy,R,-90+f/MAX*180+2.25,-90+t/MAX*180-2.25)}" stroke="${c}" stroke-width="${W*.065}" fill="none" opacity=".92"/>`;
+  const ticks=[0,1,2,3,4].map(t=>{const[x,y]=polar(cx,cy,R-W*.09,-90+t/MAX*180);return`<text x="${x}" y="${y+4}" text-anchor="middle" font-size="10" class="dim">${t}×</text>`}).join('');
+  return`<svg width="${W}" height="${W*.58}" viewBox="0 0 ${W} ${W*.58}" data-tip="${a.nick} used ${a.used} % early in its week. Even pace is 1×. Assumes a steady rate.">${zone(0,1,tones.good)}${zone(1,2,tones.warn)}${zone(2,4,tones.crit)}${ticks}<g class="needle" style="transform-origin:${cx}px ${cy}px;transform:rotate(${ang}deg)"><path d="M${cx-3} ${cy}L${cx} ${cy-R+10}L${cx+3} ${cy}Z" fill="#fff"/></g><circle cx="${cx}" cy="${cy}" r="8" fill="#0c1220" stroke="#fff" stroke-width="2"/></svg>`;}
+function spark(m,W,Ht){const h=m.d.money.openrouter.history;if(!h||h.length<2)return'<span class="sec">no OpenRouter history</span>';const lo=Math.min(...h.map(p=>p.usd)),hi=Math.max(...h.map(p=>p.usd)),t0=new Date(h[0].t).getTime(),t1=new Date(h[h.length-1].t).getTime();
+  /* A constant balance (an idle account) has no value range: draw it flat at mid height, never divide by zero. */
+  const rng=hi-lo,dt=t1-t0||1;
+  const line=h.map((p,i)=>`${i?'L':'M'}${((new Date(p.t).getTime()-t0)/dt*W).toFixed(1)} ${(rng>0?Ht-2-(p.usd-lo)/rng*(Ht-4):Ht/2).toFixed(1)}`).join('');
+  return`<svg width="${W}" height="${Ht}" viewBox="0 0 ${W} ${Ht}" data-tip="Real: Tower's 30 day OpenRouter history, $${hi} to $${lo}"><path d="${line}" fill="none" stroke="#6da7ec" stroke-width="2" stroke-linejoin="round"/></svg>`;}
+const mini=(x,z=46)=>`<div class="mg" data-tip="${x[0]} ${x[2]}"><svg width="${z}" height="${z}" viewBox="0 0 46 46">${ring(23,23,18,5,x[1],'s-'+lvl(x[1]))}<text x="23" y="27" text-anchor="middle" font-size="10" font-weight="700">${x[1]==null?'?':Math.round(x[1])}</text></svg><span>${x[0]}</span></div>`;
+function tankOf(m,s){const id='c'+(++uid),d=38,r=17,h=(s.room||0)/100*(r*2);
+  return`<div class="tank" data-tip="${tipOf(s)}"><svg width="${d}" height="${d}" viewBox="0 0 ${d} ${d}"><clipPath id="${id}"><circle cx="19" cy="19" r="${r}"/></clipPath><circle cx="19" cy="19" r="${r}" fill="#ffffff0d"/><g clip-path="url(#${id})"><rect class="fill" x="0" y="${19+r-h}" width="${d}" height="${h}" fill="${s.live?tones[s.tone]:'url(#h'+s.tone+')'}"/></g><circle cx="19" cy="19" r="${r}" fill="none" stroke="${s.active?tones[m.v.tone]:'#ffffff24'}" stroke-width="${s.active?2:1}" ${s.active?`style="filter:drop-shadow(0 0 5px ${tones[m.v.tone]})"`:''}/><text x="19" y="23" text-anchor="middle" font-size="11" font-weight="700">${s.room==null?'?':s.room}</text>${icAt(s.provider,25,25,13)}</svg><span>${s.nick}</span></div>`}
+function o5(m){const a=m.active,seats=m.seats.slice().sort((x,y)=>(y.active-x.active)||((y.room||0)-(x.room||0)));
+  return`<div class="p o5">${barTop(m)}${say(m)}<div class="hero">${gauge(a,236,m.v.tone)}
+  <div class="read"><b class="t-${m.v.tone}">${m.v.word}</b><span>${ic(a.provider,13)} ${a.nick}, ${a.val}, model ${modelOf(a)}</span><b>${burnTxt(a)}</b><span>even pace</span><b>${runsOutTxt(a)}</b><span>at this pace</span></div></div>
+<div class="tanks">${seats.map(s=>tankOf(m,s)).join('')}</div>
+  <div class="mgs">${MACH(m).map(x=>mini(x,40)).join('')}<div class="mt">${spark(m,150,26)}<span>${ic('openrouter',13)} ${orTxt(m.d.money.openrouter)}</span></div></div>
+  <div class="foot" style="align-items:center"><span>Reset ${m.next?fClock(m.next.at):'?'}, ${m.d.sessions.available===false?'sessions unavailable':m.d.sessions.unknown+' sessions'}</span>${m.v.btn?`${btnOf(m)}`:''}</div></div>`;
+}
+
+function ring(cx,cy,r,w,pct,cls,o={}){
+  const v=pct==null?0:Math.max(pct>0?1.5:0,Math.min(100,pct)),del=o.delay?`animation-delay:${o.delay}ms;`:'';
+  const[kx,ky]=polar(cx,cy,r,v*3.6),live=/^s-(good|warn|crit)$/.test(cls);
+  return`<circle class="tr" cx="${cx}" cy="${cy}" r="${r}" stroke-width="${w}"/>`+
+   (v&&o.glow&&o.glow!=='good'?`<circle class="v halo${o.breathe?' breathe':''}" stroke="${tones[o.glow]}" cx="${cx}" cy="${cy}" r="${r}" stroke-width="${w}" pathLength="100" stroke-dasharray="${v} 100" transform="rotate(-90 ${cx} ${cy})"/>`:'')+
+   (v?`<circle class="v anim ${live?'':cls}" ${live?`stroke="url(#g${cls.slice(2)})"`:''} style="${del}" cx="${cx}" cy="${cy}" r="${r}" stroke-width="${w}" pathLength="100" stroke-dasharray="${v} 100" transform="rotate(-90 ${cx} ${cy})"/>`:'')+
+   (v>2&&w>=8?`<circle class="knob" style="${del}" cx="${kx.toFixed(2)}" cy="${ky.toFixed(2)}" r="${w*.36}" fill="#fff"/>`:'');
+}
+const cnt=(n,pre='',suf='')=>n==null?'?':`<span data-count="${n}" data-pre="${pre}" data-suf="${suf}">${pre}${n}${suf}</span>`;
+const tcnt=(n,pre='',suf='')=>n==null?'?':`<tspan data-count="${n}" data-pre="${pre}" data-suf="${suf}">${pre}${n}${suf}</tspan>`;
+function dial(m,S,big){
+  const c=S/2,scale=S/262,tracks=m.seats.filter(s=>s.at&&s.at<NOW+WEEK).sort((a,b)=>a.at-b.at).slice(0,12);
+  const deg=t=>Math.max(4,Math.min(356,(t-NOW)/WEEK*360)),R=c*.915,step=c*.049,inner=c*.32,bead=big?20:12;
+  const days=[];const d0=new Date(NOW);d0.setUTCHours(22,0,0,0);for(let t=d0.getTime();t<NOW+WEEK;t+=DAY)days.push(t);
+  const fs=big?12:9.5;
+  const spokes=days.map(t=>{const[x1,y1]=polar(c,c,inner,deg(t)),[x2,y2]=polar(c,c,R+4,deg(t)),[tx,ty]=polar(c,c,R+(big?20:9),deg(t+DAY/2));
+    return`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#ffffff10"/>`+(t+DAY/2<NOW+WEEK?`<text x="${tx}" y="${ty+fs/3}" text-anchor="middle" font-size="${fs}" class="dim">${fDay(t+3*H)}</text>`:'')}).join('');
+  const arcs=tracks.map((s,i)=>{const r=R-i*step,g=s.active,a=deg(s.at),[bx,by]=polar(c,c,r,a),w=(g?1.35:1)*(big?7:4),cls=s.cls;
+    const live=/^s-(good|warn|crit)$/.test(cls);
+    return`<g data-tip="${tipOf(s)}"><circle class="tr" cx="${c}" cy="${c}" r="${r}" stroke-width="${big?1.5:1}"/><path d="${arc(c,c,r,a,359.5)}" fill="none" stroke="${tones.good}" stroke-opacity=".3" stroke-width="${big?2:1.2}"/>
+    <path class="v arcin ${g?'':''} ${live?'':cls}" ${live?`stroke="url(#g${cls.slice(2)})"`:''} d="${arc(c,c,r,0,a)}" pathLength="100" style="animation-delay:${i*25}ms" stroke-width="${w}"/>
+    ${g&&m.v.tone!=='good'?`<path class="v halo breathe" stroke="${tones[m.v.tone]}" d="${arc(c,c,r,0,a)}" stroke-width="${w}"/>`:''}
+    <circle cx="${bx}" cy="${by}" r="${bead*.62}" fill="#0f1114" stroke="#ffffff30"/>${icAt(s.provider,bx-bead/2,by-bead/2,bead)}</g>`}).join('');
+  const n=m.next;
+  return`<svg width="${S+(big?56:6)}" height="${S+(big?56:6)}" viewBox="${big?-28:-3} ${big?-28:-3} ${S+(big?56:6)} ${S+(big?56:6)}">${spokes}${arcs}
+  <g class="hand" style="transform-origin:${c}px ${c}px"><line x1="${c}" y1="${c-inner+2}" x2="${c}" y2="${c-R-(big?10:4)}" stroke="#fff" stroke-width="${big?2:1.4}" stroke-linecap="round"/><circle cx="${c}" cy="${c-R-(big?10:4)}" r="${big?4:2.5}" fill="#fff"/></g>
+  <text x="${c}" y="${c+(big?2:-1)}" text-anchor="middle" font-size="${big?44:19}" font-weight="700" class="big-n">${n?short(n.at-NOW):'?'}</text>
+  <text x="${c}" y="${c+(big?24:13)}" text-anchor="middle" font-size="${big?13:10}" class="dim">${nextWord(n)}</text>
+  ${big&&n?`<text x="${c}" y="${c+44}" text-anchor="middle" font-size="13">${n.nick}, ${fClock(n.at)}</text>`:''}</svg>`;
+}
+function o2(m){
+  const tracks=m.seats.filter(s=>s.at&&s.at<NOW+WEEK).sort((a,b)=>a.at-b.at),open=m.seats.filter(s=>!s.at||s.at>=NOW+WEEK);
+  const row=s=>`<div class="row" data-tip="${tipOf(s)}"><span>${ic(s.provider,13)} ${s.nick}</span><span class="n sec">${s.at?fClock(s.at):s.val}</span></div>`;
+  return`<div class="p o2">${barTop(m)}<div class="ribbon"><b class="t-${m.v.tone}">${m.v.word}, ${ic(m.active.provider,15)} ${m.active.nick}</b>${m.v.btn?`${btnOf(m)}`:''}</div>${say(m)}
+  <div class="hero">${dial(m,262,false)}<div class="list"><h4>Back next</h4>${tracks.slice(0,7).map(row).join('')}<h4 style="margin-top:6px">Open now</h4>${open.slice(0,3).map(row).join('')}</div></div>${tray(m)}</div>`;
+}
+function dialHero(m){
+  const tracks=m.seats.filter(s=>s.at&&s.at<NOW+WEEK).sort((a,b)=>a.at-b.at),open=m.seats.filter(s=>!s.at||s.at>=NOW+WEEK);
+  const row=(s,i)=>`<div class="drow ${s.active?'on':''}" style="animation-delay:${i*25}ms" data-tip="${tipOf(s)}"><span class="tile">${ic(s.provider,18)}</span><span class="nm"><b>${s.nick}</b><span class="dim">${modelOf(s)}</span></span><span class="n sec">${s.at?fClock(s.at):'open'}</span><span class="n gain">${s.at&&s.used?'+'+Math.round(s.used)+' %':s.val}</span></div>`;
+  return`<div class="p dialhero">${barTop(m)}<div class="dhead"><b class="say t-${m.v.tone}">${m.v.word}</b><span>${ic(m.active.provider,16)} ${m.active.nick}, ${m.active.val} of week, ${burnTxt(m.active)} pace, ${runsOutTxt(m.active)}</span><span class="sep"></span>${say(m)}${m.v.btn?`${btnOf(m)}`:''}</div>
+  <div class="dbody"><div class="dcol"><h4>Back next, and what returns</h4>${tracks.slice(0,14).map(row).join('')}${open.length?`<h4>Open now</h4>${open.map(row).join('')}`:''}</div><div class="dstage">${dial(m,560,true)}</div></div>${tray(m)}</div>`;
+}
+function o6(m){const a=m.active,o=m.d.money.openrouter,s=m.d.sessions;
+  const order=['inuse','ready','cached','retrust','login','connect','full'],rows=m.seats.slice().sort((x,y)=>order.indexOf(x.bucket)-order.indexOf(y.bucket));
+  const tr=rows.map((x,i)=>`<tr class="${x.active?'on':''}" style="animation-delay:${i*25}ms" data-tip="${tipOf(x)}"><td><span class="tile">${ic(x.provider,15)}</span> ${x.nick}</td><td>${planOf(x)}</td><td>${x.model?`<span class="mchip">${modelOf(x)}</span>`:'<span class="dim">not reported</span>'}</td><td><svg width="22" height="22" viewBox="0 0 22 22">${ring(11,11,8,3.5,x.room,x.cls,{delay:i*25})}</svg></td>${roomTd(x)}<td class="n">${burnTxt(x)}</td><td class="n">${outTxt(x)}</td><td class="n">${x.at?fClock(x.at):'-'}</td><td class="n">${readTxt(x)}</td><td><span class="chip ${['login','connect'].includes(x.bucket)?'act':''}">${stateCell(x)}</span></td></tr>`).join('');
+  const f5=a.windows.find(x=>x.name==='5h'),fa=a.windows.find(x=>x.name==='Fable'),far=fa&&fa.pct!=null?100-fa.pct:null;
+  const usable=usableOf(m),c0=Math.round(m.capAt(NOW));
+  return`<div class="p dash">${barTop(m)}<div class="bento">
+  <div class="cell c-a"><div class="av"><svg width="176" height="176" viewBox="0 0 172 172" data-tip="${tipOf(a)}">${ring(86,86,76,15,a.room,a.cls,{glow:m.v.tone,breathe:true})}${ring(86,86,57,12,f5&&f5.pct!=null?100-f5.pct:null,'s-hidle',{delay:60})}${ring(86,86,41,9,far,'s-hidle',{delay:120})}<text x="86" y="93" text-anchor="middle" font-size="19" font-weight="700">${tcnt(a.room,a.exact?'':'≤',' %')}</text></svg>
+   <div><b class="say t-${m.v.tone}">${m.v.word}</b><div class="who">${ic(a.provider,15)} ${a.nick}</div><div class="who"><span class="mchip">${modelOf(a)}</span> <span class="mchip">${planOf(a)}</span></div><div class="stat"><b>${a.burn==null?'?':cnt(+a.burn.toFixed(1),'','×')}</b><span>pace</span></div><div class="stat"><b>${runsOutTxt(a)}</b><span>at this pace</span></div></div></div></div>
+  <div class="cell c-b">${dial(m,296,false)}</div>
+  <div class="cell c-c"><h4>Next move</h4><div class="nm-t">${next(m)}</div>${m.v.btn?`${btnOf(m)}`:`<span class="sec">${m.v.hint}</span>`}<h4>Alerts ${m.d.alerts.crossing.length}</h4>${m.d.alerts.crossing.map(x=>`<div class="alert"><span>${x.split(' ')[0]}</span><span>over the red rail</span></div>`).join('')}</div>
+  <div class="cell c-d"><h4>Machine</h4><div class="mgs">${MACH(m).map(x=>mini(x,44)).join('')}</div><h4>Money</h4><div class="ml">${ic('openrouter',14)} <b>${o.balanceUSD==null?'?':cnt(o.balanceUSD,'$')}</b><span class="sec">$${o.rate30d}/d</span></div>${spark(m,228,30)}<div class="ml">${ic('pi',14)} <span>Pi $${m.d.money.pi.monthUSD.toFixed(2)} this month</span></div></div>
+  <div class="cell c-e"><table><tr><th>Seat</th><th>Plan</th><th>Model</th><th></th><th>Room</th><th>Pace</th><th>Runs out</th><th>Reset</th><th>Read</th><th>State</th></tr>${tr}</table></div>
+  <div class="cell c-f"><h4>Sessions ${s.unknown}, owner ?</h4>${s.list.slice(0,17).map(x=>`<div class="ml">${dot(x.busy?'warn':'idle')}<span class="lab">${x.label}</span><span class="dim">?</span></div>`).join('')}</div>
+  <div class="cell c-g"><h4>Week ahead, ${usable} of ${m.seats.length} usable, Claude room ${c0} %</h4>${heat(m,990,13)}</div>
+  </div></div>`;
+}
+
+const PROV=[['claude','Claude Code','#d97757'],['codex','Codex','#10a37f'],['cursor','Cursor','#a1a1aa'],['devin','Devin','#39b58f'],['agy','Antigravity','#4285f4'],['muse','Muse','#0a84ff'],['pi','Pi','#a47a54']];
+function groupsOf(m){return PROV.map(([p,name,tint])=>{
+  const seats=m.seats.filter(s=>s.provider===p).sort((a,b)=>(b.active?1:0)-(a.active?1:0)||((b.room==null?-1:b.room)-(a.room==null?-1:a.room)));
+  const c=l=>seats.filter(s=>l.includes(s.bucket)).length;
+  const best=seats.filter(s=>s.room!=null&&s.bucket!=='full').sort((a,b)=>b.room-a.room)[0]||null;
+  const next=seats.filter(s=>s.at).sort((a,b)=>a.at-b.at)[0]||null;
+  return{p,name,tint,seats,inuse:c(['inuse']),ready:c(['ready']),cached:c(['cached']),locked:c(['retrust']),out:c(['login','connect']),full:c(['full']),best,next};
+}).filter(g=>g.seats.length||(g.p==='pi'&&!m.d.money.pi.absent))}
+function pills(g,m){
+  if(g.p==='pi')return`<span class="pill">spend only</span><span class="pill">$${m.d.money.pi.monthUSD.toFixed(2)} this month</span>`;
+  return[['in use',g.inuse,'warn'],['ready',g.ready,'good'],['cached',g.cached,'idle'],['locked',g.locked,'info'],['signed out',g.out,'idle'],['full',g.full,'crit']]
+    .filter(x=>x[1]).map(x=>`<span class="pill p-${x[2]}">${x[1]} ${x[0]}</span>`).join('');
+}
+function aggTxt(g,m){
+  if(g.p==='pi')return'model '+(m.d.lanes.find(l=>l.provider==='pi')||{}).model;
+  return'best '+(g.best?g.best.nick+' '+g.best.val:'none')+(g.next?', next '+fClock(g.next.at):', no reset due');
+}
+function dial(m,S,big){
+  const c=S/2,groups=groupsOf(m).filter(g=>g.seats.length),n=groups.reduce((a,g)=>a+g.seats.length,0);
+  const gapK=.9,R=c*.915,inner=c*.34,step=(R-inner)/(n+gapK*(groups.length-1)),w0=Math.max(2,step*.58),bead=big?18:9;
+  const deg=t=>Math.max(4,Math.min(356,(t-NOW)/WEEK*360)),fs=big?12:9.5;
+  const days=[];const d0=new Date(NOW);d0.setUTCHours(22,0,0,0);for(let t=d0.getTime();t<NOW+WEEK;t+=DAY)days.push(t);
+  const spokes=days.map(t=>{const[x1,y1]=polar(c,c,inner,deg(t)),[x2,y2]=polar(c,c,R+4,deg(t)),[tx,ty]=polar(c,c,R+(big?20:9),deg(t+DAY/2));
+    return`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#ffffff10"/>`+(t+DAY/2<NOW+WEEK?`<text x="${tx}" y="${ty+fs/3}" text-anchor="middle" font-size="${fs}" class="dim">${fDay(t+3*H)}</text>`:'')}).join('');
+  let k=0,bands='',tracks='';const beads=[];
+  groups.forEach((g,gi)=>{
+    const r0=R-(k+gi*gapK)*step,r1=r0-(g.seats.length-1)*step,mid=(r0+r1)/2,spanW=r0-r1+step*.9;
+    bands+=`<circle cx="${c}" cy="${c}" r="${mid}" fill="none" stroke="${g.tint}" stroke-opacity=".1" stroke-width="${spanW}"/>`;
+    g.seats.forEach((s,i)=>{const r=r0-i*step,act=s.active,w=w0*(act?1.3:1),live=/^s-(good|warn|crit)$/.test(s.cls),out=DIAL_ACT[s.bucket],capped=s.at&&s.at<NOW+WEEK&&!out;
+      /* A seat that needs a sign-in has no room to show: grey and dashed, never the green of room (round 3). */
+      if(out)tracks+=`<g data-tip="${tipOf(s)}\n${out[0]}, ${out[1]}"><circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${tones.idle}" stroke-opacity=".55" stroke-dasharray="2 3" stroke-width="${Math.max(1,w*.4)}"/></g>`;
+      /* A stale seat (a reading past the freshness line) has no reset worth drawing: a dashed ring, and the word stale in its hover. */
+      else if(dialStale(s))tracks+=`<g data-tip="${tipOf(s)}\nstale, no reading from the last ${span(FEED_TTL())}" class="stalering"><circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${tones.idle}" stroke-opacity=".6" stroke-dasharray="2 3" stroke-width="${Math.max(1,w*.4)}"/></g>`;
+      else if(capped){const a=deg(s.at),[bx,by]=polar(c,c,r,a);
+        beads.push({s,r,a,x:bx,y:by,col:tones[s.tone]});
+        tracks+=`<g data-tip="${tipOf(s)}"><path d="${arc(c,c,r,a,359.5)}" fill="none" stroke="${tones.good}" stroke-opacity=".3" stroke-width="${Math.max(1,w*.25)}"/>
+        <path class="v arcin ${live?'':s.cls}" ${live?`stroke="url(#g${s.cls.slice(2)})"`:''} d="${arc(c,c,r,0,a)}" pathLength="100" style="animation-delay:${k*25}ms" stroke-width="${w}"/>
+        ${act&&m.v.tone!=='good'?`<path class="v halo breathe" stroke="${tones[m.v.tone]}" d="${arc(c,c,r,0,a)}" stroke-width="${w}"/>`:''}</g>`;
+      }else tracks+=`<g data-tip="${tipOf(s)}\nno reset due${s.exact?'':', last reading is old'}"><circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${s.exact?tones.good:tones.idle}" stroke-opacity=".45" stroke-dasharray="2 3" stroke-width="${Math.max(1,w*.4)}"/></g>`;
+      k++;});
+  });
+  /* Beads closer than one bead width would cover each other, so they merge into ONE stack marker with a count (approved
+     mockup). A lone bead is a plain dot. The marker sits on the outermost of its tracks; its hover names the seats. */
+  const bw=bead*1.24,link=(p,q)=>Math.hypot(p.x-q.x,p.y-q.y)<bw,grp=[];
+  beads.forEach(b=>{const hit=grp.filter(g=>g.some(o=>link(o,b)));
+    if(!hit.length)grp.push([b]);else{const into=hit[0];into.push(b);hit.slice(1).forEach(g=>{into.push(...g);grp.splice(grp.indexOf(g),1)})}});
+  const markers=grp.map(g=>{
+    if(g.length===1){const b=g[0];return`<g class="bead" data-tip="${tipOf(b.s)}"><circle cx="${b.x.toFixed(1)}" cy="${b.y.toFixed(1)}" r="${(bead*.3).toFixed(1)}" fill="${b.col}" stroke="#0f1114" stroke-width="1"/></g>`}
+    const outer=g.reduce((p,b)=>b.r>p.r?b:p,g[0]),ang=g.reduce((t,b)=>t+b.a,0)/g.length,[x,y]=polar(c,c,outer.r,ang),names=g.map(b=>b.s.nick).join(', ');
+    return`<g class="stack" data-tip="${g.length} seats reset together\n${names}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(bead*.62).toFixed(1)}" fill="#191a1b" stroke="#ffffff4d"/><text x="${x.toFixed(1)}" y="${(y+bead*.22).toFixed(1)}" text-anchor="middle" font-size="${(bead*.62).toFixed(1)}" font-weight="700" fill="#f2f3f5">${g.length}</text></g>`}).join('');
+  const nx=m.next;
+  return`<svg width="${S+(big?56:6)}" height="${S+(big?56:6)}" viewBox="${big?-28:-3} ${big?-28:-3} ${S+(big?56:6)} ${S+(big?56:6)}">${bands}${spokes}${tracks}${markers}
+  <g class="hand" style="transform-origin:${c}px ${c}px"><line x1="${c}" y1="${c-inner+2}" x2="${c}" y2="${c-R-(big?10:4)}" stroke="#fff" stroke-width="${big?2:1.4}" stroke-linecap="round"/><circle cx="${c}" cy="${c-R-(big?10:4)}" r="${big?4:2.5}" fill="#fff"/></g>
+  <text x="${c}" y="${c+(big?2:-1)}" text-anchor="middle" font-size="${big?40:17}" font-weight="700" class="big-n">${nx?short(nx.at-NOW):'?'}</text>
+  <text x="${c}" y="${c+(big?22:12)}" text-anchor="middle" font-size="${big?12:9}" class="dim">${nextWord(nx)}</text>
+  ${big&&nx?`<text x="${c}" y="${c+40}" text-anchor="middle" font-size="12">${nx.nick}, ${fClock(nx.at)}</text>`:''}</svg>`;
+}
+const legend=m=>`<div class="plegend">${groupsOf(m).filter(g=>g.seats.length).map(g=>`<span><i style="background:${g.tint}"></i>${ic(g.p,13)} ${g.name}</span>`).join('')}</div>`;
+/* One rule for both views: a seat at Tower's cap, or with no room left, is full. */
+const isFull=s=>s.bucket==='full'||(s.room!=null&&s.room<=0);
+const roomTd=x=>ancient(x)?'<td class="n">?</td>':isFull(x)?'<td class="n t-crit">'+cappedTxt(x)+'</td>':'<td class="n">'+x.val+'</td>';
+const DIAL_ACT={login:['signed out','/login'],connect:['signed out','Connect'],retrust:['locked','Re-trust']};
+/* A row Tower cannot trust: one of its readings is past the 15 minute line, and no sign-in note already explains it.
+   A window with no reading at all (trust unknown) is not stale; the no-5h note covers that. */
+const dialStale=s=>s.windows.some(w=>w.pct!=null&&w.trust==='stale')&&!DIAL_ACT[s.bucket];
+/* A Claude row with readings but no 5h one: its room is the week's alone, so the row names the gap. */
+const dialNoFive=s=>s.provider==='claude'&&s.windows.length>0&&!DIAL_ACT[s.bucket]&&!s.windows.some(w=>w.name==='5h'&&w.pct!=null);
+/* A signed-out seat whose last reading was full may still be full after the sign-in. Its /login sits beside this
+   cell, so the cell says when the full reading ends instead of "signed out" (both did not fit the column). */
+const dialWhen=s=>DIAL_ACT[s.bucket]?(s.used>=CAPPED&&s.at?'full till '+fClock(s.at):DIAL_ACT[s.bucket][0]):s.at?fClock(s.at):'no reset due';
+const dialRoom=s=>DIAL_ACT[s.bucket]?`<span class="n act">${DIAL_ACT[s.bucket][1]}</span>`:ancient(s)?`<span class="n sec">?</span>`:isFull(s)?`<span class="n t-crit">${cappedTxt(s)}</span>`:`<span class="n t-${s.tone}">${s.val}</span>`;
+/* The verdict line names the window in words (round 3: a bare "5h" explained nothing). */
+const winWords=n=>({'5h':'of the 5 hour window','7d':'of the week','Weekly':'of the week'})[n]||'of the '+n+' window';
+/* The switch plan at a glance: every Claude seat's next reset, soonest first. A seat whose reset time Tower does not
+   know says "?", never a guess; a reset already past says "passed". A seat read long ago says how long ago. */
+const resetPlan=m=>{
+  const cl=m.seats.filter(s=>s.provider==='claude');if(!cl.length)return'';
+  const key=s=>s.at!=null?s.at:Infinity;
+  const rows=cl.slice().sort((a,b)=>key(a)-key(b)||(a.nick<b.nick?-1:1)).map(s=>{
+    const when=s.at!=null?fClock(s.at):s.passed?'passed':'?';
+    const old=dialStale(s)&&s.read!=null?' <span class="dim">read '+span(s.read).split(' ')[0]+' ago</span>':'';
+    return`<div class="rrow"><b>${s.nick}</b><span class="n sec">${when}</span>${old}</div>`}).join('');
+  return`<div class="dnote resetplan"><b>Next resets, soonest first</b>${rows}</div>`};
+function dialHero(m){
+  /* One form per column (tower-loop r1): when the window resets, then the room left now, coloured by that room.
+     A seat that needs a sign-in names the fix instead of a number. */
+  const row=(s,i)=>`<div class="drow ${s.active?'on':''}" style="animation-delay:${i*25}ms" data-tip="${tipOf(s)}"><span class="nm"><b>${s.nick}</b><span class="dim">${s.model?modelOf(s):''}</span><span class="dim rd${dialStale(s)?' old':''}">${s.read==null?'never read':'read '+span(s.read).split(' ')[0]+' ago'}${dialStale(s)?', stale since '+staleAt(s):''}${dialNoFive(s)?', no 5h':''}</span></span><span class="n sec">${dialWhen(s)}</span>${dialRoom(s)}</div>`;
+  const head=`<div class="drow dhd"><span>Seat</span><span class="n">Resets</span><span class="n">Room left</span></div>`;
+  const note=m.seats.some(s=>/^≤/.test(s.val)&&!DIAL_ACT[s.bucket])?`<div class="dnote">≤ cached, at most this much room</div>`:'';
+  const list=head+groupsOf(m).map(g=>`<div class="gh" style="--tint:${g.tint}" data-tip="${g.name}: ${aggTxt(g,m)}"><div class="gl"><span class="tile">${ic(g.p,16)}</span><b>${g.name}</b><span class="dim">${g.seats.length?g.seats.length+(g.seats.length>1?' seats':' seat'):''}</span><span class="sep"></span><span class="n sec">${g.next?fClock(g.next.at):''}</span></div><div class="pl">${pills(g,m)}</div></div>${g.seats.map(row).join('')}`).join('');
+  /* A blind headline (CAN'T TELL) names no seat and no percent: it says what it knows, which is how old the read is. */
+  const who=m.v.blind?`<span>${m.v.line}</span>`:`<span>${ic(m.active.provider,16)} ${m.active.nick}, ${m.active.val} left ${winWords(m.active.w.name)}, ${m.active.burn==null?'pace unknown':'burning '+m.active.burn.toFixed(1)+'× the even rate'}, ${runsOutTxt(m.active)}</span>`;
+  return`<div class="p dialhero${m.old?' oldfeed':''}">${barTop(m)}<div class="dhead"><b class="say t-${m.v.tone}">${m.v.word}</b>${who}<span class="sep"></span>${say(m)}${m.v.btn?`${btnOf(m)}`:''}</div>
+  <div class="dbody"><div class="dcol">${list}${note}${resetPlan(m)}${manualTxt(m)}</div><div class="dstage">${dial(m,520,true)}${legend(m)}</div></div>${tray(m)}</div>`;
+}
+function o6(m){const a=m.active,o=m.d.money.openrouter,s=m.d.sessions;
+  const seatRow=(x,i,gp)=>`<tr class="${x.active?'on':''} sr" data-g="${gp}" style="animation-delay:${i*25}ms" data-tip="${tipOf(x)}"><td class="ind">${x.nick}</td><td>${planOf(x)}</td><td>${x.model?`<span class="mchip">${modelOf(x)}</span>`:'<span class="dim">not reported</span>'}</td><td><svg width="22" height="22" viewBox="0 0 22 22">${ring(11,11,8,3.5,x.room,x.cls,{delay:i*25})}</svg></td>${roomTd(x)}<td class="n">${burnTxt(x)}</td><td class="n">${outTxt(x)}</td><td class="n">${x.at?fClock(x.at):'-'}</td><td class="n">${readTxt(x)}</td><td><span class="chip ${['login','connect'].includes(x.bucket)?'act':''}">${stateCell(x)}</span></td></tr>`;
+  let i=0;const body=groupsOf(m).map(g=>`<tr class="ph"><td colspan="10"><div class="phd" data-g="${g.p}" style="--tint:${g.tint}"><span class="car">▾</span><span class="tile">${ic(g.p,16)}</span><b>${g.name}</b><span class="dim">${g.seats.length?g.seats.length+(g.seats.length>1?' seats':' seat'):'lane'}</span>${pills(g,m)}<span class="sep"></span><span class="sec">${aggTxt(g,m)}</span></div></td></tr>`+g.seats.map(x=>seatRow(x,i++,g.p)).join('')).join('');
+  const f5=a.windows.find(x=>x.name==='5h'),fa=a.windows.find(x=>x.name==='Fable'),far=fa&&fa.pct!=null?100-fa.pct:null;
+  const usable=usableOf(m),c0=Math.round(m.capAt(NOW));
+  /* A blind headline (CAN'T TELL) names no seat and no percent, and carries the Refresh itself. */
+  const blindA=`<div class="av"><div><b class="say t-${m.v.tone}">${m.v.word}</b><div class="who">${m.v.line}</div><div class="who">${btnOf(m)}</div></div></div>`;
+  return`<div class="p dash${m.old?' oldfeed':''}">${barTop(m)}<div class="bento">
+  <div class="cell c-a">${m.v.blind?blindA:`<div class="av"><svg width="176" height="176" viewBox="0 0 172 172" data-tip="${tipOf(a)}">${ring(86,86,76,15,a.room,a.cls,{glow:m.v.tone,breathe:true})}${ring(86,86,57,12,f5&&f5.pct!=null?100-f5.pct:null,'s-hidle',{delay:60})}${ring(86,86,41,9,far,'s-hidle',{delay:120})}<text x="86" y="93" text-anchor="middle" font-size="19" font-weight="700">${tcnt(a.room,a.exact?'':'≤',' %')}</text></svg>
+   <div><b class="say t-${m.v.tone}">${m.v.word}</b><div class="who">${ic(a.provider,15)} ${a.nick}</div><div class="who"><span class="mchip">${modelOf(a)}</span> <span class="mchip">${planOf(a)}</span></div><div class="stat"><b>${a.burn==null?'?':cnt(+a.burn.toFixed(1),'','×')}</b><span>pace</span></div><div class="stat"><b>${runsOutTxt(a)}</b><span>at this pace</span></div></div></div>`}</div>
+  <div class="cell c-b">${dial(m,296,false)}</div>
+  <div class="cell c-c"><h4>Next move</h4><div class="nm-t">${next(m)}</div>${m.v.btn&&!m.v.blind?`${btnOf(m)}`:`<span class="sec">${m.v.hint}</span>`}<h4>Alerts ${m.d.alerts.crossing.length}</h4>${m.d.alerts.crossing.map(x=>`<div class="alert"><span>${x.split(' ')[0]}</span><span>over the ${x.split(' ')[1]} rail</span></div>`).join('')}</div>
+  <div class="cell c-d"><h4>Machine</h4><div class="mgs">${MACH(m).map(x=>mini(x,44)).join('')}</div><h4>Money</h4><div class="ml">${ic('openrouter',14)} <b>${o.balanceUSD==null?'?':cnt(o.balanceUSD,'$')}</b><span class="sec">$${o.rate30d}/d</span></div>${spark(m,228,30)}${manualTxt(m)}</div>
+  <div class="cell c-e"><table><tr><th>Seat</th><th>Plan</th><th>Model</th><th></th><th>Room</th><th>Pace</th><th>Runs out</th><th>Reset</th><th>Read</th><th>State</th></tr>${body}</table></div>
+  <div class="cell c-f"><h4>${s.available===false?'Sessions unavailable':'Sessions '+s.list.length+', '+ownerTxt(s)}</h4>${s.list.slice(0,17).map(x=>`<div class="ml">${dot(x.busy?'warn':'idle')}<span class="lab" data-tip="${x.label}">${x.label.length>22?x.label.slice(0,21)+"…":x.label}</span><span class="dim">${x.seat||''}</span></div>`).join('')}</div>
+  <div class="cell c-g"><h4>Week ahead, ${usable} of ${m.seats.length} usable, Claude room ${c0} %</h4>${heat(m,990,13)}</div>
+  </div></div>`;
+}
+const ACTS={retrust:1,refresh:1};
+document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('[data-act]');
+  if(b&&ACTS[b.dataset.act]===1&&window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.tower)window.webkit.messageHandlers.tower.postMessage(b.dataset.act)});
+document.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const b=e.target.closest&&e.target.closest('[data-act]');if(b){e.preventDefault&&e.preventDefault();b.click&&b.click()}});
+document.addEventListener('click',e=>{const h=e.target.closest&&e.target.closest('.phd');if(!h)return;
+  const t=h.closest('table'),g=h.dataset.g,open=h.classList.toggle('shut');
+  t.querySelectorAll('tr.sr[data-g="'+g+'"]').forEach(r=>{r.style.display=open?'none':''})});
+
+/* Round 6 (tower-ui-2): the four views behind the switcher, regrouped by provider the way round 5 grouped the dashboard and dial.
+   Uses groupsOf, pills and aggTxt from mocks5. Leaves heat(), dial(), dialHero() and o6() untouched (approved design). */
+const gHead=(g,m,o={})=>`<div class="gh${o.tight?' tight':''}" style="--tint:${g.tint}" data-tip="${g.name}: ${aggTxt(g,m)}"><div class="gl"><span class="tile">${ic(g.p,o.z||15)}</span><b>${g.name}</b><span class="dim">${g.seats.length?g.seats.length+(g.seats.length>1?' seats':' seat'):'lane'}</span><span class="sep"></span>${o.pills===false?'':`<span class="pl">${pills(g,m)}</span>`}</div></div>`;
+function o1(m){
+  const a=m.active,f5=a.windows.find(x=>x.name==='5h'),fa=a.windows.find(x=>x.name==='Fable');
+  const f5r=f5&&f5.pct!=null?100-f5.pct:null,far=fa&&fa.pct!=null?100-fa.pct:null,c=86;
+  const moon=s=>`<div class="moon${s.active?' on':''}" data-tip="${tipOf(s)}"><svg width="44" height="44" viewBox="0 0 50 50">${ring(25,25,20,6,s.room,s.cls)}${icAt(s.provider,16,16,18)}</svg><b>${s.nick}</b><span class="n">${s.val}</span></div>`;
+  const orbits=groupsOf(m).filter(g=>g.seats.length).map(g=>`<div class="og${g.seats.length>3?' wide':''}" style="--tint:${g.tint}">${gHead(g,m,{tight:true,z:13})}<div class="moons">${g.seats.slice(0,8).map(moon).join('')}${g.seats.length>8?`<div class="more">+${g.seats.length-8}</div>`:''}</div></div>`).join('');
+  const lg=(c2,l,v)=>`<i style="background:${c2}"></i><span class="dim">${l}</span><span class="n">${v}</span>`;
+  return`<div class="p o1">${barTop(m)}${say(m)}<div class="hero">
+  <svg width="172" height="172" viewBox="0 0 172 172" data-tip="${tipOf(a)}">${ring(c,c,76,16,a.room,a.cls,{glow:m.v.tone})}${ring(c,c,57,13,f5r,'s-hidle')}${ring(c,c,41,10,far,'s-hidle')}${icAt(a.provider,c-11,c-23,22)}
+   <text x="${c}" y="${c+17}" text-anchor="middle" font-size="17" font-weight="800">${a.num} %</text></svg>
+  <div><div class="say t-${m.v.tone}">${m.v.word}</div><div class="who">${ic(a.provider,14)} ${a.nick}, ${planOf(a)}, model ${modelOf(a)}</div>
+   <div class="lg">${lg(tones[m.v.tone],a.w.name,a.val)}${lg(tones.idle,'5h',f5r==null?'?':'≤'+f5r+' %')}${lg(tones.idle,'Fable',far==null?'?':'≤'+far+' %')}</div>
+   <div class="who">${burnTxt(a)} pace, ${runsOutTxt(a)}</div>${m.v.btn?`${btnOf(m)}`:''}</div></div>
+  <div class="orbits">${orbits}</div>${tray(m)}</div>`;
+}
+function o3(m){
+  const groups=groupsOf(m).filter(g=>g.seats.length),total=m.seats.length,c=66,r=52;let at=0;
+  const segs=groups.map(g=>{const p=g.seats.length/total*100,gap=groups.length>1?1.4:0,o=`<circle class="v anim" cx="${c}" cy="${c}" r="${r}" stroke="${g.tint}" stroke-width="15" style="stroke-linecap:butt" pathLength="100" stroke-dasharray="${Math.max(.5,p-gap)} 100" stroke-dashoffset="${-at-gap/2}" transform="rotate(-90 ${c} ${c})" data-tip="${g.name}, ${g.seats.length}: ${g.seats.map(s=>s.nick+' '+s.val).join(', ')}"/>`;at+=p;return o}).join('');
+  const usable=usableOf(m),W=416,Hh=62,pts=[];for(let i=0;i<=56;i++){const t=NOW+i/56*WEEK;pts.push([i/56*W,Hh-m.capAt(t)/100*Hh])}
+  let path=`M0 ${Hh}`;pts.forEach((p,i)=>{if(i)path+=`L${p[0].toFixed(1)} ${pts[i-1][1].toFixed(1)}`;path+=`L${p[0].toFixed(1)} ${p[1].toFixed(1)}`});path+=`L${W} ${Hh}Z`;
+  const days=[];const d0=new Date(NOW);d0.setUTCHours(22,0,0,0);for(let t=d0.getTime();t+DAY/2<NOW+WEEK;t+=DAY)days.push(`<text x="${(t+DAY/2-NOW)/WEEK*W}" y="${Hh+12}" text-anchor="middle" font-size="10" class="dim">${fDay(t+3*H)}</text>`);
+  const c0=Math.round(m.capAt(NOW)),c7=Math.round(m.capAt(NOW+WEEK));
+  const rows=groupsOf(m).map(g=>`<div class="fg" style="--tint:${g.tint}" data-tip="${g.name}: ${aggTxt(g,m)}"><span class="tile">${ic(g.p,14)}</span><span class="fn"><b>${g.name}</b> <span class="n dim">${g.seats.length||''}</span></span><span class="pl">${g.p==='pi'?`<span class="pill">$${m.d.money.pi.monthUSD.toFixed(2)} spent</span>`:pills(g,m)}</span></div>`).join('');
+  return`<div class="p o3">${barTop(m)}${say(m)}<div class="top"><svg width="132" height="132" viewBox="0 0 132 132">${segs}<text x="${c}" y="${c+3}" text-anchor="middle" font-size="24" font-weight="800">${usable}</text><text x="${c}" y="${c+17}" text-anchor="middle" font-size="10" class="dim">of ${total} usable</text></svg>
+  <div><div class="say t-${m.v.tone}">${m.v.word}, ${m.active.nick}, ${m.active.val}</div><div class="fgs">${rows}</div></div></div>
+  <div class="chart-t"><span>Claude room if nothing is used</span><span class="n">${c0} % now, ${c7} % in 7 days</span></div>
+  <svg width="${W}" height="${Hh+15}" viewBox="0 0 ${W} ${Hh+15}" data-tip="Each step is a seat resetting. Ceiling: cached readings count as their maximum."><path d="${path}" fill="#3987e5" fill-opacity=".28" stroke="#6da7ec" stroke-width="2"/>${days.join('')}</svg>
+  ${m.v.btn?`<div style="margin-top:4px">${btnOf(m)}</div>`:''}${tray(m)}</div>`;
+}
+/* heat grouped: a tinted band per provider, then its seats. heat() itself stays for the approved dashboard. */
+function heatG(m,W,rh){
+  const groups=groupsOf(m).filter(g=>g.seats.length),cols=28,lab=118,cw=(W-lab)/cols,gh=rh+4;
+  const dayX=[];const d0=new Date(NOW);d0.setUTCHours(22,0,0,0);for(let t=d0.getTime();t<NOW+WEEK;t+=DAY)dayX.push(t);
+  let y=14,out='';
+  groups.forEach(g=>{
+    out+=`<g data-tip="${g.name}: ${aggTxt(g,m)}"><rect x="0" y="${y}" width="${W}" height="${gh-3}" rx="4" fill="${g.tint}" fill-opacity=".13"/><rect x="0" y="${y}" width="2" height="${gh-3}" fill="${g.tint}"/>${icAt(g.p,6,y+(gh-3-12)/2,12)}<text x="22" y="${y+gh/2+1}" font-size="11" font-weight="700">${g.name}</text><text x="${W-4}" y="${y+gh/2+1}" text-anchor="end" font-size="10" class="dim">${aggTxt(g,m)}</text></g>`;
+    y+=gh;
+    g.seats.forEach(s=>{let o=`<text x="8" y="${y+11}" font-size="11" font-weight="${s.active?800:500}">${s.nick}</text><text x="${lab-4}" y="${y+11}" text-anchor="end" font-size="9.5" class="dim">${modelOf(s).replace('Cursor ','').replace('-1.3','').replace('Gemini 4 ','')}</text>`;
+      for(let c=0;c<cols;c++){const t=NOW+(c+.5)/cols*WEEK,r=(s.at&&t>=s.at)||s.passed?100:s.room;o+=`<rect x="${lab+c*cw}" y="${y}" width="${cw-1.6}" height="${rh-2}" rx="2.5" fill="${RAMP(r)}" ${s.live||t>=(s.at||Infinity)?'':'opacity=".72"'}/>`}
+      out+=`<g data-tip="${tipOf(s)}">${o}${s.active?`<rect x="${lab-2}" y="${y-1.5}" width="${cols*cw+2.5}" height="${rh+1}" rx="4" fill="none" stroke="${tones[m.v.tone]}" stroke-width="1.5" style="filter:drop-shadow(0 0 4px ${tones[m.v.tone]})"/>`:''}</g>`;
+      y+=rh;});
+    y+=3;
+  });
+  const heads=dayX.filter(t=>t+DAY/2<NOW+WEEK).map(t=>`<text x="${lab+(t+DAY/2-NOW)/WEEK*cols*cw}" y="9" text-anchor="middle" font-size="10" class="dim">${fDay(t+3*H)}</text>`).join('');
+  return`<svg width="${W}" height="${y+2}" viewBox="0 0 ${W} ${y+2}">${heads}${out}</svg>`;
+}
+function o4(m){const n=m.next;
+  return`<div class="p o4">${barTop(m)}<div class="big"><b class="t-${m.v.tone}">${m.v.word}</b><span class="sec">${ic(m.active.provider,15)} ${m.active.nick}, ${m.active.val} left, ${m.active.w.name}</span></div>
+  <div class="sub">Reset ${n?fClock(n.at)+', '+n.nick+', in '+span(n.at-NOW):'?'}</div>${say(m)}${heatG(m,416,16)}
+  <div class="foot" style="align-items:center"><div class="scale">no room<i style="background:#1d1f33"></i><i style="background:#33336e"></i><i style="background:#4f4fb0"></i><i style="background:#6e6ee0"></i><i style="background:#9a9af0"></i>full</div>${m.v.btn?`${btnOf(m)}`:''}</div>${tray(m)}</div>`;
+}
+function o5(m){const a=m.active;
+  const banks=groupsOf(m).filter(g=>g.seats.length).map(g=>`<div class="bank${g.seats.length>3?' wide':''}" style="--tint:${g.tint}"><div class="bl" data-tip="${g.name}: ${aggTxt(g,m)}"><span class="tile">${ic(g.p,13)}</span><b>${g.name}</b></div><div class="tanks">${g.seats.map(s=>tankOf(m,s)).join('')}</div></div>`).join('');
+  return`<div class="p o5">${barTop(m)}${say(m)}<div class="hero">${gauge(a,236,m.v.tone)}
+  <div class="read"><b class="t-${m.v.tone}">${m.v.word}</b><span>${ic(a.provider,13)} ${a.nick}, ${a.val}, model ${modelOf(a)}</span><b>${burnTxt(a)}</b><span>even pace</span><b>${/^lasts/.test(outTxt(a))?'lasts':outTxt(a)}</b><span>${/^lasts/.test(outTxt(a))?'to reset':'runs out'}</span></div></div>
+  <div class="banks">${banks}</div>
+  <div class="mgs">${MACH(m).map(x=>mini(x,40)).join('')}<div class="mt">${spark(m,150,26)}<span>${ic('openrouter',13)} ${orTxt(m.d.money.openrouter)}</span></div></div>
+  <div class="foot" style="align-items:center"><span>Reset ${m.next?fClock(m.next.at):'?'}, ${m.d.sessions.available===false?'sessions unavailable':m.d.sessions.list.length+' sessions'}</span>${m.v.btn?`${btnOf(m)}`:''}</div></div>`;
+}
+
+
+/* adapt(feed): Tower's ten read tools (one feed from Swift) into the page model the approved views draw.
+   Port of the review page's round3-data.js. Every string is HTML-escaped first: session labels, lane
+   errors and nicknames reach innerHTML, and a local name must never become markup. */
+const esc=v=>typeof v==='string'?v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])):Array.isArray(v)?v.map(esc):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,esc(x)])):v;
+const MONO={claude:['#d97757','C'],chatgpt:['#10a37f','Cx'],cursor:['#3a3a40','Cu'],devin:['#39b58f','D'],antigravity:['#4285f4','A'],gemini:['#4285f4','G'],muse:['#0a84ff','M'],
+  pi:['#23262e','π'],openrouter:['#3b43c9','OR']};
+function installIcons(marks){
+  const d=document.getElementById('defs');d.querySelectorAll('symbol[data-ic]').forEach(x=>x.remove());
+  const html=Object.keys(MONO).map(k=>{const u=typeof marks[k]==='string'&&/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(marks[k])?marks[k]:null;
+    const body=u?'<image href="'+u+'" width="64" height="64"/>':'<rect width="64" height="64" rx="14" fill="'+MONO[k][0]+'"/><text x="32" y="41" text-anchor="middle" font-size="'+(MONO[k][1].length>1?22:28)+'" font-weight="700" fill="#fff" font-family="-apple-system,sans-serif">'+MONO[k][1]+'</text>';
+    return'<symbol data-ic="1" id="i-'+k+'" viewBox="0 0 64 64">'+body+'</symbol>'}).join('');
+  d.insertAdjacentHTML('beforeend',html);
+}
+/* The manual entry (free limit resets, credits): numbers no source Tower reads carries. Kept only when well formed;
+   it is drawn with its label and age and never as a live reading. */
+function manualOf(x){
+  if(!x||typeof x!=='object'||typeof x.source!=='string'||!Array.isArray(x.resets))return null;
+  const at=new Date(x.enteredAt).getTime();
+  return{source:x.source,enteredAt:Number.isFinite(at)?at:null,
+    resets:x.resets.filter(r=>r&&typeof r.nickname==='string'&&typeof r.kind==='string'&&Number.isFinite(r.count)),
+    credits:(Array.isArray(x.credits)?x.credits:[]).filter(c=>c&&typeof c.nickname==='string'&&Number.isFinite(c.balanceUSD))}}
+function adapt(raw0){
+  const raw=esc(raw0),o=x=>x&&typeof x==='object'?x:{},a=x=>Array.isArray(x)?x:[];
+  const cls=e=>!e?null:/^needs login: Keychain/.test(e)?'keychain-locked':/^needs login/.test(e)?'needs-login':/^not polled/.test(e)?'not-polled':/^Connect Cursor/.test(e)?'connect-cursor':/Keychain remove/.test(e)?'keychain-owner':'other';
+  const lanesList=a(o(raw.lanes).lanes),lanes=Object.fromEntries(lanesList.map(l=>[l.provider,l]));
+  const alerts=a(o(raw.alerts).accounts);
+  const seats=a(o(raw.accounts).accounts).filter(x=>x.provider!=='openrouter'&&x.provider!=='typesafe').map(x=>{
+    const al=alerts.find(y=>y.nickname===x.nickname&&y.provider===x.provider)||{},lane=lanes[x.provider];
+    return{nick:x.nickname,provider:x.provider,plan:x.plan,tier:x.tier,active:x.isActive||undefined,capturedAt:x.capturedAt,
+      error:cls(x.lastError),errorText:x.lastError||null,model:x.model||(lane&&lane.configModel)||null,crossing:x.crossing,
+      announced:a(al.announced).map(y=>y.window+' '+y.level),
+      windows:a(x.windows).map(w=>({name:w.name,pct:w.percentUsed,resetsAt:w.resetsAt,trust:w.trust}))};
+  });
+  const S=a(o(raw.openrouterHistory).samples),last=S[S.length-1],T=x=>new Date(x.capturedAt).getTime();
+  const back=d=>{const t=T(last)-d*864e5;return S.find(x=>T(x)>=t)||S[0]};
+  const rate=d=>last&&S.length>1?+(Math.max(0,back(d).available-last.available)/Math.max(1e-9,Math.min(d,(T(last)-T(back(d)))/864e5||d))).toFixed(2):0;
+  const room=o(raw.room),machine=o(room.machine),sess=o(raw.sessions),iv=a(sess.interactive),br=o(sess.blastRadius),pi=lanes.pi&&lanes.pi.usage;
+  const seatOf=x=>x.accountNickname||null;
+  const adv=o(raw.advice),fr=o(o(raw.freshness).rules);
+  return{generatedAt:raw.generatedAt||o(raw.accounts).generatedAt||new Date().toISOString(),tz:'Asia/Jerusalem',
+    menubarTitle:o(raw.status).menubarTitle,refreshError:o(raw.status).refreshError,
+    notice:typeof raw.notice==='string'&&raw.notice?raw.notice:null,
+    advice:{kind:adv.kind,nickname:adv.nickname,percentUsed:adv.percentUsed,roomPct:adv.roomPct,earliestReset:adv.earliestReset},readySummary:room.readySummary,seats,
+    manual:manualOf(raw.manual),
+    machine:{available:!!room.machine&&typeof room.machine==='object',load1:machine.load1||0,compressorGiB:machine.compressorGiB||0,swapUsedGiB:machine.swapUsedGiB||0,swapTotalGiB:machine.swapTotalGiB||1,
+      memUsedGiB:typeof machine.memUsedGiB==='number'?machine.memUsedGiB:null,memTotalGiB:typeof machine.memTotalGiB==='number'?machine.memTotalGiB:null,
+      gate:{load1:o(machine.gate).load1||1,compressorGiB:o(machine.gate).compressorGiB||1},level:machine.level,line:machine.line},
+    money:{openrouter:{balanceUSD:last?+last.available.toFixed(2):null,addedUSD:last?last.totalCredits:0,leftPct:last&&last.totalCredits?+(last.available/last.totalCredits*100).toFixed(1):0,
+      rate7d:rate(7),rate30d:rate(29.9),history:S.map(x=>({t:x.capturedAt,usd:x.available}))},pi:pi&&typeof pi.monthUSD==='number'?{...pi}:{monthUSD:0,absent:true},typesafe:'no balance entered'},
+    sessions:{available:sess.available!==false,line:br.line||'',level:br.level,unknown:iv.filter(x=>!x.accountEmail).length,confirmed:iv.filter(x=>x.accountEmail).length,background:sess.backgroundCount||0,
+      list:iv.map(x=>({label:x.label||x.name||'?',busy:!!x.busy,status:x.status,repo:x.repo,model:x.model||null,seat:seatOf(x),evidence:x.accountEvidence||null}))},
+    lanes:lanesList.map(l=>({provider:l.provider,label:l.label,model:l.configModel,detail:l.headerDetail||'',state:l.state,lastLimitHit:l.lastLimitHit,lastDispatch:l.lastDispatch})),
+    alerts:{crossing:alerts.filter(x=>x.crossing).map(x=>x.nickname+' '+x.crossing),pending:alerts.flatMap(x=>a(x.pending)).length,
+      announced:alerts.flatMap(x=>a(x.announced).map(y=>x.nickname+' '+y.window+' '+y.level)),rail:o(raw.alerts).rail},
+    rules:{ttlSeconds:fr.freshnessTTLSeconds,pollSeconds:fr.pollIntervalSeconds}};
+}
+
+const SURF=[['dial','Week dial',dialHero],['dash','Dashboard',o6]];
+let surf='dial',last=null;
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function counts(root){if(reduced)return;root.querySelectorAll('[data-count]').forEach(e=>{const end=+e.dataset.count,pre=e.dataset.pre||'',suf=e.dataset.suf||'',dp=(String(end).split('.')[1]||'').length;
+  const t0=performance.now();(function tick(t){const k=Math.min(1,(t-t0)/700),v=end*(1-Math.pow(1-k,4));e.textContent=pre+(k<1?v.toFixed(dp):end.toFixed(dp))+suf;if(k<1)requestAnimationFrame(tick)})(t0)})}
+function draw(animate){if(!SNAP)return;
+  document.getElementById('switch').innerHTML=SURF.map(x=>'<button type="button" data-v="'+x[0]+'" aria-pressed="'+(x[0]===surf)+'">'+x[1]+'</button>').join('');
+  const stage=document.getElementById('stage');
+  try{stage.innerHTML=SURF.find(x=>x[0]===surf)[2](model('real'));if(animate)counts(stage)}
+  catch(e){stage.innerHTML='<div class="empty">Tower could not draw this read: '+String(e&&e.message||e).replace(/[<&]/g,'')+'</div>'}}
+document.getElementById('switch').addEventListener('click',e=>{const b=e.target.closest('button');if(b){surf=b.dataset.v;draw(true)}});
+window.towerUpdate=function(feed){const first=!SNAP;last=feed;installIcons(feed.icons||{});
+  try{SNAP=adapt(feed);NOW=new Date(SNAP.generatedAt).getTime();CAPPED=typeof feed.cappedPct==='number'?feed.cappedPct:95;
+    TTL=Number.isFinite(SNAP.rules.ttlSeconds)&&SNAP.rules.ttlSeconds>0?SNAP.rules.ttlSeconds:900}
+  catch(e){SNAP=null;document.getElementById('switch').innerHTML='';document.getElementById('stage').innerHTML='<div class="empty">'+String(e&&e.message||e).replace(/[<&]/g,'')+'</div>';return}
+  draw(first)};
+window.towerSurface=function(v){if(SURF.some(x=>x[0]===v)){surf=v;draw(true)}};
+/* A page left open ages by itself: once a second the feed's age is checked against the freshness line, and the page is
+   drawn again when it crosses (and once a minute after, so "last read 22h 4m ago" keeps counting). */
+let agedKey=null;
+function ageTick(){if(!SNAP)return;const age=wall()-NOW,old=age>FEED_TTL(),key=old?'old:'+Math.floor(age/6e4):'fresh';
+  if(agedKey!==null&&key!==agedKey)draw(false);agedKey=key}
+if(typeof setInterval==='function')setInterval(ageTick,1000);
+const tip=document.getElementById('tip');
+document.addEventListener('mousemove',e=>{const r=e.target.closest&&e.target.closest('[data-tip]');if(!r){tip.style.display='none';return}
+  tip.textContent=r.getAttribute('data-tip').replace(/\\n/g,'\n');tip.style.display='block';tip.style.left=Math.min(innerWidth-290,e.clientX+14)+'px';tip.style.top=(e.clientY+14)+'px'});
+})();
+</script>
+</body>
+</html>
