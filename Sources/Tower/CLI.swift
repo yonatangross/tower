@@ -2810,7 +2810,7 @@ enum CLI {
             // while any seat is unreadable its silent read is due again after the backoff.
             let pickup = ClaudeSeatLaunchCache()
             let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-            pickup.keep(ClaudeSeatKeychainReadout(records: [], unreadable: [ClaudeSeatUnreadableItem(service: "s", account: "a", label: "l", status: -25293)]),
+            pickup.keep(ClaudeSeatKeychainReadout(records: [], unreadable: [ClaudeSeatUnreadableItem(service: "s", account: "a", label: "l", status: errSecDecode)]),
                         now: t0, interaction: .suppressed)
             check("the app re-reads an unreadable seat after the backoff, so a CLI retrust is picked up",
                   !pickup.readDue(now: t0.addingTimeInterval(30), backoff: ClaudeSeatVault.readRetryBackoff)
