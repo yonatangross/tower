@@ -1884,10 +1884,19 @@ enum AgentLane {
         let message: String
     }
 
+    struct ModelNow: Equatable {
+        let model: String
+        /// "selection" or "config" today; "transcript" and "rollout" name the
+        /// session-scoped sources other surfaces use for the same field.
+        let source: String
+    }
+
     struct Reading: Equatable {
         let provider: Provider
         /// The model the tool's own config selects, nil when the config names none.
         let configModel: String?
+        /// Live evidence of the running model, labelled by provenance.
+        let modelNow: ModelNow?
         /// Newest ledger dispatch of this lane, nil when no ledger recorded one.
         let lastDispatch: Dispatch?
         /// Newest limit refusal the tool recorded, nil when none was seen.
@@ -1896,9 +1905,11 @@ enum AgentLane {
         let usage: UsageRead
 
         init(provider: Provider, configModel: String?, lastDispatch: Dispatch?,
-             lastLimitHit: LimitHit?, usage: UsageRead = .notExposed) {
+             lastLimitHit: LimitHit?, usage: UsageRead = .notExposed,
+             modelNow: ModelNow? = nil) {
             self.provider = provider
             self.configModel = configModel
+            self.modelNow = modelNow
             self.lastDispatch = lastDispatch
             self.lastLimitHit = lastLimitHit
             self.usage = usage
@@ -1991,6 +2002,33 @@ enum AgentLane {
         }
         guard let model = raw as? String, !model.isEmpty else { return nil }
         return model
+    }
+
+    /// The newest live evidence of the model a lane runs, or nil when the
+    /// engine exposes no readable model record at all.
+    ///
+    /// Only the Cursor CLI writes a per-selection record: `cli-config.json`'s
+    /// `modelSelectionHistory` appends the model id on every pick, so its
+    /// last entry is the engine's own "what was chosen most recently".
+    /// Devin and Muse keep only the global default on disk (the Devin CLI's
+    /// logs and session stores name no model, measured 2026-11-20), so their
+    /// config read is the strongest evidence available and is labelled
+    /// "config". agy answers nil: ~/.gemini is operator-auth territory.
+    static func modelNow(_ lane: Provider, data: Data?) -> ModelNow? {
+        guard let data,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        switch lane {
+        case .cursor:
+            guard let history = root["modelSelectionHistory"] as? [String],
+                  let model = history.last(where: { !$0.isEmpty }) else { return nil }
+            return ModelNow(model: model, source: "selection")
+        case .devin, .muse:
+            guard let model = try? configModel(lane, data: data) else { return nil }
+            return ModelNow(model: model, source: "config")
+        default:
+            return nil
+        }
     }
 
     /// Newest dispatch per `kind` from a dispatcher's `dispatch-worktrees.jsonl`.
@@ -2539,9 +2577,12 @@ enum AgentLane {
         }
 
         var configModel: String?
+        var modelNow: ModelNow?
         if let cfg = configFile(lane, home: home), fm.fileExists(atPath: cfg.path) {
             do {
-                configModel = try Self.configModel(lane, data: try Data(contentsOf: cfg))
+                let data = try Data(contentsOf: cfg)
+                configModel = try Self.configModel(lane, data: data)
+                modelNow = Self.modelNow(lane, data: data)
             } catch {
                 return .unavailable("could not read ~/\(cfg.path.dropFirst(home.path.count + 1))")
             }
@@ -2626,7 +2667,8 @@ enum AgentLane {
         }
 
         return .ok(Reading(provider: lane, configModel: configModel,
-                           lastDispatch: dispatch, lastLimitHit: hit, usage: usage))
+                           lastDispatch: dispatch, lastLimitHit: hit, usage: usage,
+                           modelNow: modelNow))
     }
 
     static func readAll(home: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -2719,7 +2761,7 @@ extension AgentLane {
             ?? .notReadable("not read yet, refreshing")
         out[.muse] = .ok(Reading(provider: reading.provider, configModel: reading.configModel,
                                  lastDispatch: reading.lastDispatch, lastLimitHit: reading.lastLimitHit,
-                                 usage: usage))
+                                 usage: usage, modelNow: reading.modelNow))
         return out
     }
 
