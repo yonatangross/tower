@@ -37,13 +37,13 @@ final class SessionLabelTests: XCTestCase {
     }
 
     func testPlainLaneNamesAreUnchanged() {
-        for lane in ["api-cli-2", "e2e-tests", "ops-board", "worker64", "content-2-desk"] {
+        for lane in ["api-cli-2", "e2e-tests", "floor-board", "conductor64", "content-2-desk"] {
             XCTAssertEqual(SessionLabel.derive(name: lane, cwd: "\(platform)/\(lane)"), lane)
         }
     }
 
     func testDigitsAndHashAreNotStrippedAsEmoji() {
-        XCTAssertEqual(SessionLabel.derive(name: "64-coordinator", cwd: nil), "64-coordinator")
+        XCTAssertEqual(SessionLabel.derive(name: "64-conductor", cwd: nil), "64-conductor")
         XCTAssertEqual(SessionLabel.derive(name: "#1527 lane", cwd: nil), "#1527 lane")
     }
 

@@ -83,7 +83,7 @@ final class SeatFreshnessTests: XCTestCase {
 
     func testStaleBoardUsageLabelsCachedRoomAndItsAgeWithoutMakingItLive() {
         // Both resets still ahead: a passed reset reads as reopened, see SeatReopenedTests.
-        var old = seat("alt2", age: 4 * 3_600 + 40 * 60, used: 80)
+        var old = seat("dee", age: 4 * 3_600 + 40 * 60, used: 80)
         old.lastError = "needs login"
 
         let display = SeatUsagePresentation(account: old, now: now)

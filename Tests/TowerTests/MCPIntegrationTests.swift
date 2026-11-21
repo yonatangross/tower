@@ -42,13 +42,13 @@ final class MCPIntegrationTests: XCTestCase {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("tower-mcp-it-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = Store(dir: dir.appendingPathComponent("support"), mirror: dir.appendingPathComponent("claude/quota-cache.json"))
-        var live = AccountSnapshot(email: "user-f@example.com", nickname: "alt1", plan: "max")
+        var live = AccountSnapshot(email: "user-a@example.com", nickname: "cal", plan: "max")
         live.fiveHourPct = 14
         live.fiveHourResetsAt = Date().addingTimeInterval(3600)
         live.weeklyPct = 3
         live.weeklyResetsAt = Date().addingTimeInterval(86_400)
         live.capturedAt = Date()
-        var codex = AccountSnapshot(email: "user-d@example.com", nickname: "eve", plan: "pro")
+        var codex = AccountSnapshot(email: "user-c@example.com", nickname: "eve", plan: "pro")
         codex.provider = .codex
         codex.weeklyPct = 70
         codex.weeklyResetsAt = Date().addingTimeInterval(86_400)
@@ -147,7 +147,7 @@ final class MCPIntegrationTests: XCTestCase {
         XCTAssertEqual(accounts["result"]["isError"], false, accounts.text)
         let rows = accounts["result"]["structuredContent"]["accounts"].arrayValue ?? []
         XCTAssertEqual(rows.count, 2, accounts.text)
-        let live = try XCTUnwrap(rows.first { $0["nickname"] == "alt1" })
+        let live = try XCTUnwrap(rows.first { $0["nickname"] == "cal" })
         XCTAssertEqual(live["worstTrust"], "live")
         XCTAssertEqual(live["roomPct"], 86)
         XCTAssertEqual(live["windows"].arrayValue?.map { $0["name"] }, ["5h", "7d"])
@@ -157,8 +157,8 @@ final class MCPIntegrationTests: XCTestCase {
         send(["jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": ["uri": .string(TowerMCPService.quotaCacheURI)]])
         let (cache, _) = try response(id: 4)
         let body = try JSON.parse(Data((cache["result"]["contents"][0]["text"].stringValue ?? "").utf8))
-        XCTAssertEqual(body["user-f@example.com"]["nickname"], "alt1")
-        XCTAssertEqual(body["codex:user-d@example.com"]["provider"], "codex")
+        XCTAssertEqual(body["user-a@example.com"]["nickname"], "cal")
+        XCTAssertEqual(body["codex:user-c@example.com"]["provider"], "codex")
         XCTAssertEqual(cache["result"]["contents"][0]["mimeType"], "application/json")
 
         // Subscribe, rewrite the store (which rewrites the mirror), expect the update.
@@ -167,7 +167,7 @@ final class MCPIntegrationTests: XCTestCase {
         XCTAssertEqual(subscribed["result"], [:])
         let store = Store(dir: dir.appendingPathComponent("support"), mirror: dir.appendingPathComponent("claude/quota-cache.json"))
         var changed = store.load()
-        changed["user-f@example.com"]?.fiveHourPct = 55
+        changed["user-a@example.com"]?.fiveHourPct = 55
         XCTAssertNil(store.save(changed))
         let updated = try receive(timeout: 15)
         XCTAssertEqual(updated["method"], "notifications/resources/updated", updated.text)
@@ -201,7 +201,7 @@ final class MCPIntegrationTests: XCTestCase {
         send(["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["_meta": meta, "name": "tower_room", "arguments": [:]]])
         let (room, _) = try response(id: 2)
         XCTAssertEqual(room["result"]["resultType"], "complete", room.text)
-        XCTAssertEqual(room["result"]["structuredContent"]["recommended"], "alt1")
+        XCTAssertEqual(room["result"]["structuredContent"]["recommended"], "cal")
 
         send(["jsonrpc": "2.0", "id": 3, "method": "subscriptions/listen",
               "params": ["_meta": meta, "notifications": ["resourceSubscriptions": [.string(TowerMCPService.quotaCacheURI)]]]])
@@ -211,7 +211,7 @@ final class MCPIntegrationTests: XCTestCase {
 
         let store = Store(dir: dir.appendingPathComponent("support"), mirror: dir.appendingPathComponent("claude/quota-cache.json"))
         var changed = store.load()
-        changed["user-f@example.com"]?.weeklyPct = 44
+        changed["user-a@example.com"]?.weeklyPct = 44
         XCTAssertNil(store.save(changed))
         let updated = try receive(timeout: 15)
         XCTAssertEqual(updated["method"], "notifications/resources/updated", updated.text)

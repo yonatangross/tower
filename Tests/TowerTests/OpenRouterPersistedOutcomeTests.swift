@@ -17,7 +17,7 @@ final class OpenRouterPersistedOutcomeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = Store(dir: dir)
         store.seedOpenRouterAccount(
-            into: &accounts, outcome: .ok(OpenRouter.Budget(spent: 26.06, limit: 40)),
+            into: &accounts, outcome: .ok(OpenRouter.Budget(spent: 31.5, limit: 50)),
             now: now.addingTimeInterval(-3600))
         store.seedOpenRouterAccount(
             into: &accounts, outcome: .rejected(401, keyFingerprint: "9f3c", lastSuccessAt: nil),
@@ -46,7 +46,7 @@ final class OpenRouterPersistedOutcomeTests: XCTestCase {
         let store = Store(dir: dir)
         XCTAssertEqual(OpenRouter.persistedOutcome(from: [], lastSuccessAt: nil), .notConfigured)
         store.seedOpenRouterAccount(
-            into: &accounts, outcome: .ok(OpenRouter.Budget(spent: 10, limit: 40)), now: now)
+            into: &accounts, outcome: .ok(OpenRouter.Budget(spent: 10, limit: 50)), now: now)
         store.seedOpenRouterAccount(into: &accounts, outcome: .unavailable, now: now)
         XCTAssertEqual(
             OpenRouter.persistedOutcome(from: Array(accounts.values), lastSuccessAt: nil),
@@ -60,16 +60,16 @@ final class OpenRouterPersistedOutcomeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = Store(dir: dir)
         store.seedOpenRouterAccount(
-            into: &accounts, outcome: .ok(OpenRouter.Budget(spent: 26.06, limit: 40)), now: now)
+            into: &accounts, outcome: .ok(OpenRouter.Budget(spent: 31.5, limit: 50)), now: now)
         guard case .ok(let budget) = OpenRouter.persistedOutcome(
             from: Array(accounts.values), lastSuccessAt: nil)
         else { return XCTFail("a healthy row must hydrate as ok") }
-        XCTAssertEqual(budget.available, 13.94, accuracy: 0.0001)
-        XCTAssertEqual(budget.limit, 40, accuracy: 0.0001)
+        XCTAssertEqual(budget.available, 18.5, accuracy: 0.0001)
+        XCTAssertEqual(budget.limit, 50, accuracy: 0.0001)
 
         var drained = [String: AccountSnapshot]()
         store.seedOpenRouterAccount(
-            into: &drained, outcome: .ok(OpenRouter.Budget(spent: 40, limit: 40)), now: now)
+            into: &drained, outcome: .ok(OpenRouter.Budget(spent: 50, limit: 50)), now: now)
         guard case .ok(let empty) = OpenRouter.persistedOutcome(
             from: Array(drained.values), lastSuccessAt: nil)
         else { return XCTFail("a drained row is still a reading") }
@@ -84,7 +84,7 @@ final class OpenRouterPersistedOutcomeTests: XCTestCase {
         let store = Store(dir: dir, now: { self.now })
         var accounts = [String: AccountSnapshot]()
         store.seedOpenRouterAccount(
-            into: &accounts, outcome: .ok(OpenRouter.Budget(spent: 26.06, limit: 40)), now: now)
+            into: &accounts, outcome: .ok(OpenRouter.Budget(spent: 31.5, limit: 50)), now: now)
         store.seedOpenRouterAccount(
             into: &accounts, outcome: .rejected(401, keyFingerprint: nil, lastSuccessAt: nil), now: now)
         XCTAssertNil(store.save(accounts))

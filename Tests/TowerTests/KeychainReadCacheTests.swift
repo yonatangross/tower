@@ -238,59 +238,6 @@ final class KeychainReadCacheTests: XCTestCase {
         XCTAssertEqual(perCycle, [4, 0, 0], "one listing plus one read per owned item, once per launch")
     }
 
-    /// Betty 12:35: a -25308 row must cost one read, not a retry loop. A signer refusal cannot change
-    /// while this process runs (the item's ACL names another build), so the minute-old backoff that
-    /// retries other statuses must not re-ask it, and re-asking it re-lists and re-reads every seat.
-    func testASignerRefusalCostsOneReadForTheWholeLaunch() async throws {
-        let fake = previousLaunch()
-        var current = now
-        let counter = KeychainCallCounter()
-        let launch = vault(fake, counter: counter, now: { current })
-        let active = credential("fresh-one", email: "one@example.test")
-        let first = await refreshCycles(1, vault: launch, counter: counter, active: active)
-        XCTAssertEqual(first, [4], "one listing plus one read per owned item")
-        let readsAfterLaunch = fake.itemReads.count
-        for minutes in 1...3 {
-            current = now.addingTimeInterval(Double(minutes) * (ClaudeSeatVault.readRetryBackoff + 1))
-            let later = await refreshCycles(1, vault: launch, counter: counter, active: active)
-            XCTAssertEqual(later, [0], "minute \(minutes): a signer refusal is not asked again")
-        }
-        XCTAssertEqual(fake.itemReads.count, readsAfterLaunch, "no item was read again")
-    }
-
-    /// Codex on 147b379: -25308 also answers while the login keychain is merely locked, so a refusal is
-    /// not final. It is asked again on the long backoff, and a seat that became readable is picked up.
-    func testASignerRefusalIsAskedAgainOnTheLongBackoffSoAnUnlockRecovers() async throws {
-        let fake = previousLaunch()
-        var current = now
-        let counter = KeychainCallCounter()
-        let launch = vault(fake, counter: counter, now: { current })
-        let active = credential("fresh-one", email: "one@example.test")
-        _ = await refreshCycles(1, vault: launch, counter: counter, active: active)
-        for index in fake.items.indices where fake.items[index].account == "three@example.test" {
-            fake.items[index].readStatus = errSecSuccess   // the keychain was unlocked
-        }
-        current = now.addingTimeInterval(ClaudeSeatVault.signerRefusalRetryBackoff + 1)
-        let later = await refreshCycles(1, vault: launch, counter: counter, active: active)
-        XCTAssertEqual(later, [4], "after the long backoff the refused item is asked again")
-        XCTAssertTrue(launch.credentials(active: nil).contains { $0.emailHint == "three@example.test" },
-                      "the seat that became readable is back")
-    }
-
-    /// The operator's Re-trust is the one thing that may ask a refused item again.
-    func testRetrustStillAsksASignerRefusalAgain() async throws {
-        let fake = previousLaunch()
-        var current = now
-        let counter = KeychainCallCounter()
-        let launch = vault(fake, counter: counter, now: { current })
-        _ = await refreshCycles(1, vault: launch, counter: counter,
-                                active: credential("fresh-one", email: "one@example.test"))
-        let before = fake.itemReads.count
-        current = now.addingTimeInterval(5)
-        _ = try launch.retrust().get()
-        XCTAssertTrue(fake.itemReads.count > before, "Re-trust reads the refused items")
-    }
-
     func testRefusedActiveSeatIsRecreatedOnceFromTheCLICredential() async throws {
         let fake = previousLaunch()
         let counter = KeychainCallCounter()

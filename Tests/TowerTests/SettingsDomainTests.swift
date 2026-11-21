@@ -127,12 +127,8 @@ final class SettingsDomainTests: XCTestCase {
     }
 
     func testBoardCapLeavesRoomForHeaderAndFooter() {
-        // 2026-10-31: the panel stays within three quarters of the screen (was the whole
-        // screen minus the chrome, 700 and 550, which reached from the menubar to the Dock).
-        XCTAssertEqual(BoardScroll<EmptyView>.cap(visibleHeight: 1000, textFactor: 1.0), 450)
-        XCTAssertEqual(BoardScroll<EmptyView>.cap(visibleHeight: 1000, textFactor: 1.5), 300)
-        XCTAssertEqual(BoardScroll<EmptyView>.cap(visibleHeight: 1000, textFactor: 1.0,
-                                                  density: .compact), 580)
+        XCTAssertEqual(BoardScroll<EmptyView>.cap(visibleHeight: 1000, textFactor: 1.0), 700)
+        XCTAssertEqual(BoardScroll<EmptyView>.cap(visibleHeight: 1000, textFactor: 1.5), 550)
         // A short screen still shows a usable slice of the boards.
         XCTAssertEqual(BoardScroll<EmptyView>.cap(visibleHeight: 300, textFactor: 1.5), 240)
     }

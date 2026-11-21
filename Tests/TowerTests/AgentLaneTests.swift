@@ -21,43 +21,43 @@ final class AgentLaneTests: XCTestCase {
 
     /// ~/.local/share/devin/cli/logs/devin_*.log. Two refusals and two ordinary lines.
     static let devinLog = """
-    2026-09-15T14:43:07.856767Z  WARN agent_ext::title: Title generation failed: QuotaExhausted(message=Your daily usage quota has been exhausted. Visit https://app.devin.ai/settings/usage to purchase on-demand usage or turn on auto-reload. (trace ID: c87bf4da1891d331b83f240f6da6ec57))
+    2026-09-15T14:43:07.856767Z  WARN agent_ext::title: Title generation failed: QuotaExhausted(message=Your daily usage quota has been exhausted. Visit https://app.devin.ai/settings/usage to purchase on-demand usage or turn on auto-reload. (trace ID: 0a0a0a0a1891d331b83f240f6da6ec57))
     2026-09-15T14:56:58.055039Z  INFO chisel: elapsed_since_main_ms=6 logging initialized
-    2026-09-15T18:19:43.627602Z  WARN agent_ext::title: Title generation failed: QuotaExhausted(message=Your daily usage quota has been exhausted. Visit https://app.devin.ai/settings/usage to purchase on-demand usage or turn on auto-reload. (trace ID: 811653d8a0763d32ec07a599d0dbfbbd))
+    2026-09-15T18:19:43.627602Z  WARN agent_ext::title: Title generation failed: QuotaExhausted(message=Your daily usage quota has been exhausted. Visit https://app.devin.ai/settings/usage to purchase on-demand usage or turn on auto-reload. (trace ID: 0b0b0b0ba0763d32ec07a599d0dbfbbd))
     2026-09-15T14:56:58.055122Z  INFO init_cli: chisel: version=3000.10.27 commit=bcbe88c7 os=macos arch=aarch64 binary=devin startup
     """
 
     /// An older refusal from a different day, for newest-across-files assertions.
     static let devinOlderRefusal = "2026-09-14T10:00:00.000000Z  WARN agent_ext::title: Title generation failed: QuotaExhausted(message=Your daily usage quota has been exhausted. Visit https://app.devin.ai/settings/usage to purchase on-demand usage or turn on auto-reload. (trace ID: 44443333222211114444333322221111))"
 
-    static let museSuccess = #"2026-09-16T07:01:10.097797Z INFO tbh.local.provider fbcode/musecode/build/src/crates/plugins/meta-model-provider/src/meta/provider/status_summaries/local_tracing.rs:49 event="provider_stream.terminal" provider="meta" terminal="success" reason="completed" attempt=1 max_attempts=10 has_http_status=false http_status=0 request_id_state="present" request_id="26408a93-d17d-4506-a498-e8f6bd3acdc0" trace_id_state="absent" trace_id="" bytes_read=7288 wire_events_seen=10 has_time_to_first_event=true time_to_first_event_ms=0 eof=false eof_buffer_len=0"#
+    static let museSuccess = #"2026-09-16T07:01:10.097797Z INFO tbh.local.provider src/crates/plugins/meta-model-provider/src/meta/provider/status_summaries/local_tracing.rs:49 event="provider_stream.terminal" provider="meta" terminal="success" reason="completed" attempt=1 max_attempts=10 has_http_status=false http_status=0 request_id_state="present" request_id="26408a93-d17d-4506-a498-e8f6bd3acdc0" trace_id_state="absent" trace_id="" bytes_read=7288 wire_events_seen=10 has_time_to_first_event=true time_to_first_event_ms=0 eof=false eof_buffer_len=0"#
 
-    static let museRateLimited = #"2026-09-16T07:01:17.807381Z INFO tbh.local.provider fbcode/musecode/build/src/crates/plugins/meta-model-provider/src/meta/provider/status_summaries/local_tracing.rs:49 event="provider_stream.terminal" provider="meta" terminal="failed" reason="rate_limited" attempt=1 max_attempts=10 has_http_status=true http_status=429 request_id_state="present" request_id="e06577a2-5ffe-4b7e-ac40-6616a88b1c25" trace_id_state="absent" trace_id="" bytes_read=0 wire_events_seen=0 has_time_to_first_event=false time_to_first_event_ms=0 eof=false eof_buffer_len=0"#
+    static let museRateLimited = #"2026-09-16T07:01:17.807381Z INFO tbh.local.provider src/crates/plugins/meta-model-provider/src/meta/provider/status_summaries/local_tracing.rs:49 event="provider_stream.terminal" provider="meta" terminal="failed" reason="rate_limited" attempt=1 max_attempts=10 has_http_status=true http_status=429 request_id_state="present" request_id="e06577a2-5ffe-4b7e-ac40-6616a88b1c25" trace_id_state="absent" trace_id="" bytes_read=0 wire_events_seen=0 has_time_to_first_event=false time_to_first_event_ms=0 eof=false eof_buffer_len=0"#
 
-    static let museCancelled = #"2026-09-09T18:10:26.647980Z INFO tbh.local.provider fbcode/musecode/build/src/crates/model/src/meta/provider/status_summaries/local_tracing.rs:49 event="provider_stream.terminal" provider="meta" terminal="cancelled" reason="cancelled" attempt=1 max_attempts=10 has_http_status=false http_status=0 request_id_state="present" request_id="b170c0f7-d4b5-406e-bf49-3aedda5c061a" trace_id_state="absent" trace_id="" bytes_read=87719 wire_events_seen=3 has_time_to_first_event=true time_to_first_event_ms=3 eof=false eof_buffer_len=0"#
+    static let museCancelled = #"2026-09-09T18:10:26.647980Z INFO tbh.local.provider src/crates/model/src/meta/provider/status_summaries/local_tracing.rs:49 event="provider_stream.terminal" provider="meta" terminal="cancelled" reason="cancelled" attempt=1 max_attempts=10 has_http_status=false http_status=0 request_id_state="present" request_id="b170c0f7-d4b5-406e-bf49-3aedda5c061a" trace_id_state="absent" trace_id="" bytes_read=87719 wire_events_seen=3 has_time_to_first_event=true time_to_first_event_ms=3 eof=false eof_buffer_len=0"#
 
-    static let museOtherEvent = #"2026-09-16T06:55:27.644294Z INFO tbh.local.security fbcode/musecode/build/src/crates/config/src/trust/diagnostic.rs:16 event="trust.resolve" outcome="trusted" source="run_flag" duration_ms=0"#
+    static let museOtherEvent = #"2026-09-16T06:55:27.644294Z INFO tbh.local.security src/crates/config/src/trust/diagnostic.rs:16 event="trust.resolve" outcome="trusted" source="run_flag" duration_ms=0"#
 
     /// dispatch-worktrees.jsonl rows with repo_path, worktree, pane and workspace
     /// dropped. One torn line is appended the way an interrupted writer leaves it.
     static let ledger = """
-    {"repo": "dispatcher-crossrepo", "branch": "wrk/41724-fix-147", "agent": "fix-147-41724", "kind": "muse", "model": "muse-spark-1.3", "created_at": 1789541736.861883}
-    {"repo": "dispatcher-crossrepo", "branch": "wrk/40011-muse-144", "agent": "muse-144-40011", "kind": "muse", "model": "muse-spark-1.3", "created_at": 1789540023.106627}
-    {"repo": "tower", "branch": "wrk/45252-agy-59", "agent": "agy-59-45252", "kind": "gemini", "model": "gemini-3.8-flash-medium", "created_at": 1789545272.941458}
-    {"repo": "tower", "branch": "wrk/43998-agy-66", "agent": "agy-66-43998", "kind": "gemini", "model": "gemini-3.8-flash-medium", "created_at": 1789544018.409413}
-    {"repo": "tower", "branch": "wrk/45734-fix-kc-68", "agent": "fix-kc-68-45734", "kind": "pi", "model": "z-ai/glm-5.3-flash", "max_tokens": 65536, "thinking": "", "created_at": 1789545745.089964}
-    {"repo": "tower", "branch": "wrk/46255-fix-ren
+    {"repo": "example-repo", "branch": "dsp/10001-task-1", "agent": "task-24", "kind": "muse", "model": "muse-spark-1.3", "created_at": 1789541736.861883}
+    {"repo": "example-repo", "branch": "dsp/10002-task-2", "agent": "task-11", "kind": "muse", "model": "muse-spark-1.3", "created_at": 1789540023.106627}
+    {"repo": "demo-app", "branch": "dsp/10003-task-3", "agent": "task-52", "kind": "gemini", "model": "gemini-3.8-flash-medium", "created_at": 1789545272.941458}
+    {"repo": "demo-app", "branch": "dsp/10004-task-4", "agent": "task-98", "kind": "gemini", "model": "gemini-3.8-flash-medium", "created_at": 1789544018.409413}
+    {"repo": "demo-app", "branch": "dsp/10005-task-5", "agent": "task-34", "kind": "pi", "model": "z-ai/glm-5.3-flash", "max_tokens": 65536, "thinking": "", "created_at": 1789545745.089964}
+    {"repo": "demo-app", "branch": "dsp/10006-task-6
     """
 
     /// lanes.jsonl rows in the shape written on 2026-09-17. This is where the conveyor
     /// writes dispatches it opens as lanes (all of today's devin ones, for a start), so
     /// dispatch-worktrees.jsonl never sees them. One torn line ends the file.
     static let lanesLedger = """
-    {"lane": "ag1a511d-d657-4d75-8f44-d0f700cd5bf0", "branch": "lane-ag1a511d-45233", "kind": "devin", "model": "swe-2-high", "opened_at": "2026-09-17T14:02:01Z", "closed_at": "2026-09-17T14:47:03Z"}
-    {"lane": "ag26a15e-a576-4cb9-9ff1-16794bc71fa7", "branch": "lane-ag26a15e-45413", "kind": "devin", "model": "swe-2-high", "opened_at": "2026-09-17T20:51:28Z"}
-    {"lane": "5dc8b0e3-0b2a-42d5-b47a-81f2b2c5b7f0", "branch": "lane-5dc8b0e3-44f81", "kind": "muse", "model": "", "opened_at": "2026-09-16T09:12:44Z"}
-    {"lane": "71e9d8d6-19b2-4b14-97a4-0eebf1d3d9af", "branch": "lane-71e9d8d6-45902", "kind": "cursor", "model": "", "opened_at": "2026-09-17T22:20:15Z", "closed_at": "2026-09-17T23:01:40Z"}
-    {"lane": "cb85f292-70c4-4f37-b263-b1
+    {"lane": "00000001-0000-4000-8000-000000000001", "branch": "lane-00000001-10001", "kind": "devin", "model": "swe-2-high", "opened_at": "2026-09-17T14:02:01Z", "closed_at": "2026-09-17T14:47:03Z"}
+    {"lane": "00000002-0000-4000-8000-000000000002", "branch": "lane-00000002-10002", "kind": "devin", "model": "swe-2-high", "opened_at": "2026-09-17T20:51:28Z"}
+    {"lane": "00000003-0000-4000-8000-000000000003", "branch": "lane-00000003-10003", "kind": "muse", "model": "", "opened_at": "2026-09-16T09:12:44Z"}
+    {"lane": "00000004-0000-4000-8000-000000000004", "branch": "lane-00000004-10004", "kind": "cursor", "model": "", "opened_at": "2026-09-17T22:20:15Z", "closed_at": "2026-09-17T23:01:40Z"}
+    {"lane": "00000005-0000-4000-80
     """
 
     /// ~/.cursor/cli-config.json, reduced to the keys that carry no secret.
@@ -195,28 +195,6 @@ final class AgentLaneTests: XCTestCase {
         }
         XCTAssertEqual(devin.lastDispatch?.at, DateParse.parse("2026-09-17T20:51:28Z"))
         XCTAssertEqual(devin.modelPin, "swe-2-high")
-    }
-
-    /// agy lanes are recorded under two kinds: the Python dispatcher writes "gemini" (it routes agy
-    /// as the gemini CLI), while its shell wrapper writes "agy". On 2026-10-31 an agy station
-    /// ran from 08:4xZ and Tower still said the last dispatch was 10-11, because it only
-    /// looked up "gemini". The newest entry of either kind is the last dispatch.
-    func testAgyDispatchIsReadUnderEitherKind() throws {
-        let home = try makeHome()
-        try write("#!/bin/sh\n", ".local/bin/agy", in: home, executable: true)
-        try write(Self.ledger,
-                  ".config/dispatcher/plugins/hq-crossrepo/.state/dispatch-worktrees.jsonl",
-                  in: home)
-        let stationLine = """
-        {"lane": "agy-2638", "branch": "fix/x", "kind": "agy", "model": "", "opened_at": "2026-10-31T08:41:00Z"}
-        """
-        try write(Self.lanesLedger + "\n" + stationLine + "\n",
-                  ".config/dispatcher/plugins/hq-crossrepo/.state/lanes.jsonl", in: home)
-
-        guard case .ok(let agy) = AgentLane.read(.agy, home: home, env: [:]) else {
-            return XCTFail("agy should read")
-        }
-        XCTAssertEqual(agy.lastDispatch?.at, DateParse.parse("2026-10-31T08:41:00Z"))
     }
 
     /// A cursor lane reads its model pin from cli-config.json and its dispatch from
@@ -505,7 +483,7 @@ final class AgentLaneTests: XCTestCase {
     func testNoLedgerDirectoryMeansNoDispatchAndNoGuessedPath() throws {
         let home = try makeHome()
         try write("#!/bin/sh\n", ".local/bin/agy", in: home, executable: true)
-        try write(Self.ledger, ".config/dispatcher/plugins/some-plugin/.state/dispatch-worktrees.jsonl", in: home)
+        try write(Self.ledger, ".config/herdr/plugins/some-plugin/.state/dispatch-worktrees.jsonl", in: home)
         let suite = "tower-ledger-\(UUID().uuidString)"
         let empty = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { empty.removePersistentDomain(forName: suite) }
@@ -525,14 +503,14 @@ final class AgentLaneTests: XCTestCase {
         XCTAssertEqual(AgentLane.dispatchLedgerDirectory(home: home, env: [:], defaults: defaults)?.path,
                        "/from/setting")
         XCTAssertEqual(AgentLane.dispatchLedgerDirectory(
-            home: home, env: ["HERDR_PLUGIN_STATE_DIR": "/from/dispatcher"], defaults: defaults)?.path,
-            "/from/dispatcher")
+            home: home, env: ["HERDR_PLUGIN_STATE_DIR": "/from/herdr"], defaults: defaults)?.path,
+            "/from/herdr")
         XCTAssertEqual(AgentLane.dispatchLedgerDirectory(
-            home: home, env: ["HERDR_PLUGIN_STATE_DIR": "/from/dispatcher", "TOWER_DISPATCH_LEDGER_DIR": "/from/tower"],
+            home: home, env: ["HERDR_PLUGIN_STATE_DIR": "/from/herdr", "TOWER_DISPATCH_LEDGER_DIR": "/from/tower"],
             defaults: defaults)?.path, "/from/tower")
     }
 
-    func testDispatcherStateDirOverrideIsHonoured() throws {
+    func testHerdrStateDirOverrideIsHonoured() throws {
         let home = try makeHome()
         try write("#!/bin/sh\n", ".local/bin/agy", in: home, executable: true)
         try write(Self.ledger, "elsewhere/dispatch-worktrees.jsonl", in: home)

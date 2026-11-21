@@ -73,12 +73,10 @@ final class AccountRetentionTests: XCTestCase {
     }
 
     private func credential(_ token: String = "fixture-access", email: String = "one@example.test",
-                            expiresIn: TimeInterval = 3600,
-                            refreshToken: String? = "fixture-refresh") -> ClaudeCredential {
+                            expiresIn: TimeInterval = 3600) -> ClaudeCredential {
         ClaudeCredential(service: Keychain.defaultService, accessToken: token,
                          subscriptionType: "max", rateLimitTier: "fixture-tier",
-                         expiresAt: now.addingTimeInterval(expiresIn), emailHint: email,
-                         refreshToken: refreshToken, scopes: ["user:profile", "user:inference"])
+                         expiresAt: now.addingTimeInterval(expiresIn), emailHint: email)
     }
 
     private func capture(_ credential: ClaudeCredential, in vault: ClaudeSeatVault) -> String? {
@@ -483,17 +481,16 @@ final class AccountRetentionTests: XCTestCase {
         XCTAssertTrue(keychain.items.contains { $0.service == foreignService.service }, "foreign service preserved")
     }
 
-    /// #58: the seat keeps the whole pair. The refresh token is what lets the seat outlive
-    /// its first access token; a payload without it is the bug the issue describes.
-    func testPayloadCarriesTokenPairAndMatchingIdentity() throws {
+    /// The seat keeps the access token and its identity, and never a refresh token.
+    func testPayloadCarriesAccessTokenAndMatchingIdentity() throws {
         let keychain = MockSeatKeychain()
         let vault = keychain.vault(in: dir)
         XCTAssertNil(capture(credential(), in: vault))
         let record = try XCTUnwrap(keychain.items.first)
         let payload = try XCTUnwrap(PropertyListSerialization.propertyList(from: record.data, format: nil) as? [String: Any])
         XCTAssertEqual(payload["accessToken"] as? String, "fixture-access", "access token retained")
-        XCTAssertEqual(payload["refreshToken"] as? String, "fixture-refresh", "refresh token retained")
-        XCTAssertEqual(payload["scopes"] as? [String], ["user:profile", "user:inference"], "scopes retained")
+        XCTAssertNil(payload["refreshToken"], "no refresh token is ever written")
+        XCTAssertNil(payload["scopes"], "no scopes are written")
         XCTAssertEqual(record.service, "Tower-seat-one@example.test")
         XCTAssertEqual(record.account, "one@example.test")
         keychain.items = [.init(service: ClaudeSeatVault.service(for: "wrong@example.test"),
@@ -502,47 +499,19 @@ final class AccountRetentionTests: XCTestCase {
         XCTAssertTrue(keychain.vault(in: dir).credentials(active: nil).isEmpty, "mismatched payload rejected")
     }
 
-    /// An item written before #58 has no refresh token key at all. It still decodes as a
-    /// seat, it simply cannot be renewed until the next login of that seat rewrites it.
-    func testSeatItemWrittenBeforeRenewalStillDecodesWithoutARefreshToken() throws {
+    /// An item written by an older build may still carry a refresh token. It decodes as a
+    /// seat, and the token is dropped on read: nothing in this build can present it.
+    func testOlderSeatItemWithARefreshTokenStillDecodes() throws {
         let keychain = MockSeatKeychain()
-        XCTAssertNil(capture(credential(refreshToken: nil), in: keychain.vault(in: dir)))
+        XCTAssertNil(capture(credential(), in: keychain.vault(in: dir)))
         let record = try XCTUnwrap(keychain.items.first)
         var payload = try XCTUnwrap(PropertyListSerialization.propertyList(from: record.data, format: nil) as? [String: Any])
-        XCTAssertNil(payload["refreshToken"], "nil refresh token is not written")
-        payload.removeValue(forKey: "scopes")
-        let legacy = try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
-        keychain.items = [.init(service: record.service, account: record.account, label: record.label, data: legacy)]
+        payload["refreshToken"] = "fixture-older-refresh"
+        payload["scopes"] = ["user:profile"]
+        let older = try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
+        keychain.items = [.init(service: record.service, account: record.account, label: record.label, data: older)]
         let seat = try XCTUnwrap(keychain.vault(in: dir).credentials(active: nil).first)
         XCTAssertEqual(seat.accessToken, "fixture-access")
-        XCTAssertNil(seat.refreshToken)
-        XCTAssertFalse(seat.canRenew, "legacy seat cannot renew")
-        XCTAssertEqual(ClaudeSeatRenewal.decision(for: seat, activeEmail: "two@example.test", now: now), .noRefreshToken)
-        XCTAssertEqual(ClaudeSeatRenewal.decision(for: seat, activeEmail: nil, now: now), .possiblyActive,
-                       "an unknown active seat fails closed before the refresh token check")
-    }
-
-    func testDelayedInvalidGrantCannotDropNewerCapturedRefreshTokenFromAnotherVault() throws {
-        let keychain = MockSeatKeychain()
-        let delayedRenewal = keychain.vault(in: dir)
-        let freshLogin = keychain.vault(in: dir)
-        let old = credential("old-access", refreshToken: "old-refresh")
-        let new = credential("new-access", refreshToken: "new-refresh")
-
-        XCTAssertNil(capture(old, in: delayedRenewal))
-        let retainedOld = try XCTUnwrap(delayedRenewal.credentials(active: nil).first)
-        XCTAssertNil(capture(new, in: freshLogin))
-
-        let readsBeforeDrop = keychain.interactions.count
-        XCTAssertNil(delayedRenewal.dropRefreshToken(for: retainedOld))
-        XCTAssertEqual(keychain.interactions.count, readsBeforeDrop + 1)
-        guard case .suppressed? = keychain.interactions.last else {
-            return XCTFail("refresh-token removal must not prompt")
-        }
-
-        let persisted = try XCTUnwrap(keychain.vault(in: dir).credentials(active: nil).first)
-        XCTAssertEqual(persisted.accessToken, "new-access")
-        XCTAssertEqual(persisted.refreshToken, "new-refresh")
     }
 
     func testWriteAndRemovalFailuresAreVisible() throws {

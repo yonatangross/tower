@@ -9,7 +9,7 @@ final class BlastRadiusTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
 
     private func active(fiveHour: Double, weekly: Double, capturedAgo: TimeInterval = 60) -> AccountSnapshot {
-        var a = AccountSnapshot(email: "user-f@example.com", nickname: "alt1", plan: "max")
+        var a = AccountSnapshot(email: "user-a@example.com", nickname: "cal", plan: "max")
         a.fiveHourPct = fiveHour
         a.fiveHourResetsAt = now.addingTimeInterval(3 * 3600)
         a.weeklyPct = weekly
@@ -22,7 +22,7 @@ final class BlastRadiusTests: XCTestCase {
         var s = AgentSummary()
         s.interactive = (0..<interactive).map {
             AgentInfo(kind: "interactive", status: "busy", cwd: "/lane/\($0)", sessionId: "s\($0)",
-                      accountEmail: "user-f@example.com")
+                      accountEmail: "user-a@example.com")
         }
         s.backgroundCount = background
         return s
@@ -34,7 +34,7 @@ final class BlastRadiusTests: XCTestCase {
         XCTAssertEqual(blast.riders, 24, "background ownership is unknown")
         XCTAssertEqual(blast.interactive, 24)
         XCTAssertEqual(blast.level, .warn, "85 % is the warn mark, not the 95 % cap")
-        XCTAssertEqual(blast.line, "24 sessions ride alt1 at 86 %: rotate before 100 % stops them all · 6 unknown")
+        XCTAssertEqual(blast.line, "24 sessions ride cal at 86 %: rotate before 100 % stops them all · 6 unknown")
     }
 
     func testWarnMarkIsInclusiveAtExactly85() throws {
@@ -44,14 +44,14 @@ final class BlastRadiusTests: XCTestCase {
         let below = try XCTUnwrap(BlastRadius.evaluate(
             active: active(fiveHour: 84.9, weekly: 10), sessions: sessions(interactive: 1, background: 0), now: now))
         XCTAssertEqual(below.level, .clear)
-        XCTAssertEqual(below.line, "1 session ride alt1 at 85 %, all stop together at 100 %")
+        XCTAssertEqual(below.line, "1 session ride cal at 85 %, all stop together at 100 %")
     }
 
     func testFullLoginStopsEveryRider() throws {
         let blast = try XCTUnwrap(BlastRadius.evaluate(
             active: active(fiveHour: 30, weekly: 100), sessions: sessions(interactive: 5, background: 1), now: now))
         XCTAssertEqual(blast.level, .stopped, "the weekly window binds as much as the 5h one")
-        XCTAssertEqual(blast.line, "5 sessions stopped: alt1 is at 100 % · 1 unknown")
+        XCTAssertEqual(blast.line, "5 sessions stopped: cal is at 100 % · 1 unknown")
     }
 
     func testStaleActiveReadingIsUnknownNeverClear() throws {
@@ -101,11 +101,11 @@ final class BlastRadiusTests: XCTestCase {
         XCTAssertEqual(warn.unknown, 20)
         XCTAssertEqual(warn.level, .warn)
         XCTAssertTrue(warn.announces(after: nil))
-        XCTAssertEqual(warn.line, "0 confirmed, 20 unknown sessions on alt1 at 90 %: rotate before 100 % may stop them all")
+        XCTAssertEqual(warn.line, "0 confirmed, 20 unknown sessions on cal at 90 %: rotate before 100 % may stop them all")
         let stopped = try XCTUnwrap(BlastRadius.evaluate(
             active: active(fiveHour: 100, weekly: 10), sessions: summary, now: now))
         XCTAssertEqual(stopped.level, .stopped)
-        XCTAssertEqual(stopped.line, "0 confirmed, 20 unknown sessions may be stopped: alt1 is at 100 %")
+        XCTAssertEqual(stopped.line, "0 confirmed, 20 unknown sessions may be stopped: cal is at 100 %")
         let clear = try XCTUnwrap(BlastRadius.evaluate(
             active: active(fiveHour: 71, weekly: 10), sessions: summary, now: now))
         XCTAssertEqual(clear.level, .clear)
@@ -113,23 +113,23 @@ final class BlastRadiusTests: XCTestCase {
         let stale = try XCTUnwrap(BlastRadius.evaluate(
             active: active(fiveHour: 99, weekly: 99, capturedAgo: 3600), sessions: summary, now: now))
         XCTAssertEqual(stale.level, .unknown, "unknown means no live reading, never unknown ownership")
-        XCTAssertEqual(stale.line, "0 confirmed, 20 unknown sessions on alt1, usage unknown (no live reading)")
+        XCTAssertEqual(stale.line, "0 confirmed, 20 unknown sessions on cal, usage unknown (no live reading)")
         let empty = try XCTUnwrap(BlastRadius.evaluate(
             active: active(fiveHour: 100, weekly: 10), sessions: AgentSummary(), now: now))
         XCTAssertEqual(empty.level, .clear, "nothing rides the seat")
-        XCTAssertEqual(empty.line, "no confirmed sessions ride alt1")
+        XCTAssertEqual(empty.line, "no confirmed sessions ride cal")
     }
 
     func testMoveFirstExcludesOtherSeatsAndKeepsUnknownSessionsExplicit() throws {
         var summary = AgentSummary()
         summary.interactive = [
             AgentInfo(kind: "interactive", status: "busy", cwd: "/lane/build", sessionId: "z", name: "build",
-                      accountEmail: "user-f@example.com"),
+                      accountEmail: "user-a@example.com"),
             AgentInfo(kind: "interactive", status: "idle", cwd: "/lane/review", sessionId: "b", name: "review",
-                      accountEmail: "user-f@example.com"),
+                      accountEmail: "user-a@example.com"),
             AgentInfo(kind: "interactive", status: "idle", cwd: "/lane/alpha", sessionId: "c", name: "alpha"),
             AgentInfo(kind: "interactive", status: "idle", cwd: "/lane/review", sessionId: "a", name: "review",
-                      accountEmail: "user-f@example.com"),
+                      accountEmail: "user-a@example.com"),
             AgentInfo(kind: "interactive", status: "idle", cwd: "/lane/other", sessionId: "other", name: "other",
                       accountEmail: "other@example.com"),
         ]
@@ -150,7 +150,7 @@ final class BlastRadiusTests: XCTestCase {
                                   swapTotalBytes: 4 * 1_073_741_824, physicalBytes: 64 * 1_073_741_824, sampledAt: now)
         let lines = CLI.fleetLines(blast: blast, machine: machine)
         XCTAssertEqual(lines, [
-            "  ⚠️ Blast radius: 29 sessions ride alt1 at 90 %: rotate before 100 % stops them all · 1 unknown",
+            "  ⚠️ Blast radius: 29 sessions ride cal at 90 %: rotate before 100 % stops them all · 1 unknown",
             "  move first: 0 [s0], 1 [s1], 10 [s10]",
             "  🔴 Machine: load1 297 · compressed 24.0 GB · swap 3.0 of 4.0 GB (no room: load1 297 over 120)",
         ])

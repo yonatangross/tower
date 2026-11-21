@@ -91,10 +91,10 @@ final class LaneRowRulesTests: XCTestCase {
     // MARK: Rule 3, the Cursor lane reads its seat
 
     private func cursorSeat(auto: Double?, metered: Double?, capturedAgo: TimeInterval = 30) -> AccountSnapshot {
-        let reading = CursorUsage.Reading(email: "alt4@example.com", plan: "ultra",
+        let reading = CursorUsage.Reading(email: "ben@example.com", plan: "ultra",
                                           cursorModelsPct: auto, otherModelsPct: metered,
                                           periodResetsAt: now.addingTimeInterval(26 * 86_400))
-        var snap = AccountSnapshot(email: reading.email, nickname: "alt4", plan: "ultra")
+        var snap = AccountSnapshot(email: reading.email, nickname: "ben", plan: "ultra")
         CursorUsage.apply(reading, to: &snap, now: now.addingTimeInterval(-capturedAgo))
         return snap
     }
@@ -105,19 +105,19 @@ final class LaneRowRulesTests: XCTestCase {
 
     func testTheCursorLaneShowsItsSeatsPools() {
         let seat = cursorSeat(auto: 11, metered: 84)
-        let line = "seat alt4: Auto unmetered 11% · Opus metered 84% used"
+        let line = "seat ben: Auto unmetered 11% · Opus metered 84% used"
         XCTAssertEqual(AgentLane.usageLine(cursorLane, cursorSeat: seat, now: now), line)
         XCTAssertEqual(AgentLane.headerDetail(cursorLane, cursorSeat: seat, now: now), line)
         // The seat row truncates (SegmentedMeter.displayPercent); the lane must match it.
         XCTAssertEqual(AgentLane.usageLine(cursorLane, cursorSeat: cursorSeat(auto: 11.4, metered: 84.6), now: now),
-                       "seat alt4: Auto unmetered 11% · Opus metered 84% used")
+                       "seat ben: Auto unmetered 11% · Opus metered 84% used")
         XCTAssertEqual(SegmentedMeter.displayPercent(84.6), "84%")
     }
 
-    func testAStaleSeatReadIsUnknownAndSaysHowOldItIs() {
+    func testAStaleSeatReadSaysHowOldItIs() {
         let seat = cursorSeat(auto: 11, metered: 84, capturedAgo: 3 * 3600)
         XCTAssertEqual(AgentLane.usageLine(cursorLane, cursorSeat: seat, now: now),
-                       "seat alt4: ? pools unknown, read 3h ago")
+                       "seat ben: Auto unmetered 11% · Opus metered 84% used, read 3h ago")
     }
 
     func testWithoutASeatTheCursorLaneSaysWhyNot() {
@@ -133,7 +133,7 @@ final class LaneRowRulesTests: XCTestCase {
         XCTAssertNil(AgentLane.usageLine(muse, cursorSeat: seat, now: now))
         XCTAssertEqual(AgentLane.headerDetail(muse, cursorSeat: seat, now: now), "usage not exposed")
         let d = devin(hit: nil, daily: 100)
-        XCTAssertEqual(AgentLane.usageLine(d, cursorSeat: seat, now: now), AgentLane.usageLine(d, now: now))
+        XCTAssertEqual(AgentLane.usageLine(d, cursorSeat: seat, now: now), AgentLane.usageLine(d))
     }
 
     // MARK: Rule 1, the row text fits the panel
@@ -150,7 +150,7 @@ final class LaneRowRulesTests: XCTestCase {
         XCTAssertEqual(LaneBoard.usageWidth, TowerType.panelWidth - 2 * 10 - 24 - 6)
         let longest = [
             "daily 100% left, resets Sep 28 11:00 · weekly 100% left, resets Oct 4 11:00",
-            "seat alt4: Auto unmetered 11% · Opus metered 84% used, read 23h ago",
+            "seat ben: Auto unmetered 11% · Opus metered 84% used, read 23h ago",
             "not readable: agent quota lives in-session and no Cursor seat is on file",
         ]
         for line in longest {

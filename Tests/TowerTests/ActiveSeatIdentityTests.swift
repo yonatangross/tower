@@ -40,8 +40,7 @@ final class ActiveSeatIdentityTests: XCTestCase {
         let live = ClaudeCredential(
             service: Keychain.defaultService, accessToken: "live-token",
             subscriptionType: "max", rateLimitTier: nil,
-            expiresAt: now.addingTimeInterval(3600), emailHint: "a@b",
-            refreshToken: nil, scopes: [])
+            expiresAt: now.addingTimeInterval(3600), emailHint: "a@b")
         let bound = VerifiedActiveSeat(
             email: "a@b", verifiedAt: now, tokenDigest: VerifiedActiveSeat.digest(of: "live-token"))
         XCTAssertTrue(bound.binds(to: live, now: now))
@@ -58,8 +57,7 @@ final class ActiveSeatIdentityTests: XCTestCase {
         let disputed = ClaudeCredential(
             service: live.service, accessToken: live.accessToken,
             subscriptionType: live.subscriptionType, rateLimitTier: live.rateLimitTier,
-            expiresAt: live.expiresAt, emailHint: "other@example.test",
-            refreshToken: nil, scopes: [])
+            expiresAt: live.expiresAt, emailHint: "other@example.test")
         XCTAssertFalse(bound.binds(to: disputed, now: now), "a hint that disagrees is drift")
 
         let legacy = VerifiedActiveSeat(email: "a@b", verifiedAt: now, tokenDigest: "")

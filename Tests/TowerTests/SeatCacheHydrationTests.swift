@@ -10,11 +10,11 @@ final class SeatCacheHydrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let captured = now.addingTimeInterval(-180)
         let active = AccountSnapshot(
-            email: "alt4@example.test", nickname: "alt4", plan: "max", fiveHourPct: 7,
+            email: "ben@example.test", nickname: "ben", plan: "max", fiveHourPct: 7,
             fiveHourResetsAt: now.addingTimeInterval(3600), weeklyPct: 100,
             weeklyResetsAt: now.addingTimeInterval(3600), capturedAt: captured)
         let prior = AccountSnapshot(
-            email: "alt3@example.test", nickname: "alt3", plan: "max", fiveHourPct: 93,
+            email: "ana@example.test", nickname: "ana", plan: "max", fiveHourPct: 93,
             fiveHourResetsAt: now.addingTimeInterval(3600), weeklyPct: 40,
             weeklyResetsAt: now.addingTimeInterval(3600), capturedAt: captured)
         let writer = Store(dir: dir, now: { self.now })

@@ -22,7 +22,7 @@ final class CodexLiveTests: XCTestCase {
         XCTAssertEqual(limits.primary?.resetDate, Date(timeIntervalSince1970: 1_790_412_485))
         XCTAssertEqual(limits.plan_type, "pro")
 
-        var snap = AccountSnapshot(email: "user-d@example.com", nickname: "eve", plan: "pro")
+        var snap = AccountSnapshot(email: "user-c@example.com", nickname: "eve", plan: "pro")
         CodexReader.apply(reading, to: &snap)
         XCTAssertEqual(snap.weeklyPct, 72)
         XCTAssertEqual(snap.worstTrust(now: now), .live, "the row is live without any rollout written")
@@ -106,8 +106,8 @@ final class CodexLiveTests: XCTestCase {
             let codex = root.appendingPathComponent(".codex")
             try FileManager.default.createDirectory(at: codex.appendingPathComponent("sessions/2026/09/22"),
                                                     withIntermediateDirectories: true)
-            // id_token payload: {"email":"user-d@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}
-            let payload = #"{"email":"user-d@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}"#
+            // id_token payload: {"email":"user-c@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}
+            let payload = #"{"email":"user-c@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}"#
             let b64 = Data(payload.utf8).base64EncodedString()
                 .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
                 .replacingOccurrences(of: "=", with: "")

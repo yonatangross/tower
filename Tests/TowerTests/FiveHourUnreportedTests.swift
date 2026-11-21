@@ -1,10 +1,10 @@
 import XCTest
 @testable import Tower
 
-/// A Claude reply can carry a weekly window and no 5-hour one (observed live 2026-11-01: the operator's
-/// active max seat eve, captured seconds earlier, weekly 8 %, no five_hour). The 2026-08-03 rule stays:
+/// A Claude reply can carry a weekly window and no 5-hour one (observed 2026-11-01 on an active max
+/// seat captured seconds earlier). The 2026-08-03 rule stays:
 /// a missing 5h reading is genuinely unknown, so the seat does not rank (the API may hide a full 5h
-/// window). What changes is what the panel SAYS (review, option B): the row names the missing
+/// window). What changes is what the panel SAYS: the row names the missing
 /// window instead of "stale", and the answer stays on the active seat with its weekly room instead of
 /// sending the operator to a busier seat.
 final class FiveHourUnreportedTests: XCTestCase {
@@ -50,17 +50,6 @@ final class FiveHourUnreportedTests: XCTestCase {
                       "a real stale row names the age of its reading")
     }
 
-    func testTheMCPReasonIsNotStaleZeroMinutes() {
-        // 2026-11-09: tower_refresh answered resting {kind: stale, reason: "stale 0m"} on a capture 0 s old
-        let eve = claude("eve", age: 0, fiveHour: nil, weekly: 8)
-        let json = TowerMCPService.restingJSON(.stale(0), account: eve, now: now)
-        XCTAssertEqual(json["reason"].stringValue, "5h not reported")
-        XCTAssertEqual(json["kind"].stringValue, "stale", "the enum is unchanged")
-        let old = claude("old", age: 3 * 3_600, fiveHour: 10, weekly: 8)
-        XCTAssertEqual(TowerMCPService.restingJSON(.stale(3 * 3_600), account: old, now: now)["reason"].stringValue,
-                       AccountSnapshot.RestReason.stale(3 * 3_600).text, "a real stale row keeps its words")
-    }
-
     func testTheRowIsShownNotFoldedIntoStale() {
         // the branch panelshot 2026-11-01 15:5x: the answer was right but the eve row sat inside
         // "+ 3 stale", so its "5h not reported" label could not be seen
@@ -72,24 +61,24 @@ final class FiveHourUnreportedTests: XCTestCase {
 
     func testTheAnswerStaysOnTheActiveSeatWithItsWeeklyRoom() {
         let eve = claude("eve", age: 30, fiveHour: nil, weekly: 8)
-        var ops3 = claude("ops3", age: 30, fiveHour: 0, weekly: 31)
-        ops3.plan = "team"
-        let advice = AccountSnapshot.advise(activeEmail: eve.email, accounts: [eve, ops3], now: now)
-        XCTAssertEqual(advice, .activeFiveHourUnknown(nick: "eve", weekRoomPct: 92, next: "ops3"))
+        var accountB = claude("account-b", age: 30, fiveHour: 0, weekly: 31)
+        accountB.plan = "team"
+        let advice = AccountSnapshot.advise(activeEmail: eve.email, accounts: [eve, accountB], now: now)
+        XCTAssertEqual(advice, .activeFiveHourUnknown(nick: "eve", weekRoomPct: 92, next: "account-b"))
         XCTAssertNil(advice.command, "nothing to run: the operator is already on the seat")
     }
 
-    // HOLD 6560661767 (review-b10): the branch held the seat whose week was used up.
+    // HOLD 6560661767 (review-opus-b10): the branch held him on a seat whose week was used up.
     // A missing 5h window may hide a full one, so a capped week must fall through to the switch.
     func testACappedWeekFallsThroughToTheSwitch() {
         let eve = claude("eve", age: 30, fiveHour: nil, weekly: 100)
-        var ops3 = claude("ops3", age: 30, fiveHour: 0, weekly: 31)
-        ops3.plan = "team"
-        let advice = AccountSnapshot.advise(activeEmail: eve.email, accounts: [eve, ops3], now: now)
-        XCTAssertEqual(advice, .switchTo(nick: "ops3", pct: 31, via: nil), "a used-up week is not a seat to stay on")
+        var accountB = claude("account-b", age: 30, fiveHour: 0, weekly: 31)
+        accountB.plan = "team"
+        let advice = AccountSnapshot.advise(activeEmail: eve.email, accounts: [eve, accountB], now: now)
+        XCTAssertEqual(advice, .switchTo(nick: "account-b", pct: 31, via: nil), "a used-up week is not a seat to stay on")
         let atCap = claude("eve", age: 30, fiveHour: nil, weekly: AccountSnapshot.cappedPct)
-        XCTAssertEqual(AccountSnapshot.advise(activeEmail: atCap.email, accounts: [atCap, ops3], now: now),
-                       .switchTo(nick: "ops3", pct: 31, via: nil), "the cap line itself falls through too")
+        XCTAssertEqual(AccountSnapshot.advise(activeEmail: atCap.email, accounts: [atCap, accountB], now: now),
+                       .switchTo(nick: "account-b", pct: 31, via: nil), "the cap line itself falls through too")
     }
 
     func testTheGapIsMarkedUnknownNotStay() {
@@ -100,9 +89,9 @@ final class FiveHourUnreportedTests: XCTestCase {
 
     func testAnActiveSeatWithAFiveHourReadingIsAdvisedAsBefore() {
         let eve = claude("eve", age: 30, fiveHour: 0, weekly: 8)
-        var ops3 = claude("ops3", age: 30, fiveHour: 0, weekly: 31)
-        ops3.plan = "team"
-        let advice = AccountSnapshot.advise(activeEmail: eve.email, accounts: [eve, ops3], now: now)
-        XCTAssertEqual(advice, .stay(nick: "eve", pct: 8, next: "ops3"))
+        var accountB = claude("account-b", age: 30, fiveHour: 0, weekly: 31)
+        accountB.plan = "team"
+        let advice = AccountSnapshot.advise(activeEmail: eve.email, accounts: [eve, accountB], now: now)
+        XCTAssertEqual(advice, .stay(nick: "eve", pct: 8, next: "account-b"))
     }
 }

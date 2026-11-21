@@ -62,11 +62,11 @@ final class PanelV2Tests: XCTestCase {
 
     func testTallyCountsSessionsPerAccount() {
         var summary = AgentSummary()
-        summary.interactive = [session("a", "alt2@x.com"), session("b", "alt2@x.com"),
-                               session("c", "alt4@x.com"), session("d", nil)]
+        summary.interactive = [session("a", "dee@x.com"), session("b", "dee@x.com"),
+                               session("c", "ben@x.com"), session("d", nil)]
         summary.anchorsPublished = true
         XCTAssertEqual(summary.accountTally,
-                       "\(Nickname.derive(from: "alt2@x.com")) 2 · \(Nickname.derive(from: "alt4@x.com")) 1 · ? 1")
+                       "\(Nickname.derive(from: "dee@x.com")) 2 · \(Nickname.derive(from: "ben@x.com")) 1 · ? 1")
         XCTAssertNil(summary.unattributedReason, "One resolved session means rows speak for themselves")
     }
 
@@ -115,8 +115,9 @@ final class PanelV2Tests: XCTestCase {
             usage: .quota(.init(plan: "Pro", dailyRemainingPct: 100, weeklyRemainingPct: 96,
                                 dailyResetsAt: nil, weeklyResetsAt: nil,
                                 fetchedAt: now.addingTimeInterval(-3 * 3600))))
-        XCTAssertEqual(AgentLane.meters(old, cursorSeat: nil, now: now), [],
-                       "A three hour old status is past the freshness TTL: no meter, room is unknown")
+        let stale = AgentLane.meters(old, cursorSeat: nil, now: now)
+        XCTAssertEqual(stale.map(\.usedPct), [0, 4])
+        XCTAssertTrue(stale.allSatisfy { $0.age != nil }, "A three hour old status draws dimmed with its age")
         let muse = AgentLane.Reading(provider: .muse, configModel: nil, lastDispatch: nil,
                                      lastLimitHit: nil)
         XCTAssertEqual(AgentLane.meters(muse, cursorSeat: nil, now: now), [])
