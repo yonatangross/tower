@@ -206,27 +206,27 @@ enum CLI {
         check("parses Z form", DateParse.parse("2026-07-24T23:10:00Z") != nil)
         check("nil on garbage", DateParse.parse("not-a-date") == nil)
 
-        // `Nickname.derive` uses the local part only, so example.com addresses exercise
-        // the same path as real ones.
-        let nicknameOverrides = ["work@example.com": "w1", "OPS@example.com": "ops"]
-            .reduce(into: [String: String]()) { $0[$1.key.lowercased()] = $1.value }
+        // Domains are example.com on purpose: `Nickname.derive` parses only the local
+        // part, so these exercise the identical code path without putting real
+        // addresses in source control. See Store.defaultDeclared.
         let expected = [
-            "alice@example.com": "alice", "bob.smith@example.com": "bob.sm",
-            "work@example.com": "w1", "Ops@Example.com": "ops",
+            "alpha@example.com": "alpha", "bravo-one@example.com": "bravo-",
+            "charlie.two@example.com": "charli", "d@example.com": "d",
         ]
         for (email, want) in expected.sorted(by: { $0.key < $1.key }) {
-            let got = Nickname.derive(from: email, overrides: nicknameOverrides)
+            let got = Nickname.derive(from: email)
             check("nickname \(email) -> \(want)", got == want, "got \(got)")
         }
-        let nicknameFile = FileManager.default.temporaryDirectory
+        // A nicknames.json entry wins over the derived label, read lowercased and trimmed.
+        let overridesURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("tower-nicknames-\(UUID().uuidString).json")
-        try? Data(#"{"Work@Example.com":" w1 ","blank@example.com":"  "}"#.utf8).write(to: nicknameFile)
-        let loadedNicknames = Nickname.loadOverrides(from: nicknameFile)
-        try? FileManager.default.removeItem(at: nicknameFile)
-        check("nicknames.json is read lowercased and trimmed, blanks dropped",
-              loadedNicknames == ["work@example.com": "w1"], "got \(loadedNicknames)")
-        check("a missing nicknames.json is no overrides",
-              Nickname.loadOverrides(from: nicknameFile).isEmpty)
+        try? Data("{\"ALPHA@example.com\": \" Ace \"}".utf8).write(to: overridesURL)
+        let overrides = Nickname.loadOverrides(from: overridesURL)
+        try? FileManager.default.removeItem(at: overridesURL)
+        check("nicknames.json is read lowercased and trimmed", overrides == ["alpha@example.com": "Ace"])
+        check("an override wins over the derived label",
+              Nickname.derive(from: "alpha@example.com", overrides: overrides) == "Ace")
+        check("a missing nicknames.json is no overrides", Nickname.loadOverrides(from: URL(fileURLWithPath: "/tmp/definitely-missing-\(UUID().uuidString).json")) == [:])
 
         let future = Date().addingTimeInterval(3600)
         let past = Date().addingTimeInterval(-3600)
@@ -629,9 +629,9 @@ enum CLI {
         let sameToken = ClaudeCredential(
             service: Keychain.defaultService, accessToken: "same-token",
             subscriptionType: "max", rateLimitTier: nil,
-            expiresAt: now.addingTimeInterval(3600), emailHint: "ana@example.test")
-        let identA = ClaudeConfigIdentity(email: "ana@example.test", modifiedAt: 100, readable: true)
-        let identB = ClaudeConfigIdentity(email: "ben@example.test", modifiedAt: 200, readable: true)
+            expiresAt: now.addingTimeInterval(3600), emailHint: "alt3@example.test")
+        let identA = ClaudeConfigIdentity(email: "alt3@example.test", modifiedAt: 100, readable: true)
+        let identB = ClaudeConfigIdentity(email: "alt4@example.test", modifiedAt: 200, readable: true)
         check("login watch seeds without firing",
               loginWatch.observe(credentials: [sameToken], identity: identA)
                   .changedCredentials.isEmpty)
@@ -644,8 +644,8 @@ enum CLI {
         check("unreadable config after a known identity is degraded",
               gone.watchDegraded && gone.identityChanged)
         var mtimeWatch = ClaudeLoginTracker()
-        let identSame = ClaudeConfigIdentity(email: "ana@example.test", modifiedAt: 1, readable: true)
-        let identTouched = ClaudeConfigIdentity(email: "ana@example.test", modifiedAt: 9, readable: true)
+        let identSame = ClaudeConfigIdentity(email: "alt3@example.test", modifiedAt: 1, readable: true)
+        let identTouched = ClaudeConfigIdentity(email: "alt3@example.test", modifiedAt: 9, readable: true)
         _ = mtimeWatch.observe(credentials: [sameToken], identity: identSame)
         check("same oauth email with a newer mtime is not a login",
               mtimeWatch.observe(credentials: [sameToken], identity: identTouched)
@@ -839,9 +839,9 @@ enum CLI {
                   from: Array(openRouterAccounts.values), lastSuccessAt: nil)
               == .rejected(401, keyFingerprint: nil, lastSuccessAt: nil))
 
-        // The TypeSafe lane (issue #91) shows a balance the user entered: TypeSafe publishes
-        // no billing or usage endpoint, so there is nothing to fetch. Nothing ships by
-        // default; with no entry there is no row.
+        // The TypeSafe lane (issue #91) ships an entered balance: TypeSafe publishes no
+        // billing or usage endpoint, so there is nothing to fetch, no failure mode, and no
+        // store row. The row is a labelled constant with thresholds on it.
         check("typesafe balance level: 4.99 red, 5.00 amber, 9.99 amber, 10.00 green",
               TypeSafe.balanceLevel(4.99) == .red
               && TypeSafe.balanceLevel(5.00) == .amber
@@ -1199,7 +1199,7 @@ enum CLI {
 
         // Card tower-menu-bugs-2026-10-06: count measured seats and disclose uncertainty.
         let menuNow = Date(timeIntervalSince1970: 2_000_000_000)
-        var menuSeat = AccountSnapshot(email: "active@example.com", nickname: "ana", plan: "max")
+        var menuSeat = AccountSnapshot(email: "active@example.com", nickname: "alt3", plan: "max")
         menuSeat.fiveHourPct = 90
         menuSeat.fiveHourResetsAt = menuNow.addingTimeInterval(3600)
         menuSeat.weeklyPct = 10
@@ -1220,7 +1220,7 @@ enum CLI {
         check("menu F2 counts only measured active-seat sessions",
               menuBlast?.riders == 1 && menuBlast?.interactive == 1)
         check("menu F2 shows the unknown count",
-              menuBlast?.line == "1 session ride ana at 90 %: rotate before 100 % stops them all · 4 unknown")
+              menuBlast?.line == "1 session ride alt3 at 90 %: rotate before 100 % stops them all · 4 unknown")
         check("menu F2 publishes the unknown count over MCP",
               TowerMCPService.blastRadiusJSON(menuBlast)["unknown"].intValue == 4)
         var unknownSessions = AgentSummary()
@@ -1234,21 +1234,21 @@ enum CLI {
         // level must still follow the live usage or the rotate warning goes silent.
         check("menu F2 all unknown sessions on a hot seat warn and announce",
               unknownBlast?.level == .warn
-                && unknownBlast?.line == "0 confirmed, 20 unknown sessions on ana at 90 %: rotate before 100 % may stop them all"
+                && unknownBlast?.line == "0 confirmed, 20 unknown sessions on alt3 at 90 %: rotate before 100 % may stop them all"
                 && unknownBlast?.announces(after: nil) == true)
         var fullSeat = menuSeat
         fullSeat.fiveHourPct = 100
         let fullUnknown = BlastRadius.evaluate(active: fullSeat, sessions: unknownSessions, now: menuNow)
         check("menu F2 all unknown sessions on a full seat read stopped",
               fullUnknown?.level == .stopped
-                && fullUnknown?.line == "0 confirmed, 20 unknown sessions may be stopped: ana is at 100 %"
+                && fullUnknown?.line == "0 confirmed, 20 unknown sessions may be stopped: alt3 is at 100 %"
                 && fullUnknown?.announces(after: .warn) == true)
         var coolSeat = menuSeat
         coolSeat.fiveHourPct = 71
         let coolUnknown = BlastRadius.evaluate(active: coolSeat, sessions: unknownSessions, now: menuNow)
         check("menu F2 all unknown sessions below the warn mark stay clear and silent",
               coolUnknown?.level == .clear
-                && coolUnknown?.line == "0 confirmed, 20 unknown sessions on ana at 71 %"
+                && coolUnknown?.line == "0 confirmed, 20 unknown sessions on alt3 at 71 %"
                 && coolUnknown?.announces(after: nil) == false)
         var blankSessions = AgentSummary()
         blankSessions.interactive = [AgentInfo(kind: "interactive", sessionId: "blank", accountEmail: " ")]
@@ -1257,7 +1257,7 @@ enum CLI {
               blankBlast?.riders == 0 && blankBlast?.line.contains("1 unknown") == true)
         var switchSeat = menuSeat
         switchSeat.email = "next@example.com"
-        switchSeat.nickname = "dee"
+        switchSeat.nickname = "alt2"
         for weekly in [90.0, 91.0, 100.0] {
             switchSeat.weeklyPct = weekly
             check("menu F3 greys switch at 7d \(Int(weekly)) with a reason",
@@ -1386,9 +1386,9 @@ enum CLI {
         check("a never-captured account sorts last",
               AccountSnapshot.ranked(staleFree, uncaptured, now: now)
                   && !AccountSnapshot.ranked(uncaptured, staleFree, now: now))
-        // "cal" vs "eve" differ at char 4 ('1' 0x31 < 'g' 0x67). Equal usage was
+        // "alt1" vs "eve" differ at char 4 ('1' 0x31 < 'g' 0x67). Equal usage was
         // the real tie in the panel, so the fallback has to be deterministic.
-        let tieA = snap("cal", five: 100, week: 21, captured: recent)
+        let tieA = snap("alt1", five: 100, week: 21, captured: recent)
         let tieB = snap("eve", five: 100, week: 21, captured: recent)
         check("equal usage falls back to nickname order",
               AccountSnapshot.ranked(tieA, tieB, now: now)
@@ -1512,19 +1512,24 @@ enum CLI {
                       else { return true }
                       return $0.bundledAppIcon != nil
                   })
+            check("local build resolves template account chrome",
+                  [Provider.claude.vendorIconName, Provider.openrouter.brandIconName]
+                    .compactMap { $0 }
+                    .allSatisfy {
+                        Bundle.main.path(forResource: $0, ofType: "png", inDirectory: "icons") != nil
+                    })
         case "off":
             check("marks-off build bundles no real app icon",
                   Provider.allCases.allSatisfy { $0.bundledAppIcon == nil })
+            check("marks-off build retains template account chrome",
+                  [Provider.claude.vendorIconName, Provider.openrouter.brandIconName]
+                    .compactMap { $0 }
+                    .allSatisfy {
+                        Bundle.main.path(forResource: $0, ofType: "png", inDirectory: "icons") != nil
+                    })
         default:
             break
         }
-        // Vendor logos are trademarks and never ship; those rows draw a monogram.
-        check("no vendor template logo ships in the bundle",
-              [Provider.claude.vendorIconName, Provider.openrouter.brandIconName]
-                .compactMap { $0 }
-                .allSatisfy {
-                    Bundle.main.path(forResource: $0, ofType: "png", inDirectory: "icons") == nil
-                })
         // Template marks paint every pixel that is not transparent, so an opaque
         // asset renders as a solid square (the blank OpenRouter tile, 2026-09-27).
         // Checked on the bundled files, so an installed app proves its own assets.
@@ -1721,7 +1726,7 @@ enum CLI {
         check("codex with no credits reports no balance", applied.creditBalance == nil)
 
         // ── Resting drawer: age precision and time-gating ────────────────────
-        // Live 2026-08-03: ben was 47.5h stale and rendered "stale 1d", understating its own
+        // Live 2026-08-03: alt4 was 47.5h stale and rendered "stale 1d", understating its own
         // age by nearly a day, in the one signal whose job is to say "trust this less".
         check("47h does not truncate to 1d",
               AccountSnapshot.RestReason.stale(47.5 * 3600).text == "stale 1d23h",
@@ -1737,7 +1742,7 @@ enum CLI {
                   == "capped 99% · stale 1d17h",
               "got \(AccountSnapshot.RestReason.cappedAndStale(99, 41.8 * 3600).text)")
 
-        // Only a capped row is waiting on a clock. ben sat at 91% weekly with its 5h already
+        // Only a capped row is waiting on a clock. alt4 sat at 91% weekly with its 5h already
         // reset, so it was usable immediately, yet the drawer advertised "opens Aug 5 02:00".
         check("a capped row is time-gated", AccountSnapshot.RestReason.capped(96).isTimeGated)
         check("a stale row is NOT time-gated",
@@ -1757,7 +1762,7 @@ enum CLI {
 
         // ── Declared-roster reconciliation ───────────────────────────────────
         // The on-disk list WINS over the constant, so editing the constant alone changes
-        // nothing on a machine that has already run the app. ana lingered for exactly this
+        // nothing on a machine that has already run the app. alt3 lingered for exactly this
         // reason until the reconcile step was added.
         let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("hqlimits-selftest-\(ProcessInfo.processInfo.processIdentifier)")
@@ -1815,7 +1820,7 @@ enum CLI {
         check("switch carries the exact command to run",
               onWorse.command == "/login", "got \(onWorse.command ?? "nil")")
 
-        let mappedProfiles = [advHealthy.email: profile("eve"), advSecond.email: profile("fay")]
+        let mappedProfiles = [advHealthy.email: profile("eve"), advSecond.email: profile("main")]
         let mappedSwitch = AccountSnapshot.advise(
             activeEmail: advSecond.email,
             accounts: [advHealthy, advSecond],
@@ -1828,7 +1833,7 @@ enum CLI {
         // The account WITHOUT a profile (advHealthy, the roomiest) must never be named, and
         // the switchable one must still be offered when it is a genuine improvement.
         //
-        // This case used to sit on advHealthy and expect "switch to fay" — i.e. it asserted a
+        // This case used to sit on advHealthy and expect "switch to main" — i.e. it asserted a
         // move from 40% used to 50% used. That expectation was the 2026-08-16 bug written
         // down as a test: the only switchable account is not automatically a better one. The
         // active account is now the worst of the three, so a switch is real progress and the
@@ -1837,10 +1842,10 @@ enum CLI {
         let onlySecondSwitchable = AccountSnapshot.advise(
             activeEmail: advWorst.email,
             accounts: [advHealthy, advSecond, advWorst],
-            switchProfiles: [advSecond.email: profile("fay")],
+            switchProfiles: [advSecond.email: profile("main")],
             now: t0)
         check("an account without a local switch profile is never recommended",
-              onlySecondSwitchable.chromeProfile == profile("fay"),
+              onlySecondSwitchable.chromeProfile == profile("main"),
               "got \(onlySecondSwitchable.chromeProfile?.label ?? "nil")")
 
         let noneLeft = AccountSnapshot.advise(
@@ -1902,6 +1907,13 @@ enum CLI {
         cxAsClaude.provider = .claude
         check("the same row as claude is NOT live, because its 5h is genuinely unknown",
               cxAsClaude.worstTrust(now: t0) == .unknown)
+
+        // A reply without five_hour logs its shape (keys and limit labels, never a value).
+        let shapeReply = Data(#"{"seven_day":{"utilization":5},"limits":[{"kind":"weekly_scoped","group":"model","percent":41}]}"#.utf8)
+        let shape = UsageShape.describe(shapeReply)
+        check("usage shape names keys and limit labels",
+              shape == "keys=limits,seven_day; limits=[weekly_scoped/model{group,kind,percent}]", "got \(shape ?? "nil")")
+        check("usage shape carries no value", shape.map { !$0.contains("41") && !$0.contains("5") } ?? false)
 
         // `reopening` must name when the account is USABLE, not when any window turns over.
         var bind = AccountSnapshot(email: "b@b", nickname: "b", plan: "max")
@@ -2210,25 +2222,20 @@ enum CLI {
               "got \(cursorAlerts.first?.window ?? "none")")
 
         // OpenRouter must never invent a number it could not fetch.
-        // Inject a reader so the suite never prompts for a real secret.
-        let orCommand = OpenRouter.KeySource(command: ["/fixture/key-reader", "item"],
-                                             environmentKey: "fixture-env-key")
+        // Inject a runner so the suite never prompts for a real secret.
         check("openrouter key absent yields nil, not an empty string",
-              OpenRouter.apiKey(source: orCommand, run: { _ in nil }) == nil)
-        check("openrouter reads the configured command, and the env copy never overrides it",
-              OpenRouter.apiKey(source: orCommand, run: { argv in
-                  argv == ["/fixture/key-reader", "item"] ? "fixture-key" : nil
-              }) == "fixture-key")
-        check("openrouter falls back to the environment key when no command is set",
-              OpenRouter.apiKey(source: OpenRouter.KeySource(environmentKey: "fixture-env-key"),
-                                run: { _ in nil }) == "fixture-env-key")
-        check("openrouter with no source is not configured",
-              !OpenRouter.KeySource().isConfigured)
-        // Invented figures in the shape the live API returns.
-        let orLive = OpenRouter.Budget(spent: 17.5, limit: 50)
+              OpenRouter.apiKey(source: OpenRouter.KeySource(command: ["/fixture/reader"]),
+                                run: { _ in nil }) == nil)
+        check("openrouter runs the configured command",
+              OpenRouter.apiKey(
+                  source: OpenRouter.KeySource(command: ["/fixture/reader", "--item", "openrouter"]),
+                  run: { argv in argv == ["/fixture/reader", "--item", "openrouter"] ? "fixture-key" : nil })
+              == "fixture-key")
+        // Real values from the live account, 2026-08-03.
+        let orLive = OpenRouter.Budget(spent: 24.800682583, limit: 40)
         check("the headline is what is AVAILABLE, matching the dashboard",
-              String(format: "%.2f", orLive.available) == "32.50"
-              && Int(orLive.availablePct.rounded()) == 65,
+              String(format: "%.2f", orLive.available) == "15.20"
+              && Int(orLive.availablePct.rounded()) == 38,
               "pct=\(Int(orLive.pct.rounded())) remaining=\(orLive.remaining)")
         // A refused key must never render as absence. This is the exact failure the
         // operator hit: rotated in 1Password 4h after being copied to the Keychain, and
@@ -2243,8 +2250,8 @@ enum CLI {
               OpenRouter.Outcome.unavailable != .notConfigured
               && OpenRouter.Outcome.unavailable != .rejected(401, keyFingerprint: nil, lastSuccessAt: nil))
         check("ok carries the budget",
-              OpenRouter.Outcome.ok(OpenRouter.Budget(spent: 31.5, limit: 50))
-              == .ok(OpenRouter.Budget(spent: 31.5, limit: 50)))
+              OpenRouter.Outcome.ok(OpenRouter.Budget(spent: 26.06, limit: 40))
+              == .ok(OpenRouter.Budget(spent: 26.06, limit: 40)))
 
         let b = OpenRouter.Budget(spent: 12.5, limit: 25)
         check("budget percentage", b.pct == 50)
@@ -2369,7 +2376,7 @@ enum CLI {
         }
 
         // --- Switch advice -----------------------------------------------------------
-        // 2026-08-16: active dee had 31% room and the panel advised "switch to ben ·
+        // 2026-08-16: active alt2 had 31% room and the panel advised "switch to alt4 ·
         // 94% used". `usable` is filtered by switchProfiles, built from the
         // ~/.claude/accounts/*.json files that still carry an oauthAccount — only ONE of
         // four did, and the ACTIVE account had no file at all, so it could not appear among
@@ -2386,22 +2393,22 @@ enum CLI {
             return a
         }
         let adviceNow = Date()
-        let onGood = acct("dee", "dee@example.com", five: 4, weekly: 69, at: adviceNow)
-        let onBad = acct("ben", "ben@example.com", five: 94, weekly: 67, at: adviceNow)
+        let onGood = acct("alt2", "alt2@example.com", five: 4, weekly: 69, at: adviceNow)
+        let onBad = acct("alt4", "alt4@example.com", five: 94, weekly: 67, at: adviceNow)
         let worseAdvice = AccountSnapshot.advise(
             activeEmail: onGood.email, accounts: [onGood, onBad],
-            switchProfiles: ["ben@example.com": profile("ben")], now: adviceNow)
+            switchProfiles: ["alt4@example.com": profile("alt4")], now: adviceNow)
         check("never advises a switch that lowers headroom", worseAdvice.command == nil,
               "got \(worseAdvice)")
 
-        let better = acct("dee", "dee@example.com", five: 4, weekly: 20, at: adviceNow)
+        let better = acct("alt2", "alt2@example.com", five: 4, weekly: 20, at: adviceNow)
         let betterAdvice = AccountSnapshot.advise(
             activeEmail: onBad.email, accounts: [onBad, better],
-            switchProfiles: ["dee@example.com": profile("dee"),
-                             "ben@example.com": profile("ben")],
+            switchProfiles: ["alt2@example.com": profile("alt2"),
+                             "alt4@example.com": profile("alt4")],
             now: adviceNow)
         check("still advises a switch that raises headroom",
-              betterAdvice.command == "/login" && betterAdvice.chromeProfile == profile("dee"),
+              betterAdvice.command == "/login" && betterAdvice.chromeProfile == profile("alt2"),
               "got \(betterAdvice)")
 
         let tie = acct("b", "b@example.com", five: 50, weekly: 50, at: adviceNow)

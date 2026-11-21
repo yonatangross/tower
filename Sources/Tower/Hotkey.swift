@@ -74,7 +74,7 @@ enum PanelHotkey {
                 var handled = false
                 MainActor.assumeIsolated {
                     if AppDelegate.shared?.panel?.isVisible == true {
-                        AppDelegate.shared?.hidePanel()
+                        AppDelegate.shared?.hidePanel(.escape)
                         handled = true
                     }
                 }

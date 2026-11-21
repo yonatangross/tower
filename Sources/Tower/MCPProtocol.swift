@@ -82,7 +82,7 @@ struct MCPToolResult: Equatable, Sendable {
     }
 
     /// The normal shape: a one line summary a human can read, and the structured
-    /// payload a conductor parses. Both carry the same facts.
+    /// payload a client parses. Both carry the same facts.
     static func ok(_ summary: String, _ structured: JSON) -> MCPToolResult {
         MCPToolResult(content: [.text(summary)], structuredContent: structured)
     }

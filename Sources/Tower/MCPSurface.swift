@@ -4,7 +4,7 @@ import ImageIO
 /// The Tower MCP surface: every tool, resource and prompt in docs/mcp-surface.md,
 /// implemented over the same Store, vault, refresher and readers the panel and the CLI
 /// use. Reads never touch the Keychain (they hydrate the way `tower panelshot` does,
-/// from the store and the disk identity hint); the seat and refresh tools do,
+/// from the store and the disk identity hint); the seat, refresh and renew tools do,
 /// exactly as `tower status` does.
 ///
 /// Everything that touches the machine goes through `Environment`, so the tests run
@@ -21,10 +21,11 @@ struct TowerMCPService: MCPService {
         var lanes: () -> [Provider: AgentLane.Outcome]
         var sessions: () async -> AgentSummary?
         var refresh: () async -> RefreshResult
-        /// The active CLI credential, read through `security`. Seats and refresh
-        /// need it; nothing else calls it.
+        /// The active CLI credential, read through `security`. Seats, refresh and
+        /// renew need it; nothing else calls it.
         var activeCredential: () -> ClaudeCredential?
         var vault: ClaudeSeatVault
+        var renew: (ClaudeCredential) async throws -> ClaudeCredential
         var defaults: UserDefaults
         var launchAtLogin: () -> Bool
         var setLaunchAtLogin: (Bool) -> String?
@@ -62,6 +63,7 @@ struct TowerMCPService: MCPService {
                 refresh: { await Refresher.refreshActive() },
                 activeCredential: keychainCredential,
                 vault: vault,
+                renew: ClaudeSeatRenewal.renewer(vault: vault),
                 defaults: TowerPreferences.shared,
                 launchAtLogin: { LaunchAtLogin.isEnabled },
                 setLaunchAtLogin: { LaunchAtLogin.set($0) },
@@ -104,6 +106,7 @@ struct TowerMCPService: MCPService {
                 },
                 activeCredential: { DemoMode.credential(in: dir) },
                 vault: vault,
+                renew: { _ in throw ClaudeSeatRenewal.Unavailable(message: "demo mode: no real Keychain") },
                 // Its own suite, never the real settings domain: a demo config_set must not
                 // change the operator's Tower. The name is not the bundle id, so it exists.
                 defaults: UserDefaults(suiteName: ProductIdentity.bundleIdentifier + ".demo")!,
@@ -155,11 +158,17 @@ struct TowerMCPService: MCPService {
         "retrust": "tower_retrust",
         "panelshot": "tower_panelshot",
         "mcp": "tower_config_get",
+        // The feed is the composite of ten read tools (DashboardFeed.tools), so the
+        // first of them carries the verb; every field is also a tool of its own.
+        "dashboard-feed": "tower_status",
+        // The web view renderer is a sibling of the panel renderer, same child
+        // process route, same offscreen PNG.
+        "dashboardshot": "tower_panelshot",
     ]
 
     static let accountRef: JSON = [
         "type": "string",
-        "description": "nickname (ben), email, store key (codex:a@b) or provider:nickname",
+        "description": "nickname (alt4), email, store key (codex:a@b) or provider:nickname",
     ]
 
     static let windowSchema: JSON = [
@@ -551,26 +560,30 @@ struct TowerMCPService: MCPService {
             annotations: read("Freshness")),
         MCPToolSpec(
             name: "tower_seats", title: "Seat retention",
-            description: "Seat retention state: whether retention is on, the active login, every Tower owned seat this build can read (plan, tier, expiry), and owned items it cannot read. Reads the Keychain the way tower status does; tokens never leave the process.",
+            description: "Seat retention state: whether retention is on, the active login, every Tower owned seat this build can read (expiry, refresh token presence, renewal decision), and owned items it cannot read. Reads the Keychain the way tower status does; tokens never leave the process.",
             inputSchema: noArgs,
             outputSchema: [
-                "type": "object", "required": ["generatedAt", "retentionEnabled", "active", "retained", "unreadable"],
+                "type": "object", "required": ["generatedAt", "retentionEnabled", "active", "retained", "unreadable", "renewal"],
                 "properties": [
                     "generatedAt": ["type": "string"],
                     "retentionEnabled": ["type": "boolean"],
                     "active": ["type": ["object", "null"], "required": ["email", "plan", "tier", "expiresAt", "expired"],
                                "properties": ["email": ["type": ["string", "null"]], "plan": ["type": "string"], "tier": ["type": ["string", "null"]], "expiresAt": ["type": ["string", "null"]], "expired": ["type": "boolean"]]],
                     "retained": ["type": "array", "items": [
-                        "type": "object", "required": ["email", "service", "plan", "tier", "expiresAt", "expired"],
+                        "type": "object", "required": ["email", "service", "plan", "tier", "expiresAt", "expired", "hasRefreshToken", "decision", "dueAt"],
                         "properties": [
                             "email": ["type": "string"], "service": ["type": "string"], "plan": ["type": "string"], "tier": ["type": ["string", "null"]],
-                            "expiresAt": ["type": ["string", "null"]], "expired": ["type": "boolean"],
+                            "expiresAt": ["type": ["string", "null"]], "expired": ["type": "boolean"], "hasRefreshToken": ["type": "boolean"],
+                            "decision": ["type": "string", "enum": ["notRetained", "activeSeat", "possiblyActive", "noRefreshToken", "fresh", "due"]],
+                            "dueAt": ["type": ["string", "null"]],
                         ],
                     ]],
                     "unreadable": ["type": "array", "items": [
                         "type": "object", "required": ["service", "account", "status", "signerRefusal", "message"],
                         "properties": ["service": ["type": "string"], "account": ["type": "string"], "status": ["type": "integer"], "signerRefusal": ["type": "boolean"], "message": ["type": "string"]],
                     ]],
+                    "renewal": ["type": "object", "required": ["leadSeconds", "clientID", "tokenURL"],
+                                "properties": ["leadSeconds": ["type": "number"], "clientID": ["type": "string"], "tokenURL": ["type": "string"]]],
                 ],
             ],
             annotations: read("Seat retention")),
@@ -583,8 +596,10 @@ struct TowerMCPService: MCPService {
                 "properties": [
                     "generatedAt": ["type": "string"],
                     "lanes": ["type": "array", "items": [
-                        "type": "object", "required": ["provider", "label", "state", "error", "headerDetail", "modelPin", "configModel", "lastDispatch", "lastLimitHit", "usage", "opusFlag"],
+                        "type": "object", "required": ["provider", "label", "state", "error", "headerDetail", "modelPin", "configModel", "lastDispatch", "lastLimitHit", "usage", "opusFlag", "roomPct", "recommendable"],
                         "properties": [
+                            "roomPct": ["type": ["number", "null"], "description": "percent of room left, null (unknown) when the reading is older than the freshness TTL or the lane exposes no usage"],
+                            "recommendable": ["type": "boolean", "description": "false whenever room is unknown; a stale reading is never a recommendation"],
                             "provider": ["type": "string"], "label": ["type": "string"],
                             "state": ["type": "string", "enum": ["notConfigured", "unavailable", "ok"]],
                             "opusFlag": ["type": ["string", "null"], "description": "Cursor only: set when the metered pool refuses Opus; Auto still runs"],
@@ -631,15 +646,17 @@ struct TowerMCPService: MCPService {
             annotations: read("OpenRouter history")),
         MCPToolSpec(
             name: "tower_config_get", title: "Configuration",
-            description: "Every configuration key Tower honours, the file paths, the constants (TTLs, thresholds, rail marks), the TypeSafe entered balance and product identity.",
+            description: "Every configuration key Tower honours, the file paths, the constants (TTLs, thresholds, rail marks, renewal lead), the TypeSafe entered balance and product identity.",
             inputSchema: noArgs,
             outputSchema: [
                 "type": "object", "required": ["generatedAt", "settings", "paths", "constants", "identity", "typesafe", "openrouter"],
                 "properties": [
                     "generatedAt": ["type": "string"],
-                    "settings": ["type": "object", "required": ["retainClaudeSeats", "launchAtLogin", "expandedSections", "knownAccounts", "retiredAccounts"],
+                    "settings": ["type": "object", "required": ["retainClaudeSeats", "launchAtLogin", "panelSurface", "expandedSections", "knownAccounts", "retiredAccounts", "alerts.switchThresholdPct"],
                                  "properties": [
                                     "retainClaudeSeats": ["type": "boolean"], "launchAtLogin": ["type": "boolean"],
+                                    "panelSurface": ["type": "string", "enum": ["dashboard", "classic"]],
+                                    "alerts.switchThresholdPct": ["type": "number", "minimum": 50, "maximum": 99],
                                     "expandedSections": ["type": "array", "items": ["type": "string"]],
                                     "knownAccounts": ["type": "array", "items": ["type": "string"]],
                                     "retiredAccounts": ["type": "array", "items": ["type": "string"]],
@@ -682,7 +699,7 @@ struct TowerMCPService: MCPService {
             annotations: read("Panel shot")),
         MCPToolSpec(
             name: "tower_refresh", title: "Refresh",
-            description: "One refresh cycle, the same one tower status runs: Cursor and OpenRouter probes, the Claude roster (active login plus retained seats), one locked store mutation and mirror rewrite. Threshold and rail bookkeeping is left to the app so no notification is consumed here. With account, refuses a seat Tower cannot poll (NotPollable).",
+            description: "One refresh cycle, the same one tower status runs: Cursor and OpenRouter probes, the Claude roster (active login plus retained seats, due seats renewed), one locked store mutation and mirror rewrite. Threshold and rail bookkeeping is left to the app so no notification is consumed here. With account, refuses a seat Tower cannot poll (NotPollable).",
             inputSchema: ["type": "object", "properties": ["account": accountRef], "additionalProperties": false],
             outputSchema: [
                 "type": "object", "required": ["generatedAt", "outcome", "error", "activeEmail", "keychainCalls", "openRouter", "cursorKey", "pendingAlerts", "accounts"],
@@ -709,6 +726,15 @@ struct TowerMCPService: MCPService {
             ],
             annotations: write("Re-trust remembered seats", destructive: false, idempotent: false, openWorld: false)),
         MCPToolSpec(
+            name: "tower_renew", title: "Renew a seat",
+            description: "Renews one retained Claude seat from its refresh token and stores the new pair, exactly as the poll does. Refused with ActiveSeat for the login the CLI holds, NotRetained, NoRefreshToken, NotDue outside the 30 minute lead, RetentionOff, RenewalRefused or RenewalUnavailable.",
+            inputSchema: ["type": "object", "required": ["account"], "properties": ["account": accountRef], "additionalProperties": false],
+            outputSchema: [
+                "type": "object", "required": ["email", "service", "renewed", "expiresAt"],
+                "properties": ["email": ["type": "string"], "service": ["type": "string"], "renewed": ["type": "boolean"], "expiresAt": ["type": ["string", "null"]]],
+            ],
+            annotations: write("Renew a seat", destructive: true, idempotent: false, openWorld: true)),
+        MCPToolSpec(
             name: "tower_forget_seats", title: "Forget retained seats",
             description: "Deletes every Tower owned seat item and advances the observation fence so an in flight login cannot recreate one. Retention stays on. The panel's Forget button.",
             inputSchema: noArgs,
@@ -716,7 +742,7 @@ struct TowerMCPService: MCPService {
             annotations: write("Forget retained seats", destructive: true, idempotent: true, openWorld: false)),
         MCPToolSpec(
             name: "tower_config_set", title: "Set configuration",
-            description: "Sets one configuration key: retainClaudeSeats (false deletes every owned seat first), launchAtLogin, openrouter.monthlyBudgetUSD (null clears), typesafe.balanceUSD (the Jev credit balance read off the TypeSafe console, dated today; null clears it and hides the row), cloudflare.clef.balanceUSD (the same for Cloudflare's Clef decision model, read off the Cloudflare dashboard; typesafe.clef.balanceUSD is the older alias), knownAccounts, retiredAccounts. Refused with UnknownKey, BadValue, KeychainRefused or the underlying error.",
+            description: "Sets one configuration key: retainClaudeSeats (false deletes every owned seat first), launchAtLogin, panel.surface (dashboard or classic: what a menu bar click opens, read at the next open), openrouter.monthlyBudgetUSD (null clears), typesafe.balanceUSD (the Jev credit balance read off the TypeSafe console, dated today; null clears it and hides the row), cloudflare.clef.balanceUSD (the same for Cloudflare's Clef decision model, read off the Cloudflare dashboard; typesafe.clef.balanceUSD is the older alias), knownAccounts, retiredAccounts, alerts.switchThresholdPct (50 to 99, default 80: when the active seat's binding window reaches it, tower_advice says switch and the app raises one notification per window). Refused with UnknownKey, BadValue, KeychainRefused or the underlying error.",
             inputSchema: [
                 "type": "object", "required": ["key", "value"],
                 "properties": [
@@ -989,6 +1015,9 @@ struct TowerMCPService: MCPService {
         case "tower_panelshot":
             return await panelshot(light: arguments["light"].boolValue ?? false, expand: arguments["expand"].boolValue ?? false)
         case "tower_refresh": return await refresh(account: arguments["account"].stringValue)
+        case "tower_renew":
+            guard let ref = arguments["account"].stringValue else { return .refused("InvalidArguments", "account is required") }
+            return await renew(ref)
         case "tower_forget_seats": return forgetSeats()
         case "tower_retrust": return retrust()
         case "tower_config_set":
@@ -1016,7 +1045,8 @@ struct TowerMCPService: MCPService {
     /// The verified identity bound to the token the CLI holds right now. The
     /// persisted record counts only while its access-token digest matches the
     /// live credential, the verification is fresh, and no hint disputes it;
-    /// anything less is an unknown active seat.
+    /// anything less is an unknown active seat and renewal-facing decisions must
+    /// fail closed on it.
     func boundActiveEmail(now: Date) -> String? {
         guard let live = env.activeCredential(),
               let record = env.store.verifiedActiveSeat(),
@@ -1086,7 +1116,9 @@ struct TowerMCPService: MCPService {
         case .neverCaptured: kind = "neverCaptured"
         }
         return [
-            "reason": .string(reason.text),
+            // A seconds-old reply that only lacked the 5h window is not stale: say what is missing.
+            "reason": .string(kind == "stale" && account.fiveHourUnreported(now: now)
+                ? SeatUsagePresentation.fiveHourUnreportedText : reason.text),
             "kind": .string(kind),
             "timeGated": .bool(reason.isTimeGated),
             "reopensAt": .date(reason.isTimeGated ? AccountSnapshot.reopening(account, now: now) : nil),
@@ -1216,7 +1248,6 @@ struct TowerMCPService: MCPService {
         case .red: level = "red"
         }
         return [
-            "entered": true,
             "balanceUSD": .number(entry.usd),
             "asOf": .string(entry.asOf),
             "level": .string(level),
@@ -1407,7 +1438,7 @@ struct TowerMCPService: MCPService {
             hint: boundActiveEmail(now: now), accounts: Array(map.values))
         let advice = AccountSnapshot.advise(
             activeEmail: active, accounts: Array(map.values), switchProfiles: env.switchProfiles(),
-            rule: .either, now: now)
+            switchThresholdPct: SwitchThreshold.read(env.defaults), rule: .either, now: now)
         let payload: JSON
         let summary: String
         switch advice {
@@ -1563,6 +1594,9 @@ struct TowerMCPService: MCPService {
         case .success(let r): roster = r
         case .failure(let error): return .refused("KeychainRefused", error.message)
         }
+        // The verified identity, bound to the live token: a hint is not proof a
+        // seat is active, and a stale persisted record is not proof either.
+        let activeEmail = boundActiveEmail(now: now)
         let retained = roster.credentials.filter { $0.service.hasPrefix(ClaudeSeatVault.ownedServicePrefix) }
         let payload: JSON = [
             "generatedAt": .date(now),
@@ -1572,18 +1606,38 @@ struct TowerMCPService: MCPService {
                  "expiresAt": .date(c.expiresAt), "expired": .bool(c.isExpired(now: now))]
             } ?? .null,
             "retained": .array(retained.map { c in
-                [
+                let decision = ClaudeSeatRenewal.decision(for: c, activeEmail: activeEmail, now: now)
+                return [
                     "email": .string(c.emailHint ?? ""), "service": .string(c.service),
                     "plan": .string(c.subscriptionType), "tier": .string(c.rateLimitTier),
                     "expiresAt": .date(c.expiresAt), "expired": .bool(c.isExpired(now: now)),
+                    "hasRefreshToken": .bool(c.canRenew),
+                    "decision": .string(Self.decisionName(decision)),
+                    "dueAt": .date(c.canRenew ? c.expiresAt.map { $0.addingTimeInterval(-ClaudeSeatRenewal.lead) } : nil),
                 ]
             }),
             "unreadable": .array(roster.unreadable.map { item in
                 ["service": .string(item.service), "account": .string(item.account), "status": .int(Int(item.status)),
                  "signerRefusal": .bool(item.isSignerRefusal), "message": .string(item.panelMessage)]
             }),
+            "renewal": [
+                "leadSeconds": .number(ClaudeSeatRenewal.lead),
+                "clientID": .string(ClaudeSeatRenewal.clientID),
+                "tokenURL": .string(ClaudeSeatRenewal.tokenURL.absoluteString),
+            ],
         ]
         return .ok("retention \(env.vault.isRetentionEnabled() ? "on" : "off"); \(retained.count) retained seat(s), \(roster.unreadable.count) unreadable", payload)
+    }
+
+    static func decisionName(_ d: ClaudeSeatRenewal.Decision) -> String {
+        switch d {
+        case .notRetained: return "notRetained"
+        case .activeSeat: return "activeSeat"
+        case .possiblyActive: return "possiblyActive"
+        case .noRefreshToken: return "noRefreshToken"
+        case .fresh: return "fresh"
+        case .due: return "due"
+        }
     }
 
     func lanes() -> MCPToolResult {
@@ -1595,7 +1649,7 @@ struct TowerMCPService: MCPService {
             let outcome = outcomes[provider] ?? .notConfigured
             var row: [String: JSON] = [
                 "provider": .string(provider.rawValue), "label": .string(provider.label),
-                "error": .null, "headerDetail": .null, "modelPin": .null, "configModel": .null,
+                "error": .null, "headerDetail": .null, "roomPct": .null, "recommendable": .bool(false), "modelPin": .null, "configModel": .null,
                 "lastDispatch": .null, "lastLimitHit": .null, "usage": .null, "opusFlag": .null,
             ]
             switch outcome {
@@ -1611,6 +1665,8 @@ struct TowerMCPService: MCPService {
                 let seat = provider == .cursor
                     ? visibleAccounts().values.first { $0.kind == .cursor } : nil
                 row["headerDetail"] = .string(AgentLane.headerDetail(r, cursorSeat: seat, now: now))
+                row["roomPct"] = .number(AgentLane.roomPct(r, cursorSeat: seat, now: now))
+                row["recommendable"] = .bool(AgentLane.isRecommendable(r, cursorSeat: seat, now: now))
                 row["modelPin"] = .string(r.modelPin)
                 row["configModel"] = .string(r.configModel)
                 if provider == .cursor {
@@ -1747,6 +1803,8 @@ struct TowerMCPService: MCPService {
             "settings": [
                 "retainClaudeSeats": .bool(env.vault.isRetentionEnabled()),
                 "launchAtLogin": .bool(env.launchAtLogin()),
+                "panelSurface": .string(PanelSurface.current(defaults: env.defaults).rawValue),
+                "alerts.switchThresholdPct": .number(SwitchThreshold.read(env.defaults)),
                 "expandedSections": .array((env.defaults.stringArray(forKey: "expandedSections") ?? []).map { .string($0) }),
                 // Claude seat emails; empty while Claude Code is OFF in Settings.
                 "knownAccounts": .array(claudeOn ? knownAccounts().map { .string($0) } : []),
@@ -1769,6 +1827,7 @@ struct TowerMCPService: MCPService {
                 "thresholdLevels": .array(Thresholds.levels.map { .number($0) }),
                 "railAmberMark": .number(Rail.amberMark),
                 "railRedMark": .number(Rail.redMark),
+                "renewalLeadSeconds": .number(ClaudeSeatRenewal.lead),
                 "seatReadRetryBackoffSeconds": .number(ClaudeSeatVault.readRetryBackoff),
                 "pollIntervalSeconds": 300,
                 "openDebounceSeconds": 20,
@@ -1837,13 +1896,16 @@ struct TowerMCPService: MCPService {
             p.standardError = err
             p.standardInput = FileHandle.nullDevice
             do { try p.run() } catch { return nil }
+            // Drain both pipes while the child runs so output cannot block exit.
+            let stdout = Task.detached { out.fileHandleForReading.readDataToEndOfFile() }
+            let stderr = Task.detached { err.fileHandleForReading.readDataToEndOfFile() }
             let deadline = Date().addingTimeInterval(timeout)
             while p.isRunning && Date() < deadline { usleep(50_000) }
             if p.isRunning { p.terminate(); return nil }
             return ChildResult(
                 status: p.terminationStatus,
-                stdout: String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
-                stderr: String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+                stdout: String(decoding: await stdout.value, as: UTF8.self),
+                stderr: String(decoding: await stderr.value, as: UTF8.self))
         }.value
     }
 
@@ -1987,6 +2049,72 @@ struct TowerMCPService: MCPService {
         }
     }
 
+    /// Renews one retained Claude seat from its refresh token and stores the new pair,
+    /// exactly as the poll does. The seat the CLI holds is refused: Claude Code renews it.
+    func renew(_ ref: String) async -> MCPToolResult {
+        let now = env.now()
+        guard env.vault.isRetentionEnabled() else {
+            return .refused("RetentionOff", "seat retention is off, so Tower holds no seat to renew")
+        }
+        let map = env.store.load()
+        let activeCredential = env.activeCredential()
+        // The persisted record only counts while it binds to the token the CLI
+        // holds right now: same access-token digest, fresh verifiedAt, and no
+        // hint disputing it. Anything less leaves the active seat unknown and
+        // the renewal decision below fails closed on every retained seat.
+        let verified = boundActiveEmail(now: now)
+        // Resolve by the store first so a nickname works, then fall back to the raw
+        // reference as an email for a seat the store has never captured.
+        let email = Self.resolve(ref, in: map).map(\.email) ?? ref
+        // Tower's first rule: the seat the CLI holds is Claude Code's to renew, whether
+        // or not Tower also retains a copy of it. The credential's own hint still
+        // refuses on a direct match; it is the login's own claim about itself.
+        if email == verified || email == activeCredential?.emailHint {
+            return .refused("ActiveSeat", "\(email) is the login Claude Code holds; Claude Code renews it and Tower never presents its refresh token")
+        }
+        let roster: ClaudeSeatRoster
+        switch env.vault.rosterResult(active: activeCredential) {
+        case .success(let r): roster = r
+        case .failure(let error): return .refused("KeychainRefused", error.message)
+        }
+        guard let credential = roster.credentials.first(where: {
+            $0.service.hasPrefix(ClaudeSeatVault.ownedServicePrefix) && $0.emailHint == email
+        }) else {
+            if let unreadable = roster.unreadable.first(where: { $0.account == email }) {
+                return .refused("KeychainRefused", unreadable.panelMessage)
+            }
+            return .refused("NotRetained", "Tower holds no retained seat for \(email)")
+        }
+        switch ClaudeSeatRenewal.decision(for: credential, activeEmail: verified, now: now) {
+        case .notRetained:
+            return .refused("NotRetained", "\(email) is not a Tower owned seat")
+        case .activeSeat:
+            return .refused("ActiveSeat", "\(email) is the login Claude Code holds; Claude Code renews it and Tower never presents its refresh token")
+        case .possiblyActive:
+            return .refused("ActiveUnknown", "Tower cannot verify which seat the CLI holds, so \(email) may be it; refusing to renew")
+        case .noRefreshToken:
+            return .refused("NoRefreshToken", "the retained item for \(email) carries no refresh token; sign into that seat again to rewrite it")
+        case .fresh:
+            let due = credential.expiresAt.map { $0.addingTimeInterval(-ClaudeSeatRenewal.lead) }
+            return .refused("NotDue", "\(email) is not inside the \(Int(ClaudeSeatRenewal.lead / 60)) minute lead",
+                            extra: ["expiresAt": .date(credential.expiresAt), "dueAt": .date(due)])
+        case .due:
+            break
+        }
+        do {
+            let renewed = try await env.renew(credential)
+            return .ok("renewed \(email), expires \(renewed.expiresAt.map { JSON.iso.string(from: $0) } ?? "?")", [
+                "email": .string(email), "service": .string(renewed.service), "renewed": true, "expiresAt": .date(renewed.expiresAt),
+            ])
+        } catch let refusal as ClaudeSeatRenewal.Rejected {
+            return .refused("RenewalRefused", refusal.errorDescription ?? refusal.message)
+        } catch let unavailable as ClaudeSeatRenewal.Unavailable {
+            return .refused("RenewalUnavailable", unavailable.errorDescription ?? unavailable.message)
+        } catch {
+            return .refused("RenewalUnavailable", error.localizedDescription)
+        }
+    }
+
     func forgetSeats() -> MCPToolResult {
         if let error = env.vault.forgetAll(suppressing: env.activeCredential()) {
             return .refused("KeychainRefused", error)
@@ -2026,6 +2154,14 @@ struct TowerMCPService: MCPService {
             if let error = env.setLaunchAtLogin(on) { return .refused("LoginItemFailed", error) }
             let after = env.launchAtLogin()
             return .ok("launchAtLogin \(after)", ["key": .string(key), "value": .bool(after), "previous": .bool(previous)])
+        case "panel.surface":
+            guard let word = value.stringValue, let surface = PanelSurface(rawValue: word) else {
+                return .refused("BadValue", "panel.surface takes \"dashboard\" or \"classic\"")
+            }
+            let previous = PanelSurface.current(defaults: env.defaults)
+            PanelSurface.set(surface, defaults: env.defaults)
+            let after = PanelSurface.current(defaults: env.defaults)
+            return .ok("panel.surface \(after.rawValue)", ["key": .string(key), "value": .string(after.rawValue), "previous": .string(previous.rawValue)])
         case "openrouter.monthlyBudgetUSD":
             let previous = env.defaults.double(forKey: OpenRouter.budgetKey)
             if value.isNull {
@@ -2053,6 +2189,13 @@ struct TowerMCPService: MCPService {
             return .ok("\(key) \(TypeSafe.money(entry.usd)) as of \(entry.asOf)", [
                 "key": .string(key), "value": .number(entry.usd), "asOf": .string(entry.asOf), "previous": previous,
             ])
+        case "alerts.switchThresholdPct":
+            let previous = SwitchThreshold.read(env.defaults)
+            guard let pct = value.doubleValue.flatMap(SwitchThreshold.parse) else {
+                return .refused("BadValue", "alerts.switchThresholdPct takes a number from \(Int(SwitchThreshold.range.lowerBound)) to \(Int(SwitchThreshold.range.upperBound))")
+            }
+            env.defaults.set(pct, forKey: SwitchThreshold.key)
+            return .ok("alerts.switchThresholdPct \(pct)", ["key": .string(key), "value": .number(pct), "previous": .number(previous)])
         case "knownAccounts":
             guard let emails = Self.validEmails(value) else { return .refused("BadValue", "knownAccounts takes an array of emails") }
             let previous = knownAccounts()

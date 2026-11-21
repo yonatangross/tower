@@ -4,9 +4,9 @@ import CryptoKit
 import LocalAuthentication
 import os
 
-/// Tower reads the live credential and retains a copy of each verified seat's access token,
-/// so it can read that seat's usage until the token expires. It never stores or presents a
-/// refresh token and never renews a token: Claude Code alone does that.
+/// Tower reads the live credential and retains a separate copy of each verified seat's
+/// token pair. The active login's pair belongs to Claude Code, which renews it itself; Tower
+/// renews only the seats the CLI no longer holds (#58, see ClaudeSeatRenewal).
 struct ClaudeCredential {
     let service: String
     let accessToken: String
@@ -15,6 +15,12 @@ struct ClaudeCredential {
     let expiresAt: Date?
     /// The active config's `oauthAccount.emailAddress`; the profile endpoint verifies it.
     let emailHint: String?
+    /// The refresh token the source carried beside the access token, when it carried one.
+    /// Nil for a seat item written before #58 and for a credential whose refresh token the
+    /// server has refused; such a seat reads needs login once its access token expires.
+    var refreshToken: String? = nil
+    /// The OAuth scopes the pair was issued for; the renewal request repeats them.
+    var scopes: [String] = []
 
     func isExpired(now: Date) -> Bool {
         // An access token with no expiry is not demonstrably safe to use.  Claude Code
@@ -22,6 +28,11 @@ struct ClaudeCredential {
         // than gambling with an undocumented renewal path.
         guard let expiresAt else { return true }
         return expiresAt <= now
+    }
+
+    /// A seat Tower can renew: it has a refresh token to present.
+    var canRenew: Bool {
+        !(refreshToken ?? "").isEmpty
     }
 }
 
@@ -638,6 +649,10 @@ private struct ClaudeSeatPayload: Codable {
     let rateLimitTier: String?
     let generation: Int
     let observationTicket: Int
+    /// #58: optional so an item written before renewal existed still decodes; such a seat
+    /// simply cannot be renewed until the next login of that seat rewrites it.
+    var refreshToken: String? = nil
+    var scopes: [String]? = nil
 }
 
 private struct ClaudeSeatVaultState: Codable {
@@ -693,7 +708,9 @@ final class ClaudeSeatLaunchCache {
             let unanswered = readout?.isUnanswered ?? true
             guard unanswered else { return false }
             guard let lastAttemptAt else { return true }
-            return now.timeIntervalSince(lastAttemptAt) >= backoff
+            let onlyRefusals = readout.map { !$0.unreadable.isEmpty && $0.unreadable.allSatisfy(\.isSignerRefusal) } ?? false
+            let wait = onlyRefusals ? max(backoff, ClaudeSeatVault.signerRefusalRetryBackoff) : backoff
+            return now.timeIntervalSince(lastAttemptAt) >= wait
         }
     }
 
@@ -767,6 +784,10 @@ struct ClaudeSeatVault {
     /// How long a denied, locked or failed seat read must wait before it is asked again.
     /// Retries always run with interaction suppressed, so they can never raise a dialog.
     static let readRetryBackoff: TimeInterval = 60
+    /// A signer refusal (-25293, -25308) rarely changes inside a launch, but -25308 also answers
+    /// while the login keychain is locked, so it is asked again on this longer backoff: an unlock
+    /// recovers within it, and a permanently refused seat costs one listing per ten minutes.
+    static let signerRefusalRetryBackoff: TimeInterval = 600
     static let shared = ClaudeSeatVault()
 
     private let keychain: any ClaudeSeatKeychain
@@ -908,7 +929,9 @@ struct ClaudeSeatVault {
                 email: email, accessToken: credential.accessToken, expiresAt: credential.expiresAt!,
                 subscriptionType: credential.subscriptionType, rateLimitTier: credential.rateLimitTier,
                 generation: (previous?.generation ?? 0) + 1,
-                observationTicket: observation.ticket)
+                observationTicket: observation.ticket,
+                refreshToken: credential.refreshToken,
+                scopes: credential.scopes.isEmpty ? nil : credential.scopes)
             guard let data = encode(payload) else { return "could not encode retained seat" }
             if state.suppressedTokenDigest != nil {
                 var nextState = state
@@ -951,8 +974,8 @@ struct ClaudeSeatVault {
     }
 
     /// Returns the active credential plus every valid Tower-owned seat. Expired tokens stay
-    /// in the roster: the collector marks the corresponding account needs login without
-    /// calling the usage endpoint.
+    /// in the roster: the collector renews one that carries a refresh token (#58) and marks
+    /// the corresponding account needs login otherwise, without calling the usage endpoint.
     func credentials(active: ClaudeCredential?) -> [ClaudeCredential] {
         switch credentialsResult(active: active) {
         case .success(let credentials): return credentials
@@ -1188,7 +1211,69 @@ struct ClaudeSeatVault {
         return ClaudeCredential(
             service: record.service, accessToken: payload.accessToken,
             subscriptionType: payload.subscriptionType, rateLimitTier: payload.rateLimitTier,
-            expiresAt: payload.expiresAt, emailHint: payload.email)
+            expiresAt: payload.expiresAt, emailHint: payload.email,
+            refreshToken: payload.refreshToken, scopes: payload.scopes ?? [])
+    }
+
+    /// #58: after a renewal, the owned item is rewritten with the new pair. The seat's
+    /// generation and observation ticket are kept, so a login observed meanwhile still
+    /// outranks it, and the write happens only while the item still holds the token the
+    /// renewal started from: a seat Forget removed meanwhile has no item and is not brought
+    /// back, and a fresh login of that seat captured meanwhile is not overwritten.
+    func storeRenewedSeat(_ renewed: ClaudeCredential, replacing previousAccessToken: String) -> String? {
+        rewriteSeat(renewed) { previous in
+            guard previous.accessToken == previousAccessToken else { return nil }
+            var next = previous
+            next.accessToken = renewed.accessToken
+            next.expiresAt = renewed.expiresAt ?? previous.expiresAt
+            next.refreshToken = renewed.refreshToken
+            next.scopes = renewed.scopes.isEmpty ? previous.scopes : renewed.scopes
+            return next
+        }
+    }
+
+    /// #58: a refresh token the server refused is dropped, so the loop stops presenting it
+    /// every five minutes. The access token stays until it expires; the row then reads needs
+    /// login until the operator signs into that seat again, which rewrites the whole item.
+    func dropRefreshToken(for credential: ClaudeCredential) -> String? {
+        rewriteSeat(credential) { previous in
+            guard previous.refreshToken == credential.refreshToken else { return nil }
+            var next = previous
+            next.refreshToken = nil
+            return next
+        }
+    }
+
+    /// Rewrites one owned item in place from its decoded payload. `transform` returning nil
+    /// means the item no longer matches what the caller saw, so nothing is written.
+    private func rewriteSeat(
+        _ credential: ClaudeCredential,
+        _ transform: (ClaudeSeatPayload) -> ClaudeSeatPayload?
+    ) -> String? {
+        guard let email = credential.emailHint, credential.service == Self.service(for: email) else {
+            return "not a Tower-owned seat"
+        }
+        switch withLock({ () -> String? in
+            if !retentionEnabled() { return nil }
+            let readout: ClaudeSeatKeychainReadout
+            // This is a read, compare and write transaction across Tower processes. The
+            // launch cache is safe for roster reads, but another process can capture a newer
+            // login after this process cached the old item. Refresh the suppressed read while
+            // holding the shared lock so the token comparison is against the physical item.
+            switch launchReadout(fresh: true) {
+            case .success(let value): readout = value
+            case .failure(let error): return error.message
+            }
+            guard let record = readout.records.first(where: { record in
+                record.service == credential.service && record.account == email
+                    && record.label == Self.ownershipMarker
+            }), let previous = decode(record), let next = transform(previous) else { return nil }
+            guard let data = encode(next) else { return "could not encode renewed seat" }
+            return writeSeat(service: record.service, account: record.account, label: record.label, data: data)
+        }) {
+        case .success(let error): return error
+        case .failure(let error): return error.message
+        }
     }
 
     private func validOwnership(_ record: ClaudeSeatKeychainRecord) -> Bool {
@@ -1242,13 +1327,13 @@ struct ClaudeSeatVault {
             at: directory, withIntermediateDirectories: true)) != nil else {
             return .failure(ClaudeSeatVaultError("could not create seat retention directory"))
         }
-        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
-        guard fd >= 0 else { return .failure(ClaudeSeatVaultError("could not open seat retention lock")) }
-        defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else {
+        guard let fd = StoreLock.acquire(at: lockURL, mode: 0o600) else {
             return .failure(ClaudeSeatVaultError("could not acquire seat retention lock"))
         }
-        defer { flock(fd, LOCK_UN) }
+        defer {
+            flock(fd, LOCK_UN)
+            close(fd)
+        }
         return .success(body())
     }
 
@@ -1395,11 +1480,16 @@ struct ClaudeRosterObservation {
     let activeEmail: String?
     /// The part of `activeEmail` that came back from the profile endpoint. The hint
     /// prime (`credential.emailHint`) is ~/.claude.json reread, which any session can
-    /// rewrite; only this field may persist.
+    /// rewrite; only this field may persist or gate renewal.
     var verifiedActiveEmail: String? = nil
     /// Owned Keychain items this build listed but could not read. They carry no token, so
     /// nothing was fetched for them; the row names the item and status instead.
     var unreadableSeats: [ClaudeSeatUnreadableItem] = []
+    /// #58: seats whose renewal was attempted this cycle and refused, keyed by email. An
+    /// expired seat in this map reads needs login with the reason, not the bare marker.
+    var renewalFailures: [String: String] = [:]
+    /// #58: services renewed this cycle, so a test or a log can count renewals.
+    var renewedServices: [String] = []
 
     /// Retirement can change while a profile or usage request is in flight. Filter again
     /// immediately before the Store mutation so a response cannot recreate that identity.
@@ -1422,25 +1512,35 @@ struct ClaudeRosterObservation {
             activeEmail: activeEmail.flatMap { retiredEmails.contains($0) ? nil : $0 },
             verifiedActiveEmail: verifiedActiveEmail
                 .flatMap { retiredEmails.contains($0) ? nil : $0 },
-            unreadableSeats: unreadableSeats.filter { !retiredEmails.contains($0.account) })
+            unreadableSeats: unreadableSeats.filter { !retiredEmails.contains($0.account) },
+            renewalFailures: renewalFailures.filter { !retiredEmails.contains($0.key) },
+            renewedServices: renewedServices)
     }
 }
 
 enum ClaudeRoster {
     /// Fetch the supplied live captures in a stable sequence:
     /// it avoids a burst of OAuth requests and, crucially, one rejected seat never stops a
-    /// later seat from being captured. Tokens are never renewed: an expired or refused
-    /// token reads needs login until that seat signs into Claude Code again.
+    /// later seat from being captured.
+    ///
+    /// `renew` is the #58 renewal step. A retained seat that is due (see
+    /// ClaudeSeatRenewal.decision) is renewed before its fetch, and a seat whose fetch the
+    /// server refuses with 401 is renewed once and fetched again. The closure persists the
+    /// new pair itself; nil means no renewal at all, which is what the login capture path
+    /// and the older tests use.
     static func collect(
         credentials: [ClaudeCredential],
         fetch: (ClaudeCredential) async throws -> ClaudeFetch,
         now: Date,
-        unreadableSeats: [ClaudeSeatUnreadableItem] = []
+        unreadableSeats: [ClaudeSeatUnreadableItem] = [],
+        renew: ((ClaudeCredential) async throws -> ClaudeCredential)? = nil
     ) async -> ClaudeRosterObservation {
         var successes: [ClaudeRosterObservation.Success] = []
         var failures: [ClaudeRosterObservation.Failure] = []
         var expired: [ClaudeCredential] = []
         var attemptedServices: [String] = []
+        var renewalFailures: [String: String] = [:]
+        var renewedServices: [String] = []
         var activeEmail: String?
         var verifiedActiveEmail: String?
         var seenTokens = Set<String>()
@@ -1451,38 +1551,79 @@ enum ClaudeRoster {
         for original in ordered {
             // The same observed login must not issue duplicate requests.
             guard seenTokens.insert(original.accessToken).inserted else { continue }
-            let credential = original
+            var credential = original
             if credential.service == Keychain.defaultService { activeEmail = credential.emailHint }
 
+            // Renew once per seat per cycle: either ahead of expiry, or after a 401 below.
+            // The CLI credential is ordered first, so by the time a retained seat is
+            // considered the verified active email is known when the profile answered.
+            // When it is not known the guard must fail CLOSED: with the active seat
+            // unidentified every retained seat may be it, and renewing one would
+            // rotate the refresh token under the live Claude Code session.
+            let activeSeat = verifiedActiveEmail
+            var renewedThisCycle = false
+            func tryRenew() async -> Bool {
+                guard let renew, !renewedThisCycle,
+                      ClaudeSeatRenewal.canAttempt(credential, activeEmail: activeSeat) else { return false }
+                renewedThisCycle = true
+                do {
+                    credential = try await renew(credential)
+                    renewedServices.append(credential.service)
+                    return true
+                } catch {
+                    if let email = credential.emailHint {
+                        renewalFailures[email] = error.localizedDescription
+                    }
+                    return false
+                }
+            }
+            if ClaudeSeatRenewal.decision(for: credential, activeEmail: activeSeat, now: now) == .due {
+                // A failed early renewal is not fatal while the current token still works:
+                // the fetch below runs with it and the next cycle tries again.
+                _ = await tryRenew()
+            }
             if credential.isExpired(now: now) {
                 expired.append(credential)
                 continue
             }
             attemptedServices.append(credential.service)
-            do {
-                let result = try await fetch(credential)
-                successes.append(.init(credential: credential, fetch: result))
-                if credential.service == Keychain.defaultService {
-                    activeEmail = result.email
-                    verifiedActiveEmail = result.email
+            var attempt = credential
+            while true {
+                do {
+                    let result = try await fetch(attempt)
+                    successes.append(.init(credential: attempt, fetch: result))
+                    if attempt.service == Keychain.defaultService {
+                        activeEmail = result.email
+                        verifiedActiveEmail = result.email
+                    }
+                } catch {
+                    if error is ClaudeCredentialExpired {
+                        // The server refused a token Tower thought was valid. One renewal and
+                        // one more fetch; a second refusal is a real needs-login.
+                        if await tryRenew(), !credential.isExpired(now: now) {
+                            attempt = credential
+                            continue
+                        }
+                        expired.append(credential)
+                        break
+                    }
+                    let resolvedEmail = (error as? ClaudeFetchFailure)?.email
+                    failures.append(.init(credential: attempt, email: resolvedEmail,
+                                          message: error.localizedDescription))
+                    if attempt.service == Keychain.defaultService {
+                        activeEmail = resolvedEmail ?? attempt.emailHint
+                        if let resolvedEmail { verifiedActiveEmail = resolvedEmail }
+                    }
                 }
-            } catch is ClaudeCredentialExpired {
-                // The server refused a token Tower thought was valid: needs login.
-                expired.append(credential)
-            } catch {
-                let resolvedEmail = (error as? ClaudeFetchFailure)?.email
-                failures.append(.init(credential: credential, email: resolvedEmail,
-                                      message: error.localizedDescription))
-                if credential.service == Keychain.defaultService {
-                    activeEmail = resolvedEmail ?? credential.emailHint
-                    if let resolvedEmail { verifiedActiveEmail = resolvedEmail }
-                }
+                break
             }
         }
         return ClaudeRosterObservation(successes: successes, failures: failures, expired: expired,
                                        attemptedServices: attemptedServices, activeEmail: activeEmail,
                                        verifiedActiveEmail: verifiedActiveEmail,
-                                       unreadableSeats: unreadableSeats)
+                                       unreadableSeats: unreadableSeats,
+                                       renewalFailures: renewalFailures,
+                                       renewedServices: renewedServices)
     }
 
     static func apply(_ observation: ClaudeRosterObservation,
@@ -1510,7 +1651,10 @@ enum ClaudeRoster {
                 email: email, nickname: Nickname.derive(from: email), plan: credential.subscriptionType)
             // A stale access token is not a reason to discard the last capture.  It is a
             // reason to tell the operator that this seat needs a normal Claude Code login.
-            snapshot.lastError = "needs login"
+            // When Tower tried to renew it first (#58), the row says why that did not work;
+            // the prefix stays so the row still cannot rank.
+            snapshot.lastError = observation.renewalFailures[email]
+                .map { "\(AccountSnapshot.needsLoginText): \($0)" } ?? "needs login"
             accounts[email] = snapshot
         }
 
