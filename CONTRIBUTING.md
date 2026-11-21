@@ -33,3 +33,23 @@ welcome.
 
 Swift 6 toolchain, Swift 5 language mode, no third-party packages. Comments say
 why, not what.
+
+## Source file ownership
+
+Some files exist only in this repository and are developed here, not ported
+from anywhere. When pulling changes from another lineage, leave these alone:
+
+- `Sources/Tower/Onboarding.swift` and `OnboardingSelfTest.swift`
+- `Sources/Tower/SettingsView.swift`
+- `Sources/Tower/CursorSignIn.swift`
+- `Sources/Tower/ProviderToggles.swift`
+- `Sources/Tower/RefreshHealth.swift`
+- `Sources/Tower/RetrustCooldown.swift`
+- `Sources/Tower/KeychainDialogGate.swift`
+- `Sources/Tower/LegacyInstallMigration.swift`
+- `Sources/Tower/StatusGlyph.swift` and `PiLane.swift`
+
+Everything else under `Sources/` and `Tests/` is shared surface: port changes
+with a three-way merge (`git merge-tree`), keep this repository's product
+identity (`ai.yonyon.tower`), and never port account names, machine paths or
+infrastructure references from the source lineage.
