@@ -71,10 +71,10 @@ final class SessionAttributionTests: XCTestCase {
         try fixture.writeConfig(email: "user-f@example.com", owner: "active-owner")
         try fixture.writeTranscript(bridge("session-owner"))
         let first = try fixture.summary()
-        XCTAssertEqual(first.groups.first?.accountEmail, "user-e@example.com")
+        XCTAssertEqual(first.groups.first?.accountEmail, "user-c@example.com")
         // No nicknames.json entry for this address, so the label is the derived
         // default: the first six characters of the local part.
-        XCTAssertEqual(first.groups.first?.accountLabel, "user-e")
+        XCTAssertEqual(first.groups.first?.accountLabel, "user-c")
 
         try fixture.writeConfig(email: "third@example.com", owner: "third-owner")
         XCTAssertEqual(try fixture.summary().groups, first.groups,

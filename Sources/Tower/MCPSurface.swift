@@ -1251,6 +1251,7 @@ struct TowerMCPService: MCPService {
         case .red: level = "red"
         }
         return [
+            "entered": true,
             "balanceUSD": .number(entry.usd),
             "asOf": .string(entry.asOf),
             "level": .string(level),

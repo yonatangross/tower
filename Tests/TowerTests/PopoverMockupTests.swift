@@ -47,6 +47,13 @@ final class PopoverMockupTests: XCTestCase {
         XCTAssertEqual(SeatBoardRow.stateWord(account: claude("new", weekly: 10), rest: .neverCaptured, activeEmail: active.email, now: now), "no data")
     }
 
+    // TABLE: one section per pool
+    func testEachPoolHasItsOwnHeading() {
+        XCTAssertEqual(SeatBoard.poolHeading(.claude, count: 7), "Claude · 7 seats")
+        XCTAssertEqual(SeatBoard.poolHeading(.codex, count: 1), "Codex · 1 seat")
+        XCTAssertEqual(SeatBoard.poolHeading(.cursor, count: 1), "Cursor · 1 seat")
+    }
+
     // TABLE: the line under the name fits the seat column: plan and state, the product is the
     // pool heading above (the 2026-11-01 render cut "claude code team · ready" to "claude code team...")
     func testThePlanLineCarriesTheStateAndFits() {

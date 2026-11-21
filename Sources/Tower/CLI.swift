@@ -1560,10 +1560,9 @@ enum CLI {
               && BrailleMeterMath.text(percent: 0, cells: 3) == "⣀⣀⣀"
               && BrailleMeterMath.text(percent: 100, cells: 3) == "⣿⣿⣿")
         // Every quota number says which it is (seen 2026-11-04: a bare Codex "0%" was read
-        // as "0 % room" by another tool). The panel's pool column is USED, the room column
-        // is ROOM, and both headings say so; `tower status` puts the word on every number.
-        check("seat board headings name used and room",
-              SeatBoard.meterHeading == "used" && SeatBoard.roomHeading == "room")
+        // as "0 % room" by another tool). `tower status` puts the word on every number.
+        check("seat board uses a provider-neutral meter heading",
+              SeatBoard.meterHeading == "usage pools")
         var codexZero = AccountSnapshot(email: "c@x", nickname: "cx", plan: "pro")
         codexZero.provider = .codex
         codexZero.capturedAt = Date().addingTimeInterval(-60)

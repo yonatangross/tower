@@ -363,24 +363,23 @@ struct SeatBoard: View {
     @State private var hoveredID: String?
 
     private static let providers: [Provider] = [.claude, .codex, .cursor]
-    /// The pool column is how much of each window is USED; the room column is what is
-    /// LEFT on the tightest one. Each heading says which, so no bare number is ambiguous.
-    static let meterHeading = "used"
-    static let roomHeading = "room"
+
+    /// A pool's section heading: "Claude · 7 seats", "Codex · 1 seat".
+    nonisolated static func poolHeading(_ provider: Provider, count: Int) -> String {
+        let name: String
+        switch provider {
+        case .claude: name = "Claude"
+        default: name = provider.label
+        }
+        return "\(name) · \(count) seat\(count == 1 ? "" : "s")"
+    }
+    static let meterHeading = "usage pools"
     /// The disclosure that holds the stale seats.
     static let staleDisclosureID = "seats.stale"
 
     private var split: (active: [AccountSnapshot],
                         resting: [(AccountSnapshot, AccountSnapshot.RestReason)]) {
         AccountSnapshot.partition(accounts, rule: .either, now: now)
-    }
-
-    private var summaryText: String {
-        // Ready means a quota seat you can act on; money rows like OpenRouter are
-        // not quota and never count.
-        MenuContent.readySummary(ready: split.active.filter { $0.kind.isRankable }.count,
-                               total: accounts.filter { $0.kind.isRankable }.count,
-                               resting: split.resting, now: now)
     }
 
     /// A seat that is only stale (no reading, no ceiling) has nothing to say until it is
@@ -436,31 +435,19 @@ struct SeatBoard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("SEATS")
-                    .font(TowerType.font(.header, weight: .semibold))
-                Spacer()
-                Text(summaryText)
-                    .font(TowerType.font(.small, design: .monospaced))
-                    .foregroundStyle(TowerType.secondary)
-            }
-
-            HStack(spacing: 4) {
-                Spacer().frame(width: TowerTextSize.pt(SeatBoardRow.leadWidth))
-                Text("seat")
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.seatWidth), alignment: .leading)
-                Text(Self.meterHeading)
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.meterWidth), alignment: .leading)
-                Text(Self.roomHeading)
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.roomWidth), alignment: .trailing)
-                Text("reset")
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.resetWidth), alignment: .trailing)
-            }
-            .font(TowerType.font(.minimum))
-            .foregroundStyle(TowerType.dim)
-
-            ForEach(shownRows, id: \.0.id) { (account, rest) in
-                row(account, rest)
+            // no board heading and no column header row (approved mockup; the operator 2026-11-01):
+            // one section per pool, its heading, then its rows
+            ForEach(Self.providers, id: \.self) { provider in
+                let shown = shownRows.filter { $0.0.kind == provider }
+                if !shown.isEmpty {
+                    Text(Self.poolHeading(provider, count: rows(for: provider).count))
+                        .font(TowerType.font(.small, weight: .semibold))
+                        .foregroundStyle(TowerType.secondary)
+                        .padding(.top, 2)
+                    ForEach(shown, id: \.0.id) { (account, rest) in
+                        row(account, rest)
+                    }
+                }
             }
 
             let folded = foldedRows

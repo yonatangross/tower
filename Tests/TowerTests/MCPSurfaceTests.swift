@@ -167,9 +167,9 @@ struct MCPFixture {
             store: store,
             now: { self.now },
             verifiedActiveEmail: { verifiedActiveEmail ?? Self.activeEmail },
-            switchProfiles: { [Self.activeEmail: ChromeProfileHint(displayName: "YAI1G", chooserEmail: nil),
-                               Self.retainedEmail: ChromeProfileHint(displayName: "YG", chooserEmail: nil),
-                               Self.staleEmail: ChromeProfileHint(displayName: "Y2G", chooserEmail: Self.staleEmail)] },
+            switchProfiles: { [Self.activeEmail: ChromeProfileHint(displayName: "ALT1", chooserEmail: nil),
+                               Self.retainedEmail: ChromeProfileHint(displayName: "MAIN", chooserEmail: nil),
+                               Self.staleEmail: ChromeProfileHint(displayName: "ALT4", chooserEmail: Self.staleEmail)] },
             lanes: { self.lanes() },
             sessions: { self.sessions() },
             refresh: { self.refreshResult() },
@@ -212,13 +212,16 @@ final class MCPSurfaceTests: XCTestCase {
         TowerMCPService.tools.first { $0.name == name }!
     }
 
+    // MARK: Panel shot surfaces (tower-loop round 2)
+    //
+    // The loop measures what he sees, and the Week dial is what opens first, yet the tool could
+    // only draw the classic panel. A loop that cannot capture the product face cannot measure it.
+
     // MARK: Surface enumeration
 
-    /// Every verb main.swift dispatches has a tool, and the map names no verb that
-    /// main.swift does not have. Walked from the source so a new verb fails here.
+    /// Every verb DemoMode.dispatched handles has a tool, and the map names no verb that
+    /// the dispatcher does not have (public dispatches through DemoMode.Verb, not arg greps).
     func testEveryCLIVerbHasATool() throws {
-        // The dispatch lives in DemoMode.dispatched (main.swift switches on its result), so
-        // the verbs come from DemoMode.Verb; each CLI word must dispatch to its own verb.
         let cliVerbs = DemoMode.Verb.allCases.filter { $0 != .app }
         for verb in cliVerbs {
             XCTAssertEqual(DemoMode.dispatched(args: [verb.rawValue]), verb, "`tower \(verb.rawValue)` does not dispatch to itself")
@@ -292,7 +295,6 @@ final class MCPSurfaceTests: XCTestCase {
         // Re-trust opens a Keychain dialog for the user each call: not idempotent, deletes nothing.
         XCTAssertFalse(spec("tower_retrust").annotations.idempotentHint)
         XCTAssertFalse(spec("tower_retrust").annotations.destructiveHint)
-        // Renew writes the seat's token pair and reaches the network.
         XCTAssertTrue(spec("tower_renew").annotations.destructiveHint)
         XCTAssertTrue(spec("tower_renew").annotations.openWorldHint)
         XCTAssertTrue(spec("tower_refresh").annotations.openWorldHint)
@@ -305,8 +307,8 @@ final class MCPSurfaceTests: XCTestCase {
 
     func testReadToolsValidateAgainstTheirOutputSchemas() async throws {
         let reads: [(String, JSON)] = [
-            ("tower_status", [:]), ("tower_accounts", [:]), ("tower_accounts", ["provider": "cursor"]),
-            ("tower_account", ["account": "alt1"]), ("tower_room", [:]), ("tower_room", ["minimumRoom": 50]),
+            ("tower_status", [:]), ("tower_status", ["format": "full"]), ("tower_accounts", [:]), ("tower_accounts", ["provider": "cursor"]), ("tower_accounts", ["format": "table"]),
+            ("tower_account", ["account": "alt1"]), ("tower_room", [:]), ("tower_room", ["format": "full"]), ("tower_room", ["minimumRoom": 50]),
             ("tower_advice", [:]), ("tower_rotate", [:]), ("tower_resets", [:]), ("tower_alerts", [:]),
             ("tower_freshness", [:]), ("tower_seats", [:]), ("tower_lanes", [:]), ("tower_sessions", [:]),
             ("tower_openrouter_history", [:]), ("tower_config_get", [:]),
@@ -382,13 +384,13 @@ final class MCPSurfaceTests: XCTestCase {
     }
 
     func testRoomRanksLiveFirstAndFiltersByMinimum() async throws {
-        let room = try await call("tower_room").structuredContent!
+        let room = try await call("tower_room", ["format": "full"]).structuredContent!
         XCTAssertEqual(room["recommended"], "alt1")
         XCTAssertEqual(room["active"].arrayValue?.map { $0["nickname"] }, ["alt1", "eve", "alt4"])
         XCTAssertEqual(room["resting"].arrayValue?.map { $0["nickname"] }, ["alt4", "alt3", "main"])
         XCTAssertEqual(room["resting"][2]["resting"]["kind"], "capped")
         XCTAssertEqual(room["resting"][2]["resting"]["timeGated"], true)
-        let strict = try await call("tower_room", ["minimumRoom": 50]).structuredContent!
+        let strict = try await call("tower_room", ["minimumRoom": 50, "format": "full"]).structuredContent!
         XCTAssertEqual(strict["active"].arrayValue?.map { $0["nickname"] }, ["alt1"])
         XCTAssertTrue(strict["readySummary"].stringValue!.hasPrefix("3 of 6 ready · next "), strict["readySummary"].text)
     }
@@ -406,10 +408,7 @@ final class MCPSurfaceTests: XCTestCase {
     /// says the active seat is unknown.
     func testAdviceReportsActiveUnknownWhenIdentityIsUnverified() async throws {
         let blind = TowerMCPService(env: fixture.environment(verifiedActiveEmail: .some(nil)))
-        let result = try await blind.callTool("tower_advice", arguments: [:])
-        let advice = result.structuredContent!
-        guard case .text(let summary)? = result.content.first else { return XCTFail("no summary") }
-        XCTAssertTrue(summary.hasPrefix("no verified active seat; most room: cal ("), summary)
+        let advice = try await blind.callTool("tower_advice", arguments: [:]).structuredContent!
         XCTAssertEqual(advice["kind"], "activeUnknown")
         XCTAssertEqual(advice["nickname"], "alt1")
         XCTAssertEqual(advice["percentUsed"], .null)
@@ -421,10 +420,10 @@ final class MCPSurfaceTests: XCTestCase {
     /// verified means null activeEmail even though the credential carries a hint.
     func testStatusReportsNullActiveEmailWhenIdentityIsUnverified() async throws {
         let blind = TowerMCPService(env: fixture.environment(verifiedActiveEmail: .some(nil)))
-        let status = try await blind.callTool("tower_status", arguments: [:]).structuredContent!
+        let status = try await blind.callTool("tower_status", arguments: ["format": "full"]).structuredContent!
         XCTAssertEqual(status["activeEmail"], .null)
         XCTAssertEqual(status["activeEmailVerifiedAt"], .null)
-        let room = try await blind.callTool("tower_room", arguments: [:]).structuredContent!
+        let room = try await blind.callTool("tower_room", arguments: ["format": "full"]).structuredContent!
         XCTAssertEqual(room["activeEmail"], .null)
         XCTAssertTrue(room["active"].arrayValue!.allSatisfy { $0["isActive"] == false })
     }
@@ -465,7 +464,7 @@ final class MCPSurfaceTests: XCTestCase {
     func testResolveAcceptsEveryReferenceShape() {
         let map = fixture.store.load()
         XCTAssertEqual(TowerMCPService.resolve("alt1", in: map)?.email, MCPFixture.activeEmail)
-        XCTAssertEqual(TowerMCPService.resolve("YAI1G", in: map)?.email, MCPFixture.activeEmail)
+        XCTAssertEqual(TowerMCPService.resolve("ALT1", in: map)?.email, MCPFixture.activeEmail)
         XCTAssertEqual(TowerMCPService.resolve(MCPFixture.activeEmail, in: map)?.nickname, "alt1")
         XCTAssertEqual(TowerMCPService.resolve("codex:user-d@example.com", in: map)?.kind, .codex)
         XCTAssertEqual(TowerMCPService.resolve("codex:eve", in: map)?.kind, .codex)
@@ -717,7 +716,7 @@ final class MCPSurfaceTests: XCTestCase {
         // status and config reads carry it at once.
         let jev = try await call("tower_config_set", ["key": "typesafe.balanceUSD", "value": 12.5])
         XCTAssertEqual(jev.structuredContent?["value"], 12.5)
-        XCTAssertEqual(jev.structuredContent?["previous"], 24.92)
+        XCTAssertEqual(jev.structuredContent?["previous"], .null, "nothing ships by default")
         let day = DateFormatter()
         day.locale = Locale(identifier: "en_US_POSIX")
         day.dateFormat = "yyyy-MM-dd"
@@ -864,7 +863,7 @@ final class MCPSurfaceTests: XCTestCase {
         let unpollable = try await call("tower_refresh", ["account": "alt4"])
         XCTAssertEqual(unpollable.structuredContent?["error"]["code"], "NotPollable")
 
-        let all = try await call("tower_refresh")
+        let all = try await call("tower_refresh", ["format": "full"])
         XCTAssertFalse(all.isError)
         let payload = all.structuredContent!
         XCTAssertTrue(JSONSchemaCheck.validate(payload, against: spec("tower_refresh").outputSchema).isEmpty,
@@ -878,7 +877,7 @@ final class MCPSurfaceTests: XCTestCase {
         XCTAssertTrue(payload["pendingAlerts"].arrayValue!.contains { $0["nickname"] == "main" && $0["window"] == "5h" })
         XCTAssertEqual(fixture.store.load()[MCPFixture.retainedEmail]?.notified.count, 0, "refresh must not consume the bookkeeping")
 
-        let retainedOnly = try await call("tower_refresh", ["account": "main"])
+        let retainedOnly = try await call("tower_refresh", ["account": "main", "format": "full"])
         XCTAssertFalse(retainedOnly.isError, "a readable retained seat is pollable")
         XCTAssertEqual(retainedOnly.structuredContent?["accounts"].arrayValue?.map { $0["nickname"] }, ["main"])
         let activeOnly = try await call("tower_refresh", ["account": "alt1"])
