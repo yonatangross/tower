@@ -116,6 +116,31 @@ case .panelshot:
     while !done { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
     exit(code)
 
+case .dashboardFeed:
+    // The dashboard page's feed as JSON (reads the store only, no Keychain).
+    var feedDone = false
+    Task {
+        let feed = await DashboardFeed.build(service: TowerMCPService(env: .live()))
+        print(String(decoding: feed.encoded(pretty: true), as: UTF8.self))
+        feedDone = true
+    }
+    while !feedDone { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    exit(0)
+
+case .dashboardShot:
+    // The real web view rendered offscreen, for compares. `dial` picks the dial surface.
+    let dashOut = CommandLine.arguments.dropFirst().first(where: { $0.hasSuffix(".png") })
+        ?? "/tmp/tower-dashboard.png"
+    var dashCode: Int32 = 1
+    var dashDone = false
+    Task { @MainActor in
+        dashCode = await DashboardShot.run(to: URL(fileURLWithPath: dashOut),
+                                           surface: args.contains("dial") ? "dial" : "dash")
+        dashDone = true
+    }
+    while !dashDone { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    exit(dashCode)
+
 case .app:
     enforceSingleInstance()
     MainActor.assumeIsolated {

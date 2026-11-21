@@ -109,7 +109,7 @@ mutate payload-identity "$vault" \
               record.service == Self.service(for: payload.email),' \
   'true,
               true,' \
-  testPayloadCarriesAccessTokenAndMatchingIdentity 'mismatched payload rejected'
+  testPayloadCarriesTokenPairAndMatchingIdentity 'mismatched payload rejected'
 
 mutate disable-preference "$vault" \
   'if let setRetentionAfterSuccess { setRetentionEnabled(setRetentionAfterSuccess) }' \

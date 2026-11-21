@@ -363,24 +363,23 @@ struct SeatBoard: View {
     @State private var hoveredID: String?
 
     private static let providers: [Provider] = [.claude, .codex, .cursor]
-    /// The pool column is how much of each window is USED; the room column is what is
-    /// LEFT on the tightest one. Each heading says which, so no bare number is ambiguous.
-    static let meterHeading = "used"
-    static let roomHeading = "room"
+
+    /// A pool's section heading: "Claude · 7 seats", "Codex · 1 seat".
+    nonisolated static func poolHeading(_ provider: Provider, count: Int) -> String {
+        let name: String
+        switch provider {
+        case .claude: name = "Claude"
+        default: name = provider.label
+        }
+        return "\(name) · \(count) seat\(count == 1 ? "" : "s")"
+    }
+    static let meterHeading = "usage pools"
     /// The disclosure that holds the stale seats.
     static let staleDisclosureID = "seats.stale"
 
     private var split: (active: [AccountSnapshot],
                         resting: [(AccountSnapshot, AccountSnapshot.RestReason)]) {
         AccountSnapshot.partition(accounts, rule: .either, now: now)
-    }
-
-    private var summaryText: String {
-        // Ready means a quota seat you can act on; money rows like OpenRouter are
-        // not quota and never count.
-        MenuContent.readySummary(ready: split.active.filter { $0.kind.isRankable }.count,
-                               total: accounts.filter { $0.kind.isRankable }.count,
-                               resting: split.resting, now: now)
     }
 
     /// A seat that is only stale (no reading, no ceiling) has nothing to say until it is
@@ -436,31 +435,19 @@ struct SeatBoard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("SEATS")
-                    .font(TowerType.font(.header, weight: .semibold))
-                Spacer()
-                Text(summaryText)
-                    .font(TowerType.font(.small, design: .monospaced))
-                    .foregroundStyle(TowerType.secondary)
-            }
-
-            HStack(spacing: 4) {
-                Spacer().frame(width: TowerTextSize.pt(SeatBoardRow.leadWidth))
-                Text("seat")
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.seatWidth), alignment: .leading)
-                Text(Self.meterHeading)
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.meterWidth), alignment: .leading)
-                Text(Self.roomHeading)
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.roomWidth), alignment: .trailing)
-                Text("reset")
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.resetWidth), alignment: .trailing)
-            }
-            .font(TowerType.font(.minimum))
-            .foregroundStyle(TowerType.dim)
-
-            ForEach(shownRows, id: \.0.id) { (account, rest) in
-                row(account, rest)
+            // no board heading and no column header row (approved mockup; the operator 2026-11-01):
+            // one section per pool, its heading, then its rows
+            ForEach(Self.providers, id: \.self) { provider in
+                let shown = shownRows.filter { $0.0.kind == provider }
+                if !shown.isEmpty {
+                    Text(Self.poolHeading(provider, count: rows(for: provider).count))
+                        .font(TowerType.font(.small, weight: .semibold))
+                        .foregroundStyle(TowerType.secondary)
+                        .padding(.top, 2)
+                    ForEach(shown, id: \.0.id) { (account, rest) in
+                        row(account, rest)
+                    }
+                }
             }
 
             let folded = foldedRows
@@ -551,10 +538,6 @@ struct SeatBoardRow: View {
         return SeatUsagePresentation.restLabel(rest, account: account, now: now)
     }
 
-    private var planLabel: String {
-        account.plan.isEmpty ? (account.tier ?? "-") : account.plan
-    }
-
     /// Both switch controls use the same availability and quota reason.
     enum SwitchAction: Equatable {
         case hidden
@@ -589,6 +572,45 @@ struct SeatBoardRow: View {
         RestingDrawer.meterWindows(account, now: now)
     }
 
+    /// ONE bar per seat (approved mockup 2026-11-01): the binding window, else the week. The
+    /// other windows stay in the expanded detail.
+    nonisolated static func primaryWindow(_ account: AccountSnapshot, now: Date) -> RestingDrawer.MeterWindow? {
+        let all = RestingDrawer.meterWindows(account, now: now)
+        return all.first(where: \.isBinding)
+            ?? all.first { $0.label.hasPrefix(account.kind.primaryWindowLabel) }
+            ?? all.first
+    }
+
+    /// The line under the seat name: plan and state ("team · ready"). The product is the pool
+    /// heading above the rows, so it is not repeated here; a long plan id keeps its last word
+    /// ("unified_ultra" reads "ultra") so the state is never cut off.
+    nonisolated static func planLine(account: AccountSnapshot, rest: AccountSnapshot.RestReason?,
+                                     activeEmail: String?, now: Date) -> String {
+        let raw = account.plan.isEmpty ? (account.tier ?? "-") : account.plan
+        let plan = raw.split(separator: "_").last.map(String.init) ?? raw
+        return "\(plan) · \(stateWord(account: account, rest: rest, activeEmail: activeEmail, now: now))"
+    }
+
+    /// The row's state as a word (approved mockup): in use, ready, near cap (week 90 % or more),
+    /// 5h full (95 % or more), capped, stale, needs login, no data, Auto only.
+    nonisolated static func stateWord(account: AccountSnapshot, rest: AccountSnapshot.RestReason?,
+                                      activeEmail: String?, now: Date) -> String {
+        if account.needsLogin { return "needs login" }
+        if let rest {
+            switch rest {
+            case .capped, .cappedAndStale: return "capped"
+            case .meteredCapped: return "Auto only"
+            case .stale: return "stale"
+            case .neverCaptured: return "no data"
+            }
+        }
+        if account.kind == .claude, account.email == activeEmail { return "in use" }
+        if (account.effectiveFiveHour(now: now).pct ?? 0) >= 95 { return "5h full" }
+        // near cap on the BINDING usage, whichever window it is (a 5h at 93% leaves 7% room)
+        if (account.usedPct(now: now) ?? 0) >= 90 { return "near cap" }
+        return "ready"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Button(action: { expanded.toggle() }) {
@@ -610,7 +632,7 @@ struct SeatBoardRow: View {
                         // ultra" is what tells the subscription seat from the
                         // "cursor / model auto" agent row (#96). It also separates
                         // same-nickname seats across providers.
-                        Text("\(account.kind.label.lowercased()) \(planLabel)")
+                        Text(Self.planLine(account: account, rest: rest, activeEmail: activeEmail, now: now))
                             .font(TowerType.font(.small))
                             .foregroundStyle(TowerType.secondary)
                             .lineLimit(1)
@@ -647,7 +669,7 @@ struct SeatBoardRow: View {
                         }
                         .frame(width: TowerTextSize.pt(Self.meterWidth), alignment: .leading)
                     } else {
-                        SegmentedMeter(windows: windows)
+                        SegmentedMeter(windows: Self.primaryWindow(account, now: now).map { [$0] } ?? [])
                             .frame(width: TowerTextSize.pt(Self.meterWidth), alignment: .leading)
                     }
 
@@ -804,40 +826,26 @@ struct MoneyBoard: View {
     /// The disclosure id a model's fold is stored under.
     nonisolated static func disclosureID(_ model: TypeSafe.Model) -> String { "money.\(model.rawValue)" }
 
+    /// Money is one balance line (approved mockup; the operator 2026-11-01): "openrouter  $12.32
+    /// left of $240". A whole-dollar total prints without cents.
+    nonisolated static func balanceLine(available: Double, limit: Double) -> String {
+        let total = limit == limit.rounded() ? "$\(Int(limit))" : "$" + String(format: "%.2f", limit)
+        return "openrouter  $\(String(format: "%.2f", available)) left of \(total)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("MONEY")
-                .font(TowerType.font(.header, weight: .semibold))
-
             switch orOutcome {
             case .notConfigured:
                 EmptyView()
             case .ok(let budget):
                 HStack(spacing: 4) {
                     ProviderIcon(provider: .openrouter)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("openrouter")
-                            .font(TowerType.font(.body, weight: .semibold))
-                        Text("cash")
-                            .font(TowerType.font(.minimum))
-                            .foregroundStyle(TowerType.secondary)
-                    }
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.seatWidth + 10), alignment: .leading)
-                    .padding(.leading, 2)
-
-                    MoneyMeter(remaining: budget.available, total: budget.limit)
-                        .frame(width: TowerTextSize.pt(SeatBoardRow.meterWidth), alignment: .leading)
-
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text("$\(String(format: "%.2f", budget.available)) left")
-                            .font(TowerType.font(.small, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Self.balanceTint(budget.availablePct))
-                        Text(deltaText)
-                            .font(TowerType.font(.minimum))
-                            .foregroundStyle(TowerType.secondary)
-                    }
-                    .frame(width: TowerTextSize.pt(SeatBoardRow.roomWidth + SeatBoardRow.resetWidth + 6),
-                           alignment: .trailing)
+                    Text(Self.balanceLine(available: budget.available, limit: budget.limit))
+                        .font(TowerType.font(.body, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Self.balanceTint(budget.availablePct))
+                        .lineLimit(1)
+                        .help(deltaText)
                 }
             case .rejected(let code, _, _):
                 HStack(spacing: 4) {
@@ -1048,12 +1056,29 @@ struct LaneBoard: View {
     nonisolated static let panelWidth: CGFloat = TowerType.panelWidth
     nonisolated static let usageWidth: CGFloat = panelWidth - 2 * 10 - 24 - 6
     nonisolated static let usageLines = 2
+    /// The lane rows fold to one line under the pools (approved mockup; review 2026-11-01:
+    /// keep LANES, folded to "Lanes · 4").
+    var open: Binding<Bool> = .constant(true)
+
+    nonisolated static func foldedLine(count: Int) -> String { "Lanes · \(count)" }
+
+    private var laneCount: Int {
+        AgentLane.lanes.filter {
+            if case .notConfigured = outcomes[$0] ?? .notConfigured { return false }
+            return true
+        }.count
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("LANES")
-                .font(TowerType.font(.header, weight: .semibold))
+            Button(action: { open.wrappedValue.toggle() }) {
+                Text((open.wrappedValue ? "▾ " : "▸ ") + Self.foldedLine(count: laneCount))
+                    .font(TowerType.font(.header, weight: .semibold))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
+            if open.wrappedValue {
             ForEach(AgentLane.lanes, id: \.self) { provider in
                 switch outcomes[provider] ?? .notConfigured {
                 case .notConfigured:
@@ -1125,6 +1150,7 @@ struct LaneBoard: View {
                     }
                     .help("\(provider.label), \(provider.vendorName) account")
                 }
+            }
             }
         }
     }
@@ -1228,6 +1254,17 @@ struct SessionsBoard: View {
         probed ? "session probe unavailable" : "not read yet"
     }
 
+    /// The folded list's one line (approved mockup): "Sessions · 43 running · 9 busy". An unknown
+    /// count stays "?", never 0.
+    nonisolated static func foldedLine(_ agents: AgentSummary?) -> String {
+        guard let agents else { return "Sessions · ?" }
+        let busy = agents.interactive.filter(\.isBusy).count
+        return "Sessions · \(agents.interactive.count) running · \(busy) busy"
+    }
+
+    /// The whole list folds behind that line by default; the line opens it.
+    var listOpen: Binding<Bool> = .constant(true)
+
     nonisolated static func idleLine(count: Int, open: Bool) -> String {
         "\(open ? "-" : "+") \(count) idle"
     }
@@ -1257,13 +1294,12 @@ struct SessionsBoard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(Self.heading(agents))
-                    .font(TowerType.font(.header, weight: .semibold))
-                if let line = Self.busyIdleLine(agents) {
-                    Text(line)
-                        .font(TowerType.font(.small))
-                        .foregroundStyle(TowerType.secondary)
+                Button(action: { listOpen.wrappedValue.toggle() }) {
+                    Text((listOpen.wrappedValue ? "▾ " : "▸ ") + Self.foldedLine(agents))
+                        .font(TowerType.font(.header, weight: .semibold))
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 if let count = agents?.backgroundCount, count > 0 {
                     Text("+\(count) bg")
                         .font(TowerType.font(.minimum))
@@ -1297,7 +1333,7 @@ struct SessionsBoard: View {
                 Text("none")
                     .font(TowerType.font(.small))
                     .foregroundStyle(TowerType.secondary)
-            } else {
+            } else if listOpen.wrappedValue {
                 let groups = agents!.groups
                 let idle = groups.filter { !$0.busy }
                 let showAccount = agents!.unattributedReason == nil

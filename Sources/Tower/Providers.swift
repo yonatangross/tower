@@ -572,9 +572,9 @@ enum OpenRouter {
     }
 
     /// A pay-as-you-go BALANCE. OpenRouter's own dashboard leads with exactly one number,
-    /// "TOTAL AVAILABLE $<usd>", and so should this.
+    /// "TOTAL AVAILABLE $15.20", and so should this.
     ///
-    /// `limit` is NOT a budget: it is cumulative lifetime top-ups (for example $25 + $25), so
+    /// `limit` is NOT a budget: it is cumulative lifetime top-ups ($20 + $20 here), so
     /// "62% used" measures nothing an operator can act on. The actionable quantity is what
     /// is LEFT, and the alarm has to fire when that runs low, not when spend runs high.
     struct Budget: Equatable {
@@ -728,10 +728,9 @@ enum OpenRouter {
         }
     }
 
-    /// Where the OpenRouter key comes from. Both settings are optional; with neither,
-    /// the MONEY section reports OpenRouter as not configured and stays hidden.
+    /// Where the key can come from, in order:
     ///
-    /// - `openRouterKeyCommand` (a string array in Tower's settings domain): an executable
+    /// - `openRouterKeyCommand` (array of strings): a command the user configures,
     ///   and its arguments, run without a shell, whose stdout is the key. Use it for a
     ///   password manager read. When it is set it is the only source: an exported copy
     ///   of an old key must never override the manager after a rotation.
@@ -974,8 +973,8 @@ enum OpenRouter {
         case ok(Budget)
     }
 
-    /// Verified live 2026-08-03: HTTP 200, `{"data":{"total_credits":<usd>,
-    /// "total_usage":<usd>}}`. This is a PREPAID BALANCE, not a monthly spend budget.
+    /// Verified live 2026-08-03: HTTP 200, `{"data":{"total_credits":40,
+    /// "total_usage":24.8006…}}`. This is a PREPAID BALANCE, not a monthly spend budget.
     ///
     /// The account publishes its own ceiling, so read it rather than guess; the manual
     /// `monthlyBudgetUSD` key stays as an override for a self-imposed cap.
@@ -1068,10 +1067,14 @@ enum TypeSafe {
     /// account-based provider.
     static let storeEmail = "typesafe@local"
 
-    /// NOT LIVE, and it must never look like it is: no endpoint publishes the balance, so
-    /// the figure is entered by hand and goes stale between entries. Nothing ships by
-    /// default: with no entry the row is hidden. The traffic light below (amber under
-    /// USD 10, red under USD 5) is applied to the entered figure.
+    /// The entered credit balance, read off the console Billing page by the operator on
+    /// manualBalanceAsOf. NOT LIVE, and it must never look like it is: no endpoint
+    /// publishes the balance, so this figure is entered by hand and goes stale between
+    /// entries. It is the shipped fallback; a re-entry through `balanceKey` overrides it.
+    /// The traffic light below (amber under USD 10, red under USD 5) is applied to
+    /// whichever figure is current.
+    static let manualBalanceUSD = 24.92
+    static let manualBalanceAsOf = "2026-09-18"
 
     /// The decision models TypeSafe sells credits for. Order is the panel order.
     enum Model: String, CaseIterable, Sendable {
@@ -1373,15 +1376,15 @@ enum CursorAuth {
 /// non-`ok` outcome rather than a zero, because a zero bar and "we could not ask" must
 /// never render the same way.
 ///
-/// Wire shape VERIFIED LIVE 2026-09-19 against an Ultra account (values invented):
+/// Wire shape VERIFIED LIVE 2026-09-19 against the operator's own Ultra account:
 ///
 ///   GET /api/usage-summary
 ///   {
-///     "billingCycleEnd":"2026-10-01T00:00:00.000Z",
+///     "billingCycleEnd":"2026-09-23T17:36:41.000Z",
 ///     "membershipType":"ultra",
 ///     "individualUsage":{"plan":{
-///       "autoPercentUsed":41.5,
-///       "apiPercentUsed":12.25
+///       "autoPercentUsed":73.004,
+///       "apiPercentUsed":79.992
 ///     },"onDemand":{"enabled":false}}
 ///   }
 ///
@@ -1646,7 +1649,7 @@ enum CursorUsage {
 /// Operator report 2026-09-22 (not re-measured here): the pool that sits at 97 to 100 %
 /// is the METERED one, "Other Models" (`apiPercentUsed`), which is where Opus runs.
 /// Cursor Auto is unmetered and keeps running when that pool is full. The dashboard names
-/// ("Cursor Models", "Other Models") hid that, and conductors twice read a full metered
+/// ("Cursor Models", "Other Models") hid that, and reviewers twice read a full metered
 /// pool as a dead Cursor seat. The stored labels stay the dashboard's, since the mirror
 /// and the store key on them; only what a person reads changes.
 enum CursorPool {
@@ -1724,7 +1727,7 @@ enum CursorPool {
 
 /// Rows for the three agent CLIs whose usage is NOT exposed anywhere this app can read.
 ///
-/// Measured 2026-09-16 on a development machine, read-only, before a line of this existed:
+/// Measured 2026-09-16 on the operator's machine, read-only, before a line of this existed:
 ///
 ///   devin 3000.10.27  The TUI's "% remaining" banner is fetched by a GetUserStatus call (the
 ///                     string and the RPC name are both in the binary) and is never written
@@ -1732,7 +1735,7 @@ enum CursorPool {
 ///                     ~/.local/share/devin/cli/logs whenever a call is refused.
 ///   muse 1.3.0        No usage or stats command. Its local tracing log records the terminal
 ///                     state of every model stream, including `reason="rate_limited"
-///                     http_status=429` (a small share of terminal events in one sample).
+///                     http_status=429` (61 of 1913 terminal events on this machine).
 ///   agy 1.2.4         Has `/usage` and `/quota` in the TUI, backed by a
 ///                     RetrieveUserQuotaSummary call, but its logs record only
 ///                     "doRefreshQuota: starting reload", never a value.
@@ -1794,6 +1797,15 @@ enum AgentLane {
         var bindingRemainingPct: Double? {
             [dailyRemainingPct, weeklyRemainingPct].compactMap { $0 }.min()
         }
+
+        /// Whether the tool fetched this status inside the freshness TTL. Fail closed: no
+        /// fetch time, a future one, or an old one is not live. Devin showed 100% left from
+        /// a status read hours earlier (2026-10-28) while its quota was exhausted.
+        func isLive(now: Date) -> Bool {
+            guard let fetchedAt else { return false }
+            let age = now.timeIntervalSince(fetchedAt)
+            return age >= 0 && age <= AccountSnapshot.freshnessTTL
+        }
     }
 
     /// The section header for lanes that read nothing. Stated, never left for the
@@ -1801,10 +1813,13 @@ enum AgentLane {
     static let headerDetail = "usage not exposed"
 
     /// Per-reading header detail: a real quota earns its tightest remaining percent.
-    static func headerDetail(_ r: Reading) -> String {
+    static func headerDetail(_ r: Reading, now: Date? = nil) -> String {
         switch r.usage {
         case .quota(let q):
             let plan = q.plan.map { "\($0) · " } ?? ""
+            if let now, !q.isLive(now: now) {
+                return "\(plan)? room unknown, status \(staleAge(q, now: now))"
+            }
             if let pct = q.bindingRemainingPct {
                 return "\(plan)\(Int(pct.rounded()))% left"
             }
@@ -1815,15 +1830,23 @@ enum AgentLane {
         }
     }
 
+    /// "read 4h ago" or "never fetched", for the unknown-room wording.
+    static func staleAge(_ q: Quota, now: Date) -> String {
+        q.fetchedAt.map { "read \(CLI.age($0, now: now))" } ?? "has no fetch time"
+    }
+
     /// The body line for the usage reading, or nil when the lane exposes nothing and
     /// the header already says so. A `notReadable` always carries its reason: the
     /// panel's standing rule is "not readable, reason", never a fake number.
-    static func usageLine(_ r: Reading) -> String? {
+    static func usageLine(_ r: Reading, now: Date? = nil) -> String? {
         switch r.usage {
         case .notExposed: return nil
         case .notReadable(let why): return "not readable: \(why)"
         case .spend(let s): return PiLane.spendLine(s)
         case .quota(let q):
+            if let now, !q.isLive(now: now) {
+                return "? room unknown, status \(staleAge(q, now: now))"
+            }
             var parts: [String] = []
             if let d = q.dailyRemainingPct {
                 parts.append("daily \(Int(d.rounded()))% left"
@@ -1921,13 +1944,20 @@ enum AgentLane {
         lane == .agy ? "gemini" : lane.rawValue
     }
 
+    /// Every `kind` a lane's dispatches are recorded under. agy has two: the dispatcher
+    /// writes "gemini" and its shell wrapper writes "agy" (2026-10-31: an agy station ran
+    /// all morning while the row still showed a dispatch from 10-11).
+    static func ledgerKinds(_ lane: Provider) -> [String] {
+        lane == .agy ? ["gemini", "agy"] : [ledgerKind(lane)]
+    }
+
     /// Settings key for the optional dispatch ledger directory.
     static let dispatchLedgerDirectoryKey = "dispatchLedgerDirectory"
 
     /// Optional integration: a directory holding `dispatch-worktrees.jsonl` and
-    /// `lanes.jsonl`, the ledgers a dispatcher (for example a herdr plugin) writes when it
+    /// `lanes.jsonl`, the ledgers a dispatcher (for example a dispatcher plugin) writes when it
     /// opens an agent lane. Tower only reads them. Named by `TOWER_DISPATCH_LEDGER_DIR`,
-    /// herdr's own `HERDR_PLUGIN_STATE_DIR`, or the `dispatchLedgerDirectory` setting, in
+    /// the dispatcher's own `HERDR_PLUGIN_STATE_DIR`, or the `dispatchLedgerDirectory` setting, in
     /// that order. With none set there is no ledger and the lane rows say so; Tower never
     /// guesses a path.
     static func dispatchLedgerDirectory(home: URL, env: [String: String],
@@ -2220,15 +2250,15 @@ enum AgentLane {
     static func meters(_ r: Reading, cursorSeat: AccountSnapshot?, now: Date) -> [Meter] {
         switch r.provider {
         case .cursor:
-            guard let seat = cursorSeat else { return [] }
-            let age = seat.worstTrust(now: now) == .live ? nil : CLI.age(seat.capturedAt, now: now)
+            guard let seat = cursorSeat, seat.worstTrust(now: now) == .live else { return [] }
+            let age: String? = nil
             return [(CursorPool.autoLabel, "Auto"), (CursorPool.meteredLabel, "Opus")]
                 .compactMap { stored, label in
                     CursorPool.poolPct(seat, stored, now: now)
                         .map { Meter(label: label, usedPct: $0, age: age) }
                 }
         default:
-            guard case .quota(let q) = r.usage else { return [] }
+            guard case .quota(let q) = r.usage, q.isLive(now: now) else { return [] }
             // The same line the usage text uses: a status older than an hour is old.
             let age = q.fetchedAt.flatMap { fetched in
                 now.timeIntervalSince(fetched) > 3600 ? CLI.age(fetched, now: now) : nil
@@ -2305,6 +2335,10 @@ enum AgentLane {
     /// Cursor seat or no pool is on file.
     static func cursorSeatLine(_ seat: AccountSnapshot?, now: Date) -> String? {
         guard let seat, seat.kind == .cursor else { return nil }
+        // A pool percent from a capture past the TTL is a rumour, not a reading.
+        guard seat.worstTrust(now: now) == .live else {
+            return "seat \(seat.nickname): ? pools unknown, read \(CLI.age(seat.capturedAt, now: now))"
+        }
         let pools = [CursorPool.autoLabel, CursorPool.meteredLabel].compactMap { label -> String? in
             CursorPool.poolPct(seat, label, now: now)
                 // Truncated like the seat row's meter text, so the two never disagree.
@@ -2322,7 +2356,7 @@ enum AgentLane {
     /// pools when a seat is on file, and says why not when none is. Every other lane
     /// reads exactly as `usageLine(_:)`.
     static func usageLine(_ r: Reading, cursorSeat: AccountSnapshot?, now: Date) -> String? {
-        guard r.provider == .cursor, case .notReadable = r.usage else { return usageLine(r) }
+        guard r.provider == .cursor, case .notReadable = r.usage else { return usageLine(r, now: now) }
         return cursorSeatLine(cursorSeat, now: now)
             ?? "not readable: agent quota lives in-session and no Cursor seat is on file"
     }
@@ -2330,8 +2364,32 @@ enum AgentLane {
     /// The header detail with the Cursor seat folded in, same rule as the usage line.
     static func headerDetail(_ r: Reading, cursorSeat: AccountSnapshot?, now: Date) -> String {
         guard r.provider == .cursor, case .notReadable = r.usage,
-              let line = cursorSeatLine(cursorSeat, now: now) else { return headerDetail(r) }
+              let line = cursorSeatLine(cursorSeat, now: now) else { return headerDetail(r, now: now) }
         return line
+    }
+
+    // MARK: Room, fail closed
+
+    /// Percent of room left on the lane, or nil when it is unknown. Unknown covers every
+    /// way a number could be old or missing: a status past the freshness TTL, no fetch
+    /// time, a Cursor seat captured past the TTL, and lanes that expose no usage at all.
+    static func roomPct(_ r: Reading, cursorSeat: AccountSnapshot?, now: Date) -> Double? {
+        if r.provider == .cursor {
+            guard let seat = cursorSeat, seat.kind == .cursor,
+                  seat.worstTrust(now: now) == .live,
+                  let used = seat.trustedUsedPct(now: now) else { return nil }
+            return max(0, 100 - used)
+        }
+        guard case .quota(let q) = r.usage, q.isLive(now: now),
+              let left = q.bindingRemainingPct else { return nil }
+        return max(0, left)
+    }
+
+    /// Whether the lane may be offered for dispatch: known room above the cap line.
+    /// Unknown is never recommended.
+    static func isRecommendable(_ r: Reading, cursorSeat: AccountSnapshot?, now: Date) -> Bool {
+        guard let room = roomPct(r, cursorSeat: cursorSeat, now: now) else { return false }
+        return room > 100 - AccountSnapshot.cappedPct
     }
 
     // MARK: Reading from disk
@@ -2493,13 +2551,15 @@ enum AgentLane {
         // Two ledgers record a dispatch: worktree dispatches in dispatch-worktrees.jsonl
         // and conveyor-opened lanes in lanes.jsonl. Neither is complete alone (devin lanes
         // only ever reach the second), so the newest of both wins.
-        let worktreeDispatch = ledgerDir.flatMap { dir in (try? String(
+        let kinds = ledgerKinds(lane)
+        let worktreeNewest = ledgerDir.flatMap { dir in (try? String(
             contentsOf: dir.appendingPathComponent("dispatch-worktrees.jsonl"),
-            encoding: .utf8)).flatMap { newestDispatches(ledger: $0)[ledgerKind(lane)] } }
-        let laneDispatch = ledgerDir.flatMap { dir in (try? String(
+            encoding: .utf8)).map { newestDispatches(ledger: $0) } } ?? [:]
+        let laneNewest = ledgerDir.flatMap { dir in (try? String(
             contentsOf: dir.appendingPathComponent("lanes.jsonl"),
-            encoding: .utf8)).flatMap { newestLaneEntries(ledger: $0)[ledgerKind(lane)] } }
-        let dispatch = [worktreeDispatch, laneDispatch].compactMap { $0 }.max { $0.at < $1.at }
+            encoding: .utf8)).map { newestLaneEntries(ledger: $0) } } ?? [:]
+        let dispatch = kinds.flatMap { [worktreeNewest[$0], laneNewest[$0]] }
+            .compactMap { $0 }.max { $0.at < $1.at }
 
         let usage: UsageRead
         switch lane {

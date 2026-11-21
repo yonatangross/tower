@@ -249,9 +249,9 @@ enum SettingsConfig {
 
     /// Every key tower_config_set accepts, as the schema enum lists them. The consent keys
     /// are not among them.
-    static let allConfigKeys: [JSON] = ["retainClaudeSeats", "launchAtLogin", "openrouter.monthlyBudgetUSD",
+    static let allConfigKeys: [JSON] = ["retainClaudeSeats", "launchAtLogin", "panel.surface", "openrouter.monthlyBudgetUSD",
                                         "typesafe.balanceUSD", "cloudflare.clef.balanceUSD", "typesafe.clef.balanceUSD",
-                                        "knownAccounts", "retiredAccounts"]
+                                        "knownAccounts", "retiredAccounts", "alerts.switchThresholdPct"]
 
     static func json(defaults: UserDefaults) -> JSON {
         let a = AlertSettings.current(defaults: defaults)

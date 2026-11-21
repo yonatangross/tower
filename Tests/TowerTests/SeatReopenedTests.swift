@@ -39,7 +39,7 @@ final class SeatReopenedTests: XCTestCase {
 
     func testStaleSeatWhoseWindowsAllPassedReadsReopenedAndStaysUnranked() {
         // Captured two days ago at 80 / 90, both windows reset since.
-        var gone = seat("fay", age: 2 * 86_400, five: 80, fiveReset: -16 * 3_600,
+        var gone = seat("main", age: 2 * 86_400, five: 80, fiveReset: -16 * 3_600,
                         weekly: 90, weeklyReset: -3_600)
         gone.lastError = "needs login"
 
@@ -72,7 +72,7 @@ final class SeatReopenedTests: XCTestCase {
     }
 
     func testStaleSeatWithOnePassedAndOneFutureWindowKeepsTheFutureWindowsCachedRoom() {
-        let mixed = seat("dee", age: 22 * 3_600, five: 60, fiveReset: -3 * 3_600,
+        let mixed = seat("alt2", age: 22 * 3_600, five: 60, fiveReset: -3 * 3_600,
                          weekly: 85, weeklyReset: 2 * 86_400)
 
         let display = SeatUsagePresentation(account: mixed, now: now)
@@ -118,7 +118,7 @@ final class SeatReopenedTests: XCTestCase {
             .appendingPathComponent("seat-reopened-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = Store(dir: dir, now: { self.now })
-        let raw = seat("fay", age: 17 * 3_600, five: 90, fiveReset: -16 * 3_600,
+        let raw = seat("main", age: 17 * 3_600, five: 90, fiveReset: -16 * 3_600,
                        weekly: 24, weeklyReset: 4 * 86_400)
 
         XCTAssertNil(store.save([raw.email: raw]))

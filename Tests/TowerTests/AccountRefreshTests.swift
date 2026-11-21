@@ -80,9 +80,9 @@ final class AccountRefreshTests: XCTestCase {
         let active = ClaudeCredential(
             service: Keychain.defaultService, accessToken: "same-token",
             subscriptionType: "max", rateLimitTier: nil,
-            expiresAt: now.addingTimeInterval(3600), emailHint: "ana@example.test")
-        let first = ClaudeConfigIdentity(email: "ana@example.test", modifiedAt: 100, readable: true)
-        let switched = ClaudeConfigIdentity(email: "ben@example.test", modifiedAt: 200, readable: true)
+            expiresAt: now.addingTimeInterval(3600), emailHint: "alt3@example.test")
+        let first = ClaudeConfigIdentity(email: "alt3@example.test", modifiedAt: 100, readable: true)
+        let switched = ClaudeConfigIdentity(email: "alt4@example.test", modifiedAt: 200, readable: true)
         XCTAssertTrue(tracker.observe(credentials: [active], identity: first)
             .changedCredentials.isEmpty)
         let after = tracker.observe(credentials: [active], identity: switched)
@@ -91,7 +91,7 @@ final class AccountRefreshTests: XCTestCase {
         XCTAssertEqual(after.changedCredentials.map(\.accessToken), ["same-token"])
         XCTAssertTrue(tracker.observe(credentials: [active], identity: switched)
             .changedCredentials.isEmpty)
-        let touched = ClaudeConfigIdentity(email: "ben@example.test", modifiedAt: 999, readable: true)
+        let touched = ClaudeConfigIdentity(email: "alt4@example.test", modifiedAt: 999, readable: true)
         XCTAssertTrue(tracker.observe(credentials: [active], identity: touched)
             .changedCredentials.isEmpty)
         XCTAssertFalse(tracker.observe(credentials: [active], identity: touched).identityChanged)
@@ -102,8 +102,8 @@ final class AccountRefreshTests: XCTestCase {
         let active = ClaudeCredential(
             service: Keychain.defaultService, accessToken: "same-token",
             subscriptionType: "max", rateLimitTier: nil,
-            expiresAt: now.addingTimeInterval(3600), emailHint: "ana@example.test")
-        let first = ClaudeConfigIdentity(email: "ana@example.test", modifiedAt: 100, readable: true)
+            expiresAt: now.addingTimeInterval(3600), emailHint: "alt3@example.test")
+        let first = ClaudeConfigIdentity(email: "alt3@example.test", modifiedAt: 100, readable: true)
         let gone = ClaudeConfigIdentity(email: nil, modifiedAt: nil, readable: false)
         _ = tracker.observe(credentials: [active], identity: first)
         let after = tracker.observe(credentials: [active], identity: gone)
@@ -117,11 +117,11 @@ final class AccountRefreshTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(".claude.json")
-        try Data(#"{"oauthAccount":{"emailAddress":"cal@example.test"}}"#.utf8)
+        try Data(#"{"oauthAccount":{"emailAddress":"alt1@example.test"}}"#.utf8)
             .write(to: url)
         let identity = ClaudeConfigIdentity.read(at: url)
         XCTAssertTrue(identity.readable)
-        XCTAssertEqual(identity.email, "cal@example.test")
+        XCTAssertEqual(identity.email, "alt1@example.test")
         XCTAssertNotNil(identity.modifiedAt)
         let missing = ClaudeConfigIdentity.read(at: dir.appendingPathComponent("absent.json"))
         XCTAssertFalse(missing.readable)
@@ -214,6 +214,38 @@ final class AccountRefreshTests: XCTestCase {
                 XCTAssertNil(rows[email]?.lastError)
             }
         }
+    }
+
+    func testRefusedRosterSaveDoesNotRecordVerifiedActiveSeat() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = Store(dir: dir, now: { self.now })
+        let readable = AccountSnapshot(
+            email: "known@example.test", nickname: "known", plan: "max", fiveHourPct: 10,
+            fiveHourResetsAt: now.addingTimeInterval(3600), weeklyPct: 20,
+            weeklyResetsAt: now.addingTimeInterval(3600), capturedAt: now)
+        let encoded = try JSONEncoder().encode([readable.email: readable])
+        var rows = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        rows["future@example.test"] = ["email": "future@example.test", "provider": "future"]
+        let original = try JSONSerialization.data(withJSONObject: rows, options: [.sortedKeys])
+        try original.write(to: dir.appendingPathComponent("accounts.json"))
+        let previousVerification = now.addingTimeInterval(-60)
+        store.recordVerifiedActiveSeatUnlocked(
+            "previous@example.test", token: "fixture-previous", now: previousVerification)
+
+        let active = ClaudeCredential(
+            service: Keychain.defaultService, accessToken: "fixture-active", subscriptionType: "max",
+            rateLimitTier: nil, expiresAt: now.addingTimeInterval(3600), emailHint: "active@example.test")
+        let result = await Refresher.refreshClaudeRoster(
+            store: store, credentials: { [active] }, fetch: { _ in self.reading("active", pct: 40) }, now: now)
+
+        XCTAssertNotNil(result.saveError)
+        XCTAssertEqual(try Data(contentsOf: dir.appendingPathComponent("accounts.json")), original)
+        XCTAssertEqual(
+            store.verifiedActiveSeat(),
+            VerifiedActiveSeat(
+                email: "previous@example.test", verifiedAt: previousVerification,
+                tokenDigest: VerifiedActiveSeat.digest(of: "fixture-previous")))
     }
 
     func testFailureDoesNotPreventLaterAccountsFromRefreshing() async throws {

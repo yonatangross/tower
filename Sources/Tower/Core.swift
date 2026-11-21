@@ -77,9 +77,6 @@ enum DateParse {
 }
 
 // MARK: - Nicknames
-// The short name a seat shows. By default the first six characters of the email's
-// local part. A `nicknames.json` object ({"email": "nickname"}) in the support
-// directory overrides it per address; it is read once at launch.
 
 enum Nickname {
     static let overridesFileName = "nicknames.json"
@@ -378,8 +375,11 @@ enum Keychain {
             service: service, accessToken: token,
             subscriptionType: (o["subscriptionType"] as? String) ?? "?",
             rateLimitTier: o["rateLimitTier"] as? String,
-            // Only the access token is read. The refresh token stays with Claude Code.
-            expiresAt: exp, emailHint: emailHint)
+            expiresAt: exp, emailHint: emailHint,
+            // #58: the pair travels together into the retained seat, so the seat can be
+            // renewed once the CLI has moved on to another login.
+            refreshToken: o["refreshToken"] as? String,
+            scopes: (o["scopes"] as? [String]) ?? [])
     }
 
     /// Kept for callers that only need the currently signed-in credential.
@@ -940,6 +940,22 @@ struct AccountSnapshot: Codable, Identifiable {
         }
     }
 
+    /// The window that binds right now, counting only windows with a live capture. Same rule as
+    /// `trustedUsedPct`, but it also says WHICH window and when it resets, because the switch
+    /// notification is keyed per window crossing. nil when nothing live is known.
+    func liveBindingWindow(now: Date = Date()) -> (window: String, pct: Double, resetsAt: Date?)? {
+        guard !needsLogin else { return nil }
+        var best: (window: String, pct: Double, resetsAt: Date?)?
+        if kind.hasFiveHourWindow, trustFiveHour(now: now) == .live,
+           let p = effectiveFiveHour(now: now).pct {
+            best = ("5h", p, fiveHourResetsAt)
+        }
+        if trustWeekly(now: now) == .live, let p = effectiveWeekly(now: now).pct, p > (best?.pct ?? -1) {
+            best = (kind.primaryWindowLabel, p, weeklyResetsAt)
+        }
+        return best
+    }
+
     /// One-release alias for `trustedUsedPct`, kept while the `trustedHeadroomPct`
     /// JSON key still ships on the MCP surface.
     func trustedHeadroomPct(now: Date = Date()) -> Double? {
@@ -990,7 +1006,7 @@ struct AccountSnapshot: Codable, Identifiable {
         /// is a real promise. A stale row is the opposite, an ACTION: its numbers are merely
         /// unknown, so switching into it and refreshing resolves it immediately. Showing a
         /// reset date beside a stale row implies it is unavailable until then, which is
-        /// false, and ben demonstrated it live (7d at 91%, 5h already reset, so usable now,
+        /// false, and alt4 demonstrated it live (7d at 91%, 5h already reset, so usable now,
         /// yet the drawer advertised "opens Aug 5 02:00").
         var isTimeGated: Bool {
             switch self {
@@ -1115,7 +1131,7 @@ struct AccountSnapshot: Codable, Identifiable {
         /// Already on the best account. `next` names the runner-up so the line still says
         /// something forward-looking rather than merely confirming the status quo.
         case stay(nick: String, pct: Double?, next: String?)
-        /// `nick` is the ACCOUNT (ana), `via` the Chrome display profile and, when needed,
+        /// `nick` is the ACCOUNT (alt3), `via` the Chrome display profile and, when needed,
         /// the chooser row to select after `/login` opens Google.
         case switchTo(nick: String, pct: Double?, via: ChromeProfileHint?)
         /// Which seat the CLI holds could not be established, so "switch to the best
@@ -1134,7 +1150,7 @@ struct AccountSnapshot: Codable, Identifiable {
         /// `/login`, NOT `claude-switch`. The latter is a zsh function over a profile
         /// directory that has not been written to since April and covers 4 of 6 accounts;
         /// printing it gave the operator a command that would fail, or worse, succeed at
-        /// rolling `~/.claude.json` back four months (measured: a switch to the ben
+        /// rolling `~/.claude.json` back four months (measured: a switch to the alt4
         /// snapshot drops ~50 config keys, 2 MCP servers and 5 projects).
         ///
         /// The real switch is `/login` inside Claude Code followed by signing in through
@@ -1160,10 +1176,23 @@ struct AccountSnapshot: Codable, Identifiable {
         activeEmail: String?,
         accounts: [AccountSnapshot],
         switchProfiles: [String: ChromeProfileHint] = [:],
+        switchThresholdPct: Double = SwitchThreshold.defaultPct,
         rule: RestRule = .either,
         now: Date = Date()
     ) -> Advice {
         let split = partition(accounts, rule: rule, now: now)
+        // The active seat's binding window has reached the operator's switch mark (2026-11-06:
+        // "why don't you tell me at 80 %"): name the roomiest seat with a live reading. This runs
+        // before the profile filter below, which hid every seat Tower holds no Chrome profile for
+        // and left the advice on the seat that was filling up. `/login` works for any seat; a
+        // missing profile only drops the hint.
+        let away = activeEmail.flatMap {
+            switchAway(activeEmail: $0, accounts: accounts, thresholdPct: switchThresholdPct, rule: rule, now: now)
+        }
+        if let away, let target = away.target {
+            return .switchTo(nick: target.nickname, pct: target.trustedUsedPct(now: now),
+                             via: switchProfiles[target.email])
+        }
         // The active seat's reply had no 5h window: it cannot rank, but it is where the operator
         // stands with a live weekly reading, so the answer stays there and names the gap. Only
         // while that week has room: a capped week falls through to the switch (HOLD 6560661767),
@@ -1179,6 +1208,13 @@ struct AccountSnapshot: Codable, Identifiable {
                 nick: active.nickname,
                 weekRoomPct: active.effectiveWeekly(now: now).pct.map { max(0, 100 - $0) },
                 next: next?.nickname)
+        }
+        // Over the mark with a live reading, and no seat that is better: stay. Without this, a seat
+        // with a live 5h reading and no weekly reading (so not recommendable) skipped the stay in
+        // the improvement branch below and moved to a BUSIER seat (b111 HOLD on #150). A seat at the
+        // cap is not a place to stay, so it keeps falling through to switch or all resting.
+        if let away, away.target == nil, away.pct < cappedPct {
+            return .stay(nick: away.active.nickname, pct: away.pct, next: nil)
         }
         // Claude only: this advises what to pass to `claude-switch`, and a Codex row is not
         // a candidate for that however much headroom it has.
@@ -1209,8 +1245,8 @@ struct AccountSnapshot: Codable, Identifiable {
             // you are already on has no profile file, it cannot appear in `usable` at all, so
             // `usable.first` can easily be worse than where you are standing.
             //
-            // Observed 2026-08-16: active dee had 31% room and exactly one account was
-            // switchable, ben at 6%. The panel advised "switch to ben · 94% used" — a
+            // Observed 2026-08-16: active alt2 had 31% room and exactly one account was
+            // switchable, alt4 at 6%. The panel advised "switch to alt4 · 94% used" — a
             // recommendation to move to the most exhausted account on the fleet.
             //
             // Both sides must have current captures. The active poll can fail, and its
@@ -1245,12 +1281,40 @@ struct AccountSnapshot: Codable, Identifiable {
         return .stay(nick: best.nickname, pct: pct, next: next)
     }
 
+    /// The active Claude seat has crossed the switch mark. `target` is the roomiest other Claude seat
+    /// with a live reading that is not resting and is strictly less used than the active one; nil when
+    /// there is none (the caller says so rather than naming a worse seat).
+    struct SwitchAway {
+        let active: AccountSnapshot
+        let window: String
+        let pct: Double
+        let resetsAt: Date?
+        let target: AccountSnapshot?
+    }
+
+    /// nil while the active seat is below the mark, or has no live window to measure. Reads only live
+    /// windows: a stale number is not a crossing. Does not require the whole seat to be recommendable,
+    /// since one stale window elsewhere must not hide a live 5h reading at 93 %.
+    static func switchAway(
+        activeEmail: String, accounts: [AccountSnapshot], thresholdPct: Double,
+        rule: RestRule = .either, now: Date = Date()
+    ) -> SwitchAway? {
+        guard let active = accounts.first(where: { $0.email == activeEmail && $0.kind == .claude }),
+              let binding = active.liveBindingWindow(now: now), binding.pct >= thresholdPct else { return nil }
+        let target = partition(accounts, rule: rule, now: now).active.first {
+            $0.kind == .claude && $0.email != activeEmail && $0.isRecommendable(now: now)
+                && ($0.trustedUsedPct(now: now) ?? 100) < binding.pct
+        }
+        return SwitchAway(active: active, window: binding.window, pct: binding.pct,
+                          resetsAt: binding.resetsAt, target: target)
+    }
+
     /// When this account actually becomes usable again. nil when nothing is known.
     ///
     /// The BINDING windows decide this, not the earliest one. Returning the soonest reset of
-    /// any window promised relief that does not arrive: observed 2026-08-03, a seat sat near
-    /// its weekly cap with its 5h window half used, and the drawer advertised the 5h turnover
-    /// as the reopening time. After it the seat was still capped weekly and still unusable.
+    /// any window promised relief that does not arrive: observed live 2026-08-03, `main` sat at
+    /// 96% weekly and 55% on 5h and the drawer advertised "opens 12:59", which was merely the
+    /// 5h turnover. After it the account was still 96% weekly and still unusable.
     ///
     /// When several windows are capped, ALL of them have to clear, so the latest of those
     /// wins. When nothing is capped (a purely stale row) any reset is progress, so the
@@ -1341,7 +1405,7 @@ struct VerifiedActiveSeat: Codable, Equatable {
 
     /// True while this record still describes `credential`: same access token,
     /// fresh verification, and no hint disputing the email. Anything less is an
-    /// unknown active seat.
+    /// unknown active seat, and a renewal guard reading it must fail closed.
     func binds(to credential: ClaudeCredential, now: Date) -> Bool {
         guard !tokenDigest.isEmpty,
               tokenDigest == Self.digest(of: credential.accessToken),
@@ -1418,7 +1482,8 @@ enum DemoMode {
     /// Raw values are the CLI words, so tests can walk every verb (MCPSurfaceTests checks
     /// each one dispatches to itself and has an MCP tool). `app` is the no-argument mode.
     enum Verb: String, CaseIterable, Equatable {
-        case selftest, mcp, rotate, loginItem = "login-item", retrust, status, panelshot, app
+        case selftest, mcp, rotate, loginItem = "login-item", retrust, status, panelshot,
+             dashboardFeed = "dashboard-feed", dashboardShot = "dashboardshot", app
     }
 
     static func dispatched(args: Set<String>) -> Verb {
@@ -1429,16 +1494,18 @@ enum DemoMode {
         if args.contains("retrust") { return .retrust }
         if args.contains("status") { return .status }
         if args.contains("panelshot") { return .panelshot }
+        if args.contains("dashboard-feed") { return .dashboardFeed }
+        if args.contains("dashboardshot") { return .dashboardShot }
         return .app
     }
 
     /// Why a demo run must refuse these arguments, or nil when it may proceed. Only the
-    /// MCP server and panelshot are wired for demo data (selftest is pure logic and
-    /// returns before the gate); every other verb reads the Keychain, the login item or
-    /// the network directly.
+    /// MCP server and the shot verbs are wired for demo data (selftest is pure logic and
+    /// returns before the gate, dashboard-feed reads the demo store); every other verb
+    /// reads the Keychain, the login item or the network directly.
     static func refusal(args: Set<String>) -> String? {
         switch dispatched(args: args) {
-        case .mcp, .panelshot, .selftest: return nil
+        case .mcp, .panelshot, .selftest, .dashboardFeed, .dashboardShot: return nil
         case .rotate, .loginItem, .retrust, .status, .app:
             return "TOWER_DEMO=1 runs only `tower mcp` and `tower panelshot`"
         }
@@ -1543,11 +1610,12 @@ final class Store {
     /// opens a second fd and deadlocks against itself. Anything invoked from inside `body`
     /// must use the *Unlocked* variants.
     private func withLock<T>(_ body: () -> T) -> T {
-        let fd = open(lock.path, O_CREAT | O_RDWR, 0o644)
-        guard fd >= 0 else { return body() }  // no lock available: proceed, do not drop the write
-        defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { return body() }
-        defer { flock(fd, LOCK_UN) }
+        // No lock available: proceed, do not drop the write.
+        guard let fd = StoreLock.acquire(at: lock) else { return body() }
+        defer {
+            flock(fd, LOCK_UN)
+            close(fd)
+        }
         return body()
     }
 
@@ -1705,7 +1773,10 @@ final class Store {
 
     /// Locked read-modify-write. Both the GUI timer and the CLI do this, and doing it
     /// unlocked is how one process's capture gets clobbered by the other's stale copy.
-    func mutate(_ body: (inout [String: AccountSnapshot]) -> Void)
+    func mutate(
+        _ body: (inout [String: AccountSnapshot]) -> Void,
+        afterSave: (() -> Void)? = nil
+    )
         -> (accounts: [String: AccountSnapshot], saveError: String?) {
         withLock {
             let clock = now()
@@ -1724,7 +1795,11 @@ final class Store {
                     + "version of Tower and could not be read. Update Tower, or move "
                     + "accounts.json aside to start fresh.")
             }
-            return (accounts, saveUnlocked(accounts, now: clock))
+            let saveError = saveUnlocked(accounts, now: clock)
+            if saveError == nil {
+                afterSave?()
+            }
+            return (accounts, saveError)
         }
     }
 
@@ -1975,6 +2050,19 @@ final class Store {
         for email in Self.defaultDeclared where !reconciled.contains(email) {
             reconciled.append(email)
         }
+        // A Claude account Tower has actually READ is real: it joins the roster by itself, so a new login
+        // needs no manual step and survives a store reset (the 2026-11-07 lineage swap left the roster
+        // at [] and every account without another source vanished). Unread rows, other providers' rows
+        // and retired accounts do not join; retirement still wins just below.
+        for snap in accounts.values
+        // A never captured seat is a wire zero. The store decodes dates with the default JSONDecoder (seconds since
+        // the 2001 reference date), so that zero is 2001-01-01, a date and not a missing value; the migration also
+        // reads the raw zero as unread. Only a capture after the reference date counts as read.
+        where (snap.provider == nil || snap.provider == .claude)
+            && (snap.capturedAt.map { $0.timeIntervalSinceReferenceDate > 0 } ?? false)
+            && snap.email.contains("@") && !reconciled.contains(snap.email) {
+            reconciled.append(snap.email)
+        }
         reconciled.removeAll { retired.contains($0) }
         if reconciled != declared || !FileManager.default.fileExists(atPath: declaredFile.path) {
             let enc = JSONEncoder()
@@ -2218,7 +2306,7 @@ final class Store {
                   !email.isEmpty
             else { continue }
             // Two profiles can hold the SAME account (Default and Profile 6 both carry
-            // user-e here). Prefer "Default" when it is one of them, otherwise keep
+            // user-c here). Prefer "Default" when it is one of them, otherwise keep
             // the lowest-numbered directory, so the hint is stable across refreshes rather
             // than flipping with dictionary order.
             if let existing = dirForEmail[email] {
@@ -2228,7 +2316,7 @@ final class Store {
             dirForEmail[email] = dir
             // The DISPLAY NAME, not the directory. "Profile 10" is Chrome's on-disk folder
             // and appears nowhere in its UI; the profile switcher shows the name the
-            // operator gave it, which here is already the account nickname ("DEE"). A
+            // operator gave it, which here is already the account nickname ("YAI2G"). A
             // hint the operator cannot see on screen is not a hint. Falls back to the
             // directory only when a profile has no name at all.
             let shown = (info["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -2237,7 +2325,7 @@ final class Store {
             // PRIMARY account, but a profile can have several Google accounts signed into
             // its browser session, and then `/login` raises Google's account chooser.
             // Measured 2026-08-16: 4 of 7 profiles are in that state, and every entry in
-            // the chooser shows the same person's name, so the profile name alone cannot tell the
+            // the chooser reads "User Gross", so the profile name alone cannot tell the
             // operator which row to click — picking wrong signs Claude Code into the wrong
             // account, which is the failure this whole advice line exists to prevent.
             // The email is appended ONLY when a chooser will actually appear, so the
@@ -2355,13 +2443,15 @@ enum Refresher {
         credentials: @escaping () async -> [ClaudeCredential],
         fetch: @escaping (ClaudeCredential) async throws -> ClaudeFetch,
         now: Date = Date(),
-        unreadableSeats: [ClaudeSeatUnreadableItem] = []
+        unreadableSeats: [ClaudeSeatUnreadableItem] = [],
+        renew: ((ClaudeCredential) async throws -> ClaudeCredential)? = nil
     ) async -> ClaudeRosterResult {
         let observation = await ClaudeRoster.collect(
             credentials: await credentials(), fetch: fetch, now: now,
-            unreadableSeats: unreadableSeats)
+            unreadableSeats: unreadableSeats, renew: renew)
         let filtered = observation.excluding(retiredEmails: store.retiredEmails)
-        let (accounts, saveError) = store.mutate { accounts in
+        var verifiedActiveSeat: (email: String, token: String)?
+        let (accounts, saveError) = store.mutate({ accounts in
             store.seedDeclaredAccounts(into: &accounts)
             store.seedKnownAccounts(into: &accounts)
             ClaudeRoster.apply(
@@ -2372,9 +2462,13 @@ enum Refresher {
                let live = filtered.successes.first(where: {
                    $0.credential.service == Keychain.defaultService
                }) {
-                store.recordVerifiedActiveSeatUnlocked(verified, token: live.credential.accessToken, now: now)
+                verifiedActiveSeat = (verified, live.credential.accessToken)
             }
-        }
+        }, afterSave: {
+            guard let verifiedActiveSeat else { return }
+            store.recordVerifiedActiveSeatUnlocked(
+                verifiedActiveSeat.email, token: verifiedActiveSeat.token, now: now)
+        })
         return ClaudeRosterResult(
             accounts: accounts, verifiedActiveEmail: filtered.verifiedActiveEmail,
             attemptedServices: observation.attemptedServices,
@@ -2433,7 +2527,9 @@ enum Refresher {
 
     /// Injectable production-equivalent login path. It verifies the profile, captures that
     /// verified identity, and only then requests usage. Profile and usage remain separate so
-    /// tests can prove that a usage failure does not discard the new login.
+    /// tests can prove that a usage failure does not discard the new login. `renew` is the
+    /// #58 seat renewal, nil by default so the older retention tests keep their no-network
+    /// guarantees; the production poll passes ClaudeSeatRenewal.renewer.
     static func refreshLoggedInAccount(
         _ credential: ClaudeCredential?,
         store: Store,
@@ -2441,7 +2537,8 @@ enum Refresher {
         profile: @escaping (String) async throws -> String?,
         usage: @escaping (String) async throws -> UsageResponse,
         clock: @escaping () -> Date,
-        observation: Result<ClaudeSeatObservation, ClaudeSeatVaultError>? = nil
+        observation: Result<ClaudeSeatObservation, ClaudeSeatVaultError>? = nil,
+        renew: ((ClaudeCredential) async throws -> ClaudeCredential)? = nil
     ) async -> ClaudeRosterResult {
         let observation = observation ?? vault.beginObservationResult()
         let refreshNow = clock()
@@ -2473,7 +2570,8 @@ enum Refresher {
                     clock: clock)
             },
             now: refreshNow,
-            unreadableSeats: roster.unreadable)
+            unreadableSeats: roster.unreadable,
+            renew: renew)
     }
 
     private static func verifiedLoginCapture(
@@ -2547,8 +2645,9 @@ enum Refresher {
             onVerified: onVerified, clock: { Date() })
     }
 
-    /// Injectable identity-then-usage sequence. A 401 thrown here as
-    /// ClaudeCredentialExpired makes that seat read needs login.
+    /// Injectable identity-then-usage sequence. Renewal is not this function's job: the
+    /// collector renews a due retained seat before calling it (#58), and a 401 thrown here
+    /// as ClaudeCredentialExpired is what earns that seat its one renewal-and-retry.
     static func fetchClaude(
         _ credential: ClaudeCredential,
         profile: @escaping (String) async throws -> String?,
@@ -2606,8 +2705,8 @@ enum Refresher {
 
     /// Fetches the active account and reconciles the full roster in one Store mutation.
     /// Inactive account tokens do not survive /login in the CLI's Keychain item, but the
-    /// retained copy of its access token does, until that token expires; then the seat
-    /// reads needs login until it signs into Claude Code again.
+    /// retained copy does, and the collector renews it from its refresh token before it
+    /// expires (#58). A seat with nothing to renew from reads needs login.
     @discardableResult
     static func refreshActive(gate: ProviderGate = .current(),
                               readers: ProviderReaders = .live) async -> RefreshResult {
@@ -2667,7 +2766,8 @@ enum Refresher {
                     })
                 },
                 now: Date(),
-                unreadableSeats: roster.unreadable)
+                unreadableSeats: roster.unreadable,
+                renew: ClaudeSeatRenewal.renewer(vault: vault))
         case .failure(let error):
             credentials = []
             observation = nil
@@ -2675,7 +2775,8 @@ enum Refresher {
         }
 
         var cursorKey: String?
-        let (accounts, saveError) = Store.shared.mutate { accounts in
+        var verifiedActiveSeat: (email: String, token: String)?
+        let (accounts, saveError) = Store.shared.mutate({ accounts in
             cursorKey = seed(into: &accounts, store: Store.shared,
                              cursor: cursor, openRouter: openRouter, codex: codex,
                              lanes: lanes, gate: gate)
@@ -2690,11 +2791,14 @@ enum Refresher {
                    let live = filtered.successes.first(where: {
                        $0.credential.service == Keychain.defaultService
                    }) {
-                    Store.shared.recordVerifiedActiveSeatUnlocked(
-                        verified, token: live.credential.accessToken, now: Date())
+                    verifiedActiveSeat = (verified, live.credential.accessToken)
                 }
             }
-        }
+        }, afterSave: {
+            guard let verifiedActiveSeat else { return }
+            Store.shared.recordVerifiedActiveSeatUnlocked(
+                verifiedActiveSeat.email, token: verifiedActiveSeat.token, now: Date())
+        })
 
         let activeRosterCredential = credentials.first { $0.service == Keychain.defaultService }
         let activeSuccess = observation?.successes.first {
@@ -2779,10 +2883,9 @@ enum Thresholds {
     ///
     /// `resets_at` comes back with sub-second jitter, and truncating to a whole second
     /// minted a BRAND NEW key whenever that jitter crossed an integer boundary, which
-    /// re-armed every threshold for a window that had already announced. Observed in a real
-    /// store, shown here with invented times: `7d@1800000059: 95` and `7d@1800000060: 95`
-    /// side by side, one second apart, for a window that resets WEEKLY. The 95% alert fired
-    /// twice.
+    /// re-armed every threshold for a window that had already announced. Observed live in
+    /// the operator's own store: `7d@1785383999: 95` and `7d@1785384000: 95` side by side,
+    /// one second apart, for a window that resets WEEKLY. The 95% alert fired twice.
     private static let keyQuantum: TimeInterval = 60
 
     static func key(_ window: String, _ resetsAt: Date?) -> String {
@@ -2864,6 +2967,104 @@ enum Thresholds {
             return d > now
         }
         return out
+    }
+}
+
+// MARK: - Switch threshold
+
+/// `alerts.switchThresholdPct`: how full the ACTIVE seat's binding window may get before Tower says
+/// switch (operator word 2026-11-06, "why don't you tell me at 80 %, it should be configurable").
+/// One value, stored in the settings domain the panel, `tower status` and `tower mcp` already share.
+enum SwitchThreshold {
+    static let key = "alerts.switchThresholdPct"
+    static let defaultPct: Double = 80
+    /// 100 is the cap itself, which the 100 % alert already owns; below 50 the advice would fire on
+    /// a seat that is half empty.
+    static let range: ClosedRange<Double> = 50...99
+
+    /// nil for anything outside the range, NaN and infinity included.
+    static func parse(_ value: Double) -> Double? {
+        value.isFinite && range.contains(value) ? value : nil
+    }
+
+    /// An absent or out of range stored value reads as the default, never as a clamp: a hand edited
+    /// plist saying 3 must not turn every seat into a switch warning.
+    static func read(_ defaults: UserDefaults) -> Double {
+        guard defaults.object(forKey: key) != nil else { return defaultPct }
+        return parse(defaults.double(forKey: key)) ?? defaultPct
+    }
+}
+
+/// The notification for a crossing of the switch mark: one per window, like the 80/95/100 alerts.
+struct SwitchAlert: Equatable {
+    let nickname: String
+    let window: String
+    let pct: Double
+    let resetsAt: Date?
+    /// The roomiest seat to move to, nil when no other seat has a live reading with room.
+    let target: String?
+
+    var title: String { "⚠️ \(nickname) at \(Int(pct.rounded()))% of \(window == "5h" ? "5-hour" : "weekly"): switch" }
+
+    var body: String {
+        let reset = resetsAt.map { " Resets \(CLI.clock($0))." } ?? ""
+        if let target { return "Switch to \(target) with /login.\(reset)" }
+        return "No other seat has a live reading with room.\(reset)"
+    }
+
+    /// A plain 80 % toast for a window the switch notice already announced says nothing new: with a
+    /// custom mark below 80 it came as a second toast in a later cycle (Codex P2-2 on #150). 95 and
+    /// 100 still say something new, so they are kept. Reads the same `switch-<window>` key
+    /// `evaluate` records, so it holds across cycles as long as the window lasts.
+    static func supersedes(_ alert: Alert, on snap: AccountSnapshot) -> Bool {
+        guard alert.pct < 95, let resetsAt = alert.resetsAt else { return false }
+        return snap.notified[Thresholds.key("switch-\(alert.window)", resetsAt)] != nil
+    }
+
+    /// Pure, like `Thresholds.evaluate`: mutates only the snapshot's bookkeeping. Recorded under a
+    /// `switch-<window>` key in the same `notified` dictionary, so it is pruned with the window it
+    /// belongs to, and holds the mark that fired so lowering the threshold announces a window again.
+    static func evaluate(
+        _ snap: inout AccountSnapshot, among accounts: [AccountSnapshot],
+        thresholdPct: Double, now: Date = Date()
+    ) -> SwitchAlert? {
+        guard snap.kind == .claude,
+              let away = AccountSnapshot.switchAway(
+                activeEmail: snap.email, accounts: accounts, thresholdPct: thresholdPct, now: now),
+              // No reset time means no window identity to key on: stay silent, as Thresholds does.
+              let resetsAt = away.resetsAt, now < resetsAt else { return nil }
+        let k = Thresholds.key("switch-\(away.window)", resetsAt)
+        let already = snap.notified[k] ?? 0
+        guard already == 0 || thresholdPct < already else { return nil }
+        snap.notified[k] = thresholdPct
+        return SwitchAlert(nickname: snap.nickname, window: away.window, pct: away.pct,
+                           resetsAt: resetsAt, target: away.target?.nickname)
+    }
+
+    /// The threshold bookkeeping for one cycle, run on the copy of the store the lock hands over so
+    /// the roster is the on-disk state at that moment, not an earlier read (b111 HOLD 6691664074).
+    /// `keys` are the rows this cycle observed; only the active Claude seat can raise a switch
+    /// notice, and it supersedes a plain toast below 95 for the same window.
+    static func notices(
+        in accounts: inout [String: AccountSnapshot], keys: [String], activeEmail: String?,
+        thresholdPct: Double, now: Date = Date()
+    ) -> (plain: [Alert], switches: [SwitchAlert]) {
+        let roster = Array(accounts.values)
+        var plainAll: [Alert] = []
+        var switches: [SwitchAlert] = []
+        for key in Array(accounts.keys) where keys.contains(key) {
+            guard var snap = accounts[key] else { continue }
+            var plain = Thresholds.evaluate(&snap, now: now)
+            if snap.kind == .claude, snap.email == activeEmail {
+                if let sw = evaluate(&snap, among: roster, thresholdPct: thresholdPct, now: now) {
+                    switches.append(sw)
+                }
+                plain.removeAll { supersedes($0, on: snap) }
+            }
+            plainAll += plain
+            accounts[key] = snap
+        }
+        return (plainAll, switches)
     }
 }
 

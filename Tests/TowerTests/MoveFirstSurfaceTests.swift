@@ -5,7 +5,7 @@ import XCTest
 final class MoveFirstSurfaceTests: XCTestCase {
     func testWarningNamesIdleSessionsInPanelTerminalAndMCP() throws {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
-        let active = AccountSnapshot(email: "fay@example.com", nickname: "fay", plan: "max",
+        let active = AccountSnapshot(email: "main@example.com", nickname: "main", plan: "max",
                                      fiveHourPct: 90, fiveHourResetsAt: now.addingTimeInterval(3600),
                                      weeklyPct: 40, weeklyResetsAt: now.addingTimeInterval(86400),
                                      capturedAt: now)

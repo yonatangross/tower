@@ -40,12 +40,12 @@ final class FleetMCPTests: XCTestCase {
         let result = try await service(machine: nil).callTool("tower_sessions", arguments: [:])
         let sessions = try XCTUnwrap(result.structuredContent)
         let blast = sessions["blastRadius"]
-        XCTAssertEqual(blast["nickname"].stringValue, "cal")
+        XCTAssertEqual(blast["nickname"].stringValue, "alt1")
         XCTAssertEqual(blast["riders"].intValue, 0, "no session has measured ownership")
         XCTAssertEqual(blast["unknown"].intValue, 5, "three interactive plus two background")
         XCTAssertEqual(blast["level"].stringValue, "clear", "the level follows the live usage, not unknown ownership")
         XCTAssertEqual(blast["warnAt"].doubleValue, 85)
-        XCTAssertEqual(blast["line"].stringValue, "0 confirmed, 5 unknown sessions on cal at 11 %")
+        XCTAssertEqual(blast["line"].stringValue, "0 confirmed, 5 unknown sessions on alt1 at 11 %")
         let violations = JSONSchemaCheck.validate(sessions, against: TowerMCPService.tools.first { $0.name == "tower_sessions" }!.outputSchema)
         XCTAssertTrue(violations.isEmpty, "\(violations)")
     }
@@ -67,7 +67,7 @@ final class FleetMCPTests: XCTestCase {
         let codex = try await svc.callTool("tower_account", arguments: ["account": "codex:eve"]).structuredContent
         XCTAssertEqual(codex?["model"].stringValue, "gpt-6-luna")
 
-        let cursor = try await svc.callTool("tower_account", arguments: ["account": "cursor:ben"]).structuredContent
+        let cursor = try await svc.callTool("tower_account", arguments: ["account": "cursor:alt4"]).structuredContent
         XCTAssertEqual(cursor?["resting"]["kind"].stringValue, "meteredCapped")
         XCTAssertEqual(cursor?["resting"]["reason"].stringValue, "Opus pool capped 100% · Auto unmetered")
         XCTAssertEqual(cursor?["binding"]["usableFor"].stringValue, "Auto")
