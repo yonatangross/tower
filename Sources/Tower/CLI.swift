@@ -1932,6 +1932,36 @@ enum CLI {
         check("with nothing capped the soonest reset is the honest answer",
               AccountSnapshot.reopening(noneCapped, now: t0) == noneCapped.fiveHourResetsAt)
 
+        // An agent lane keeps its short window in fiveHourPct (Devin's day). A
+        // capped day must bind the lane, and the name is the provider's own.
+        var lane = AccountSnapshot(email: "d@d", nickname: "d", plan: "x")
+        lane.provider = .devin
+        lane.capturedAt = t0
+        lane.fiveHourPct = 96
+        lane.fiveHourResetsAt = t0.addingTimeInterval(86_400)
+        check("a capped agent-lane short window binds",
+              lane.bindingQuota(now: t0)?.limit == .fiveHour)
+        check("an agent-lane bind is named by the provider, not 5h",
+              lane.bindingQuota(now: t0)?.label(for: .devin) == "day")
+        var laneNoShort = lane
+        laneNoShort.fiveHourPct = nil
+        laneNoShort.weeklyPct = 96
+        laneNoShort.weeklyResetsAt = t0.addingTimeInterval(86_400)
+        check("an agent lane with no short window binds on its weekly",
+              laneNoShort.bindingQuota(now: t0)?.limit == .sevenDay)
+        var claude5h = bind
+        claude5h.weeklyPct = 50
+        claude5h.fiveHourPct = 96
+        check("a capped claude short still reads 5h",
+              claude5h.bindingQuota(now: t0)?.label(for: .claude) == "5h")
+
+        check("under 10% room the helper names the room left",
+              TowerMCPService.lowRoomWords(93) == ", 7% left")
+        check("comfortable room gets no qualifier",
+              TowerMCPService.lowRoomWords(50) == "")
+        check("an unknown reading gets no qualifier",
+              TowerMCPService.lowRoomWords(nil) == "")
+
         // Round-trip guards for the backward-compatibility claim on `provider`. A snapshot
         // that loses its provider on save reads back as Claude and resurrects the phantom
         // 5h meter, so this is load-bearing rather than pedantic.
@@ -3224,7 +3254,16 @@ enum CLI {
                 if why.isTimeGated, let d = AccountSnapshot.reopening(a, now: now) {
                     when = "opens " + clock(d)
                 } else {
-                    when = "switch to refresh"
+                    // "switch to refresh" is a Claude remedy: a Claude seat
+                    // re-polls on login. Cursor re-reads itself every cycle,
+                    // so a stale Cursor row means its session is refused, and
+                    // Codex numbers advance only when a codex session runs.
+                    switch a.kind {
+                    case .claude: when = "switch to refresh"
+                    case .cursor:  when = "fix the Cursor session"
+                    case .codex:   when = "run a codex session"
+                    default:       when = "no switch remedy"
+                    }
                 }
                 let state = a.fiveHourUnreported(now: now) ? SeatUsagePresentation.fiveHourUnreportedText
                     : why.isStale && a.capturedAt != nil
@@ -3253,7 +3292,11 @@ enum CLI {
             if pct >= 100 {
                 print("  ⛔ Every account with a current reading is exhausted.")
             } else {
-                print("  ✅ Most headroom: \(best.nickname) at \(Int(pct.rounded()))% used")
+                // Under 10 % room the pick is least-bad, not healthy: amber and
+                // the room left, never a green check next to a near-capped seat.
+                let mark = (100 - pct) < 10 ? "🟠" : "✅"
+                print("  \(mark) Most headroom: \(best.nickname) at \(Int(pct.rounded()))% used"
+                    + TowerMCPService.lowRoomWords(pct))
             }
         } else {
             print("  ⚠️ No account has a current enough reading to recommend.")
