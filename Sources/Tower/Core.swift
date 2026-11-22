@@ -696,7 +696,10 @@ struct AccountSnapshot: Codable, Identifiable {
         func label(for kind: Provider) -> String {
             switch limit {
             case .sevenDay: return kind.primaryWindowLabel
-            case .fable, .fiveHour: return limit.label
+            // Agent lanes store their short window in fiveHourPct (Devin's day). Name it
+            // with the provider's own word, never "5h".
+            case .fiveHour: return kind.isAgentLane ? kind.primaryWindowLabel : limit.label
+            case .fable: return limit.label
             }
         }
     }
@@ -725,7 +728,9 @@ struct AccountSnapshot: Codable, Identifiable {
                                 resetsAt: weeklyResetsAt, didReset: weekly.reset)
         }
         let fiveHour = effectiveFiveHour(now: now)
-        if kind.hasFiveHourWindow, let pct = fiveHour.pct, pct >= Self.cappedPct {
+        // Agent lanes reuse fiveHourPct for their short scoped window (Devin day).
+        let hasShort = kind.hasFiveHourWindow || (kind.isAgentLane && fiveHour.pct != nil)
+        if hasShort, let pct = fiveHour.pct, pct >= Self.cappedPct {
             return BindingQuota(limit: .fiveHour, percent: pct,
                                 resetsAt: fiveHourResetsAt, didReset: fiveHour.reset)
         }
@@ -734,7 +739,7 @@ struct AccountSnapshot: Codable, Identifiable {
         case let (weeklyPct?, fiveHourPct?) where weeklyPct >= fiveHourPct:
             return BindingQuota(limit: .sevenDay, percent: weeklyPct,
                                 resetsAt: weeklyResetsAt, didReset: weekly.reset)
-        case let (_, fiveHourPct?) where kind.hasFiveHourWindow:
+        case let (_, fiveHourPct?) where hasShort:
             return BindingQuota(limit: .fiveHour, percent: fiveHourPct,
                                 resetsAt: fiveHourResetsAt, didReset: fiveHour.reset)
         case let (weeklyPct?, _):

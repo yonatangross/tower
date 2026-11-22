@@ -1435,6 +1435,15 @@ struct TowerMCPService: MCPService {
         return .ok(summary, payload)
     }
 
+    /// Under 10 % room a pick is least-bad, not healthy: name the room left so
+    /// a green check never sits next to a near-capped seat.
+    static func lowRoomWords(_ percentUsed: Double?) -> String {
+        guard let percentUsed else { return "" }
+        let left = max(0, 100 - percentUsed)
+        guard left < 10 else { return "" }
+        return ", \(Int(left.rounded()))% left"
+    }
+
     func advice() -> MCPToolResult {
         let now = env.now()
         let map = visibleAccounts()
@@ -1451,11 +1460,11 @@ struct TowerMCPService: MCPService {
         case .stay(let nick, let pct, let next):
             payload = ["kind": "stay", "nickname": .string(nick), "percentUsed": .number(pct), "roomPct": .null, "next": .string(next),
                        "command": .null, "chromeProfile": .null, "earliestReset": .null]
-            summary = "stay on \(nick)" + (next.map { ", next \($0)" } ?? "")
+            summary = "stay on \(nick)" + Self.lowRoomWords(pct) + (next.map { ", next \($0)" } ?? "")
         case .switchTo(let nick, let pct, let via):
             payload = ["kind": "switch", "nickname": .string(nick), "percentUsed": .number(pct), "roomPct": .null, "next": .null,
                        "command": .string(advice.command), "chromeProfile": Self.profileJSON(via), "earliestReset": .null]
-            summary = "switch to \(nick) via /login" + (via.map { " as Chrome \($0.label)" } ?? "")
+            summary = "switch to \(nick)" + Self.lowRoomWords(pct) + " via /login" + (via.map { " as Chrome \($0.label)" } ?? "")
         case .activeUnknown(let nick, let room, let via):
             payload = ["kind": "activeUnknown", "nickname": .string(nick), "percentUsed": .null, "roomPct": .number(room), "next": .null,
                        "command": .string(advice.command), "chromeProfile": Self.profileJSON(via), "earliestReset": .null]
