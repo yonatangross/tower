@@ -441,10 +441,10 @@ struct TowerMCPService: MCPService {
             annotations: read("Ranked room")),
         MCPToolSpec(
             name: "tower_advice", title: "Advice",
-            description: "The panel's top line: stay on the active seat, switch to a named seat via /login and a Chrome profile, all resting with the earliest reset, or activeUnknown when Tower cannot verify which seat the CLI holds (the roomiest seat is still named, with roomPct, but nothing is claimed about staying).",
+            description: "The panel's top line: stay on the active seat, switch to a named seat via /login and a Chrome profile, all resting with the earliest reset, or activeUnknown when Tower cannot verify which seat the CLI holds (the roomiest seat is still named, with roomPct, but nothing is claimed about staying). Seats are ranked by how long each lasts at the floor's measured pace, scaled to seat size (20x holds four times 5x); lastsFor and pace say how long the named seat lasts.",
             inputSchema: noArgs,
             outputSchema: [
-                "type": "object", "required": ["generatedAt", "kind", "nickname", "percentUsed", "roomPct", "next", "command", "chromeProfile", "earliestReset"],
+                "type": "object", "required": ["generatedAt", "kind", "nickname", "percentUsed", "roomPct", "next", "command", "chromeProfile", "earliestReset", "lastsFor", "pace"],
                 "properties": [
                     "generatedAt": ["type": "string"],
                     "kind": ["type": "string", "enum": ["stay", "switch", "activeUnknown", "activeFiveHourUnknown", "allResting"]],
@@ -456,6 +456,8 @@ struct TowerMCPService: MCPService {
                     "chromeProfile": ["type": ["object", "null"], "required": ["displayName", "chooserEmail", "label"],
                                       "properties": ["displayName": ["type": "string"], "chooserEmail": ["type": ["string", "null"]], "label": ["type": "string"]]],
                     "earliestReset": ["type": ["string", "null"]],
+                    "lastsFor": ["type": ["number", "null"], "description": "seconds the named seat lasts at the floor's measured pace; null when the pace is unknown or the seat outlasts its resets (pace says which)"],
+                    "pace": ["type": "string"],
                 ],
             ],
             annotations: read("Advice")),
@@ -1451,11 +1453,13 @@ struct TowerMCPService: MCPService {
         // that no longer matches the live token is a stale rumour, not "known".
         let active = SeatCacheHydration.activeEmail(
             hint: boundActiveEmail(now: now), accounts: Array(map.values))
+        let pace = Pace.floorBurn(activeEmail: active, accounts: map,
+                                  samples: env.store.paceSamples(), now: now)
         let advice = AccountSnapshot.advise(
             activeEmail: active, accounts: Array(map.values), switchProfiles: env.switchProfiles(),
-            switchThresholdPct: SwitchThreshold.read(env.defaults), rule: .either, now: now)
+            switchThresholdPct: SwitchThreshold.read(env.defaults), rule: .either, now: now, pace: pace)
         let payload: JSON
-        let summary: String
+        var summary: String
         switch advice {
         case .stay(let nick, let pct, let next):
             payload = ["kind": "stay", "nickname": .string(nick), "percentUsed": .number(pct), "roomPct": .null, "next": .string(next),
@@ -1482,6 +1486,30 @@ struct TowerMCPService: MCPService {
         }
         var withTime = payload.objectValue ?? [:]
         withTime["generatedAt"] = .date(now)
+        // How long the named seat lasts at the floor's pace, scaled to its size.
+        let named = withTime["nickname"]?.stringValue.flatMap { nick in
+            map.values.first { $0.kind == .claude && $0.nickname == nick }
+        }
+        let lasts = named.flatMap { seat in pace.flatMap { Pace.lastsFor(seat, burn: $0, now: now) } }
+        let lowLeft = withTime["percentUsed"]?.doubleValue.map { max(0, 100 - $0) < 10 } ?? false
+        // Never pair "almost empty" with "lasts past its resets".
+        let paceLine: String
+        if named == nil {
+            paceLine = "pace unknown"
+        } else if lasts == .some(.infinity), lowLeft {
+            paceLine = "pace unknown"
+        } else {
+            paceLine = Pace.text(lasts)
+        }
+        withTime["lastsFor"] = lasts.flatMap { $0.isFinite ? .number($0.rounded()) : nil } ?? .null
+        withTime["pace"] = .string(paceLine)
+        if let named {
+            if lasts == .some(.infinity), lowLeft {
+                // "% left" already on the stay/switch line; skip contradictory infinity pace.
+            } else {
+                summary += lasts == nil ? "; pace unknown" : "; \(named.nickname) \(paceLine)"
+            }
+        }
         return .ok(summary, .object(withTime))
     }
 

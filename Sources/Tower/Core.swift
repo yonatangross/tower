@@ -1096,7 +1096,7 @@ struct AccountSnapshot: Codable, Identifiable {
     /// menubar and the CLI cannot disagree about who is resting, the same way `ranked`
     /// keeps them agreeing about who has room.
     static func partition(
-        _ accounts: [AccountSnapshot], rule: RestRule = .either, now: Date = Date()
+        _ accounts: [AccountSnapshot], rule: RestRule = .either, now: Date = Date(), pace: Pace.Burn? = nil
     ) -> (active: [AccountSnapshot], resting: [(AccountSnapshot, RestReason)]) {
         var active: [AccountSnapshot] = []
         var resting: [(AccountSnapshot, RestReason)] = []
@@ -1111,6 +1111,9 @@ struct AccountSnapshot: Codable, Identifiable {
             else { active.append(a) }
         }
         active.sort { ranked($0, $1, now: now) }
+        // With a measured pace, live Claude seats are ordered by how long each would last at
+        // it (seat size included), not by percent used.
+        if let pace { active = Pace.reorder(active, burn: pace, now: now) }
         // Actionable rows first: a stale account can be resolved right now by switching into
         // it, while a capped one can only be waited out. Within the capped group, soonest to
         // reopen leads, so the drawer's one visible line answers "how long until I have an
@@ -1183,16 +1186,17 @@ struct AccountSnapshot: Codable, Identifiable {
         switchProfiles: [String: ChromeProfileHint] = [:],
         switchThresholdPct: Double = SwitchThreshold.defaultPct,
         rule: RestRule = .either,
-        now: Date = Date()
+        now: Date = Date(),
+        pace: Pace.Burn? = nil
     ) -> Advice {
-        let split = partition(accounts, rule: rule, now: now)
+        let split = partition(accounts, rule: rule, now: now, pace: pace)
         // The active seat's binding window has reached the operator's switch mark (2026-11-06:
         // "why don't you tell me at 80 %"): name the roomiest seat with a live reading. This runs
         // before the profile filter below, which hid every seat Tower holds no Chrome profile for
         // and left the advice on the seat that was filling up. `/login` works for any seat; a
         // missing profile only drops the hint.
         let away = activeEmail.flatMap {
-            switchAway(activeEmail: $0, accounts: accounts, thresholdPct: switchThresholdPct, rule: rule, now: now)
+            switchAway(activeEmail: $0, accounts: accounts, thresholdPct: switchThresholdPct, rule: rule, now: now, pace: pace)
         }
         if let away, let target = away.target {
             return .switchTo(nick: target.nickname, pct: target.trustedUsedPct(now: now),
@@ -1262,7 +1266,7 @@ struct AccountSnapshot: Codable, Identifiable {
                active.isRecommendable(now: now),
                let activeUsed = active.usedPct(now: now),
                let bestUsed = best.usedPct(now: now),
-               bestUsed >= activeUsed {
+               Self.noBetter(best: best, bestUsed: bestUsed, active: active, activeUsed: activeUsed, pace: pace, now: now) {
                 // Staying is the honest answer; the runner-up line still points forward.
                 return .stay(
                     nick: active.nickname,
@@ -1300,13 +1304,23 @@ struct AccountSnapshot: Codable, Identifiable {
     /// nil while the active seat is below the mark, or has no live window to measure. Reads only live
     /// windows: a stale number is not a crossing. Does not require the whole seat to be recommendable,
     /// since one stale window elsewhere must not hide a live 5h reading at 93 %.
+    /// A move is no improvement when the best seat would not last longer than the active one at
+    /// the measured pace; without a pace for both, when it is not less used (today's rule).
+    static func noBetter(best: AccountSnapshot, bestUsed: Double, active: AccountSnapshot, activeUsed: Double,
+                         pace: Pace.Burn?, now: Date) -> Bool {
+        if let pace, let b = Pace.lastsFor(best, burn: pace, now: now), let a = Pace.lastsFor(active, burn: pace, now: now) {
+            return b <= a
+        }
+        return bestUsed >= activeUsed
+    }
+
     static func switchAway(
         activeEmail: String, accounts: [AccountSnapshot], thresholdPct: Double,
-        rule: RestRule = .either, now: Date = Date()
+        rule: RestRule = .either, now: Date = Date(), pace: Pace.Burn? = nil
     ) -> SwitchAway? {
         guard let active = accounts.first(where: { $0.email == activeEmail && $0.kind == .claude }),
               let binding = active.liveBindingWindow(now: now), binding.pct >= thresholdPct else { return nil }
-        let target = partition(accounts, rule: rule, now: now).active.first {
+        let target = partition(accounts, rule: rule, now: now, pace: pace).active.first {
             $0.kind == .claude && $0.email != activeEmail && $0.isRecommendable(now: now)
                 && ($0.trustedUsedPct(now: now) ?? 100) < binding.pct
         }
@@ -1716,7 +1730,42 @@ final class Store {
             return "commit failed: \(error.localizedDescription)"
         }
         writeMirror(data)
+        recordPaceUnlocked(normalized, now: now)
         return nil
+    }
+
+    // MARK: Pace log
+
+    private var paceFile: URL { dir.appendingPathComponent("pace.json") }
+
+    /// Every seat's recent captures, oldest first, keyed by store id. Empty when none.
+    func paceSamples() -> [String: [PaceSample]] {
+        guard let data = try? Data(contentsOf: paceFile) else { return [:] }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .secondsSince1970
+        return (try? dec.decode([String: [PaceSample]].self, from: data)) ?? [:]
+    }
+
+    /// One sample per new `capturedAt`, never a repeat; samples past `Pace.keep` are dropped.
+    /// Best effort: a failed write loses a pace sample, never a save. Not the mirror: hooks
+    /// read the mirror and have no use for history.
+    private func recordPaceUnlocked(_ accounts: [String: AccountSnapshot], now: Date) {
+        var log = paceSamples()
+        var changed = false
+        for (id, a) in accounts where a.kind == .claude {
+            guard let at = a.capturedAt else { continue }
+            var rows = log[id] ?? []
+            if rows.last.map({ $0.at >= at }) == true { continue }
+            rows.append(PaceSample(at: at, fiveHour: a.fiveHourPct, weekly: a.weeklyPct,
+                                   fiveHourResetsAt: a.fiveHourResetsAt, weeklyResetsAt: a.weeklyResetsAt))
+            log[id] = Array(rows.filter { now.timeIntervalSince($0.at) <= Pace.keep }.suffix(Pace.maxSamples))
+            changed = true
+        }
+        guard changed else { return }
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .secondsSince1970
+        guard let data = try? enc.encode(log) else { return }
+        try? data.write(to: paceFile, options: .atomic)
     }
 
     private var activeSeatFile: URL { dir.appendingPathComponent("active-seat.json") }

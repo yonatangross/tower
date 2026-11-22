@@ -1962,6 +1962,32 @@ enum CLI {
         check("an unknown reading gets no qualifier",
               TowerMCPService.lowRoomWords(nil) == "")
 
+        // Pace: a live seat with no 5h window still has a pace from its week;
+        // zero burn is pace unknown, not "lasts forever".
+        var liveNo5h = AccountSnapshot(email: "live@x", nickname: "live", plan: "max")
+        liveNo5h.capturedAt = t0.addingTimeInterval(-60)
+        liveNo5h.weeklyPct = 75
+        liveNo5h.weeklyResetsAt = t0.addingTimeInterval(6 * 86_400)
+        let weekBurn = Pace.Burn(fiveHourPerHour: nil, weeklyPerHour: 12, size: nil)
+        let lasts = Pace.lastsFor(liveNo5h, burn: weekBurn, now: t0)
+        check("a live seat with no 5h window still has a pace (25 % left at 12 %/h, about 2h)",
+              lasts.map { abs($0 - 25.0 / 12 * 3600) < 60 } ?? false, "got \(String(describing: lasts))")
+        var zeroBurnSeat = liveNo5h
+        zeroBurnSeat.weeklyPct = 93
+        zeroBurnSeat.weeklyResetsAt = t0.addingTimeInterval(5 * 86_400 + 12 * 3600)
+        let zeroLasts = Pace.lastsFor(zeroBurnSeat, burn: Pace.Burn(fiveHourPerHour: nil, weeklyPerHour: 0, size: 20), now: t0)
+        check("93 % used, zero burn, reset in 5d -> nil / pace unknown",
+              zeroLasts == nil && Pace.text(zeroLasts) == "pace unknown")
+        let finiteLasts = Pace.lastsFor(zeroBurnSeat, burn: Pace.Burn(fiveHourPerHour: nil, weeklyPerHour: 12, size: nil), now: t0)
+        check("positive burn empties before reset -> finite",
+              finiteLasts.map { $0.isFinite && abs($0 - 7.0 / 12 * 3600) < 60 } ?? false)
+        var resetFirst = zeroBurnSeat
+        resetFirst.weeklyPct = 10
+        resetFirst.weeklyResetsAt = t0.addingTimeInterval(3600)
+        let pastReset = Pace.lastsFor(resetFirst, burn: Pace.Burn(fiveHourPerHour: nil, weeklyPerHour: 1, size: nil), now: t0)
+        check("positive burn, reset first -> infinity",
+              pastReset == .some(.infinity) && Pace.text(pastReset) == "lasts past its resets at this pace")
+
         // Round-trip guards for the backward-compatibility claim on `provider`. A snapshot
         // that loses its provider on save reads back as Claude and resurrects the phantom
         // 5h meter, so this is load-bearing rather than pedantic.
