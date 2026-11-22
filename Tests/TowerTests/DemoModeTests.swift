@@ -54,7 +54,9 @@ final class DemoModeTests: XCTestCase {
         let spy = KeychainSpy()
         let result = advice(spy)
         XCTAssertEqual(result.structuredContent?["kind"], "activeUnknown", "the schema kind is unchanged")
-        XCTAssertEqual(result.content, [.text("no verified active seat; most room: side (88%)")])
+        XCTAssertEqual(result.content, [.text("no verified active seat; most room: side (88%); pace unknown")])
+        XCTAssertEqual(result.structuredContent?["pace"], "pace unknown",
+                       "an unverified active seat has no measured burn")
         XCTAssertEqual(spy.reads, 0)
     }
 
