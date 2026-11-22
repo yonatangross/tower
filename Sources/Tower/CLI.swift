@@ -2664,7 +2664,7 @@ enum CLI {
                   "Keychain reads: \(blindSpy.reads)")
             check("unverified active seat names the roomiest seat and its room",
                   blind.structuredContent?["kind"] == "activeUnknown"
-                      && blind.content == [.text("no verified active seat; most room: side (88%)")],
+                      && blind.content == [.text("no verified active seat; most room: side (88%); pace unknown")],
                   "got \(blind.content)")
 
             // The invented credential whose digest active-seat.json carries binds the seat.
