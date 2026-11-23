@@ -33,6 +33,9 @@ struct TowerMCPService: MCPService {
         var launchAtLogin: () -> Bool
         var setLaunchAtLogin: (Bool) -> String?
         var openRouterKeyFingerprint: () -> String?
+        /// Whether an OpenRouter key source is set up. Answers from settings alone: it never
+        /// runs the key command, so it can neither spawn a process nor raise a prompt.
+        var openRouterKeyConfigured: () -> Bool = { false }
         /// The Tower binary, for the two verbs that need their own process.
         var executable: URL?
         var mirrorPath: URL
@@ -71,6 +74,7 @@ struct TowerMCPService: MCPService {
                 launchAtLogin: { LaunchAtLogin.isEnabled },
                 setLaunchAtLogin: { LaunchAtLogin.set($0) },
                 openRouterKeyFingerprint: { OpenRouter.keyFingerprint() },
+                openRouterKeyConfigured: { OpenRouter.KeySource.current(defaults: TowerPreferences.shared).isConfigured },
                 // The resolved bundle (#121): started through the PATH symlink,
                 // Bundle.main has no Info.plist and the build stamp read as null.
                 executable: ProductIdentity.runningBundle()?.executableURL ?? Bundle.main.executableURL,
@@ -436,6 +440,7 @@ struct TowerMCPService: MCPService {
                         "type": "object", "required": ["id", "nickname", "provider", "resting"],
                         "properties": ["id": ["type": "string"], "nickname": ["type": "string"], "provider": ["type": "string"], "resting": restingSchema],
                     ]],
+                    "notRanked": ["type": "array", "description": "present when the provider filter names a provider that never ranks: its tower_coverage rows, so an empty room carries its reason", "items": ["type": "object"]],
                 ],
             ],
             annotations: read("Ranked room")),
@@ -536,6 +541,29 @@ struct TowerMCPService: MCPService {
                 ],
             ],
             annotations: read("Alerts")),
+        MCPToolSpec(
+            name: "tower_coverage", title: "Provider coverage",
+            description: "One row per seat of every provider Tower names: state, whether it is signed in, last successful read, why it is not live, and the operator step that fixes it. A row is live only when its capture is inside the freshness window and its last read did not fail. A provider turned off in Settings is a named row with no reading. Runs the same bounded lane probes as tower_lanes.",
+            inputSchema: noArgs,
+            outputSchema: [
+                "type": "object", "required": ["generatedAt", "rows"],
+                "properties": [
+                    "generatedAt": ["type": "string"],
+                    "rows": ["type": "array", "items": [
+                        "type": "object",
+                        "required": ["provider", "seat", "supported", "state", "live", "authenticated", "lastLiveRead", "reason", "operatorStep"],
+                        "properties": [
+                            "provider": ["type": "string"], "seat": ["type": "string"],
+                            "supported": ["type": "boolean"], "state": ["type": "string"], "live": ["type": "boolean"],
+                            "authenticated": ["type": ["boolean", "null"]],
+                            "lastLiveRead": ["type": ["string", "null"]],
+                            "reason": ["type": ["string", "null"]],
+                            "operatorStep": ["type": ["string", "null"]],
+                        ],
+                    ]],
+                ],
+            ],
+            annotations: read("Provider coverage")),
         MCPToolSpec(
             name: "tower_freshness", title: "Freshness",
             description: "Per window trust and capture age for every account, plus the freshness rules: TTLs, poll interval, debounce, and why inactive seats drift.",
@@ -1013,6 +1041,7 @@ struct TowerMCPService: MCPService {
         case "tower_resets": return resets()
         case "tower_alerts": return alerts()
         case "tower_freshness": return freshness()
+        case "tower_coverage": return coverage()
         case "tower_seats": return seats()
         case "tower_lanes": return lanes()
         case "tower_sessions": return await sessions()
@@ -1385,6 +1414,47 @@ struct TowerMCPService: MCPService {
         return .ok("\(a.nickname) (\(a.kind.label)): \(room), \(Self.trustName(a.worstTrust(now: now)))", json)
     }
 
+    /// The clock is read AFTER the lane probes: agy stamps its reading when it answers,
+    /// up to 30 s in, and a clock taken first makes that reading look like the future,
+    /// which the matrix correctly refuses to call live.
+    func coverageRows() -> (rows: [ProviderCoverage.Row], now: Date) {
+        let lanes = env.lanes()
+        let now = env.now()
+        let defaults = env.defaults
+        let balances = TypeSafe.Model.allCases.map { model in
+            ProviderCoverage.ManualBalance(
+                seat: model.rawValue,
+                text: TypeSafe.statusRowText(model: model, now: now, defaults: defaults),
+                step: TypeSafe.reenterHint(model: model, now: now, defaults: defaults),
+                isOn: ProviderToggles.isEnabled(model.watched, defaults: defaults))
+        }
+        let rows = ProviderCoverage.matrix(
+            accounts: Array(visibleAccounts().values), lanes: lanes, manualBalances: balances,
+            openRouterKeyConfigured: env.openRouterKeyConfigured(),
+            isOn: { provider in
+                WatchedProvider.allCases.filter { $0.rowProviders.contains(provider) }
+                    .allSatisfy { ProviderToggles.isEnabled($0, defaults: defaults) }
+            },
+            now: now)
+        return (rows, now)
+    }
+
+    func coverage() -> MCPToolResult {
+        let (rows, now) = coverageRows()
+        let live = rows.filter(\.isLive).count
+        return .ok("\(live) of \(rows.count) provider rows live", [
+            "generatedAt": .date(now),
+            "rows": .array(rows.map(\.json)),
+        ])
+    }
+
+    static func notRankedWords(_ provider: Provider, _ rows: [ProviderCoverage.Row]) -> String {
+        let states = rows.map { row in
+            row.reason.map { "\(row.state.rawValue): \($0)" } ?? row.state.rawValue
+        }
+        return "\(provider.rawValue) is not ranked for room; " + states.joined(separator: "; ")
+    }
+
     func room(provider: String?, minimumRoom: Double?) -> MCPToolResult {
         let now = env.now()
         let map = visibleAccounts()
@@ -1432,6 +1502,14 @@ struct TowerMCPService: MCPService {
                  "resting": Self.restingJSON(row.1, account: row.0, now: now)]
             }),
         ]
+        // A provider that never ranks answered "0 of 0 ready" with no reason, which read
+        // as "no seats". Say what it is instead.
+        if let provider, let p = Provider(rawValue: provider), !p.isRankable {
+            let rows = coverageRows().rows.filter { $0.provider == p }
+            var withCoverage = payload.objectValue ?? [:]
+            withCoverage["notRanked"] = .array(rows.map(\.json))
+            return .ok(Self.notRankedWords(p, rows), .object(withCoverage))
+        }
         let summary = recommended.map { "\($0.nickname) has the most room (\(Int(($0.roomPct(now: now) ?? 0).rounded()))%)" }
             ?? "no Claude seat has a current reading with room"
         return .ok(summary, payload)
