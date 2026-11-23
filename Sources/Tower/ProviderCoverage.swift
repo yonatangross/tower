@@ -80,6 +80,10 @@ enum ProviderCoverage {
                                 reason: "turned off in Tower Settings", operatorStep: nil))
             } else if AgentLane.mirrorLanes.contains(provider) {
                 rows.append(laneRow(provider, seat: seats.first, outcome: lanes[provider], now: now))
+            } else if seats.isEmpty, provider == .pi, let outcome = lanes[.pi] {
+                // Pi is not mirrored, so its probe is the only evidence: no stored row does
+                // not mean Pi is missing.
+                rows.append(laneRow(.pi, seat: nil, outcome: outcome, now: now))
             } else if seats.isEmpty, provider == .openrouter, openRouterKeyConfigured {
                 // A rejected or failed first read writes no row, so an empty store does
                 // not mean the key is missing.
@@ -139,7 +143,9 @@ enum ProviderCoverage {
     private static func hasCurrentReading(_ a: AccountSnapshot, now: Date) -> Bool {
         if a.kind == .openrouter || a.kind == .pi { return true }
         if a.kind.isAgentLane { return a.fiveHourPct != nil || a.weeklyPct != nil }
-        return a.worstTrust(now: now) == .live
+        // A weekly-only Claude reply is a current reading. It still does not rank, because
+        // worstTrust keeps its missing five hour window unknown.
+        return a.worstTrust(now: now) == .live || a.fiveHourUnreported(now: now)
     }
 
     private static func staleStep(_ a: AccountSnapshot) -> String? {

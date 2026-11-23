@@ -2292,9 +2292,8 @@ enum CLI {
               String(format: "%.2f", orLive.available) == "15.20"
               && Int(orLive.availablePct.rounded()) == 38,
               "pct=\(Int(orLive.pct.rounded())) remaining=\(orLive.remaining)")
-        // A refused key must never render as absence. This is the exact failure the
-        // operator hit: rotated in 1Password 4h after being copied to the Keychain, and
-        // the section silently vanished.
+        // A refused key must never render as absence. A key rotated at its source after
+        // being copied to the Keychain is refused, and the section used to vanish silently.
         check("401 is REJECTED, not notConfigured",
               OpenRouter.Outcome.rejected(401, keyFingerprint: nil, lastSuccessAt: nil) != OpenRouter.Outcome.notConfigured)
         check("403 is also a refusal", OpenRouter.Outcome.rejected(403, keyFingerprint: nil, lastSuccessAt: nil) == .rejected(403, keyFingerprint: nil, lastSuccessAt: nil))

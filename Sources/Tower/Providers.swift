@@ -947,7 +947,7 @@ enum OpenRouter {
     ///
     /// The tail, not the head: every OpenRouter key starts with the constant "sk-or-v1-",
     /// so any prefix is identical for all keys and identifies nothing. The 4-character
-    /// tail is the 1Password convention for naming keys.
+    /// tail is the usual password manager convention for naming keys.
     static func keyFingerprint() -> String? {
         guard let key = apiKey(), key.count >= 4 else { return nil }
         return String(key.suffix(4))
@@ -957,9 +957,9 @@ enum OpenRouter {
     ///
     /// The first version returned `Budget?` and hid the section on nil, which collapsed two
     /// opposite situations into one silence: "you do not use OpenRouter" and "your key is
-    /// being refused". The operator's key was rotated in 1Password four hours after it was
-    /// copied into the Keychain, and the panel simply stopped showing the section. He found
-    /// out by opening the dashboard himself, which is the definition of a silent failure.
+    /// being refused". A key rotated at its source after it was copied into the Keychain
+    /// was refused, and the panel simply stopped showing the section. The user could only
+    /// find out by opening the provider's dashboard, which is a silent failure.
     ///
     /// Hiding is correct for `notConfigured` and wrong for everything else.
     enum Outcome: Equatable {
@@ -1376,7 +1376,7 @@ enum CursorAuth {
 /// non-`ok` outcome rather than a zero, because a zero bar and "we could not ask" must
 /// never render the same way.
 ///
-/// Wire shape VERIFIED LIVE 2026-09-19 against the operator's own Ultra account:
+/// Wire shape VERIFIED LIVE 2026-09-19 against a real Ultra account:
 ///
 ///   GET /api/usage-summary
 ///   {
