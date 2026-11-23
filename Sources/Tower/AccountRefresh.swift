@@ -631,7 +631,11 @@ struct SystemClaudeSeatKeychain: ClaudeSeatKeychain {
 enum ClaudeSeatRetention {
     static let preferenceKey = "retainClaudeSeats"
 
-    static func isEnabled(defaults: UserDefaults = TowerPreferences.shared) -> Bool {
+    /// A dev copy has its own preference domain but the Keychain vault is the installed
+    /// Tower's, so it never retains, whatever its own preference says.
+    static func isEnabled(defaults: UserDefaults = TowerPreferences.shared,
+                          domain: String = TowerPreferences.domainName) -> Bool {
+        if TowerPreferences.isDevCopy(domain: domain) { return false }
         guard defaults.object(forKey: preferenceKey) != nil else { return true }
         return defaults.bool(forKey: preferenceKey)
     }
@@ -799,6 +803,7 @@ struct ClaudeSeatVault {
     private let log: (String) -> Void
     private let now: () -> Date
     private let mayPrompt: () -> Bool
+    private let refusesSeatChanges: () -> Bool
     /// The process switch the legacy keychain honours (KeychainDialogGate).
     private let dialogGate: KeychainDialogGate
 
@@ -811,9 +816,11 @@ struct ClaudeSeatVault {
         log: @escaping (String) -> Void = ClaudeSeatVault.defaultLog,
         now: @escaping () -> Date = { Date() },
         mayPrompt: @escaping () -> Bool = { TowerSeatKeychainAccess.runningFromSignedBundle() },
-        dialogGate: KeychainDialogGate = .shared
+        dialogGate: KeychainDialogGate = .shared,
+        refusesSeatChanges: @escaping () -> Bool = { TowerPreferences.runningAsDevCopy }
     ) {
         self.mayPrompt = mayPrompt
+        self.refusesSeatChanges = refusesSeatChanges
         self.dialogGate = dialogGate
         self.keychain = keychain
         let directory = Self.defaultDirectory()
@@ -844,7 +851,8 @@ struct ClaudeSeatVault {
     /// Disabling retention is destructive by design: the switch changes only after every
     /// owned copy has been removed under the same advisory lock.
     func disableAndForget(suppressing credential: ClaudeCredential?) -> String? {
-        forget(
+        if refusesSeatChanges() { return DevCopyIsolation.refusal }
+        return forget(
             where: { _ in true },
             advanceGeneration: true,
             suppressingToken: credential.map { tokenDigest($0.accessToken) },
@@ -852,8 +860,12 @@ struct ClaudeSeatVault {
             freshRead: true)
     }
 
-    func enableRetention() {
+    /// Nil on success, or why this process may not turn retention on.
+    @discardableResult
+    func enableRetention() -> String? {
+        if refusesSeatChanges() { return DevCopyIsolation.refusal }
         setRetentionEnabled(true)
+        return nil
     }
 
     func isRetentionEnabled() -> Bool {
@@ -1018,7 +1030,8 @@ struct ClaudeSeatVault {
     /// Removes all valid Tower-owned seats. It advances the persistent observation fence
     /// before deletion, so a queued login from before Forget cannot recreate an item.
     func forgetAll(suppressing credential: ClaudeCredential? = nil) -> String? {
-        forget(
+        if refusesSeatChanges() { return DevCopyIsolation.refusal }
+        return forget(
             where: { _ in true },
             advanceGeneration: true,
             suppressingToken: credential.map { tokenDigest($0.accessToken) },
@@ -1133,6 +1146,7 @@ struct ClaudeSeatVault {
     /// Refused for a bare build, which can never become trusted. Returns how many remembered
     /// seats are readable and how many are not.
     func retrust() -> Result<(readable: Int, unreadable: Int), ClaudeSeatVaultError> {
+        if refusesSeatChanges() { return .failure(ClaudeSeatVaultError(DevCopyIsolation.refusal)) }
         guard mayPrompt() else {
             return .failure(ClaudeSeatVaultError(
                 "Re-trust needs the signed Tower app; a bare build never reads seat items with the Keychain dialog"))

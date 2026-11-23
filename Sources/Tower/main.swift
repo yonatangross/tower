@@ -13,6 +13,9 @@ func enforceSingleInstance() {
     exit(0)
 }
 
+// First, before anything can open the store: a dev copy never shares the installed Tower's.
+DevCopyIsolation.apply()
+
 // `tower status`            -> one-shot text table, no GUI.
 // `tower selftest`          -> pure-logic checks, no network, no GUI.
 // `tower mcp`               -> stdio MCP server, no GUI (docs/mcp-surface.md).

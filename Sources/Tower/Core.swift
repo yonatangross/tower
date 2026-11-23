@@ -1611,8 +1611,11 @@ final class Store {
     /// `$CLAUDE_CONFIG_DIR/quota-cache.json`, defaulting to `~/.claude`. Honoured for the
     /// CLI path; the GUI normally has the variable unset.
     static func defaultMirrorPath(
-        env: [String: String] = ProcessInfo.processInfo.environment
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        devCopy: Bool = TowerPreferences.runningAsDevCopy
     ) -> URL {
+        // The hooks read the real mirror, so a dev copy must not write it.
+        if devCopy { return defaultSupportDirectory(env: env).appendingPathComponent("quota-cache.json") }
         // A demo store's rows are invented; mirroring them into ~/.claude would feed
         // them to the real hooks.
         if let demo = DemoMode.supportDirectory(env: env) {

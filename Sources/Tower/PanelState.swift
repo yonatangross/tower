@@ -25,7 +25,11 @@ enum SingleInstance {
     /// CLI verbs (`tower mcp`, `tower status`) run the same binary and must never exit here.
     @MainActor
     static func otherLiveInstance() -> pid_t? {
-        let pids = NSRunningApplication.runningApplications(withBundleIdentifier: ProductIdentity.bundleIdentifier)
+        // An isolated dev copy is its own instance; any other bundle id collapses into the
+        // installed Tower. runningBundle() resolves the PATH symlink case where Bundle.main
+        // has no Info.plist.
+        let ids = lookupIdentifiers(runningBundleIdentifier: ProductIdentity.runningBundle()?.bundleIdentifier)
+        let pids = ids.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
             .filter { !$0.isTerminated }
             .map(\.processIdentifier)
         return liveOther(pids: pids, selfPid: ProcessInfo.processInfo.processIdentifier, alive: isAlive)

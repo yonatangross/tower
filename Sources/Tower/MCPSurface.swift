@@ -2268,7 +2268,9 @@ struct TowerMCPService: MCPService {
             guard let on = value.boolValue else { return .refused("BadValue", "retainClaudeSeats takes a boolean") }
             let previous = env.vault.isRetentionEnabled()
             if on {
-                env.vault.enableRetention()
+                if let error = env.vault.enableRetention() {
+                    return .refused("DevCopyRefused", error, extra: ["value": .bool(env.vault.isRetentionEnabled())])
+                }
             } else if let error = env.vault.disableAndForget(suppressing: env.activeCredential()) {
                 // The switch stays on after a Keychain failure, the panel's rule: a
                 // successful opt out that left seats behind would be a lie.
