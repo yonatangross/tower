@@ -143,7 +143,14 @@ enum Keychain {
         return trimmed.isEmpty ? nil : Data(trimmed.utf8)
     }
 
+    /// The email in the config file at `url`, parsed only when the file's identity changes.
+    /// The large config file was fully parsed twice per 5 second login poll; now both reads
+    /// in a tick share one cached parse. A missing or unreadable file always yields nil.
     static func profileEmail(at url: URL) -> String? {
+        ProfileEmailCache.shared.email(at: url)
+    }
+
+    static func parseProfileEmail(at url: URL) -> String? {
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = root["oauthAccount"] as? [String: Any]
@@ -3252,5 +3259,120 @@ enum Rail {
         }
         guard let pct else { return nil }
         return RailCrossing(nickname: snap.nickname, level: current, pct: pct)
+    }
+}
+
+
+/// Thread-safe cache of the parsed config email, keyed by path plus the file's stat identity
+/// (inode, size, mtime and ctime to the nanosecond). Any mismatch, a missing file or a stat failure
+/// reparses, so /login detection never sees an old email.
+///
+/// Same-size rewrite inside the mtime resolution: a file whose mtime is within `racyWindow`
+/// of the read is never cached (the same "racily clean" rule git uses), so a rewrite that
+/// keeps size and lands in the same timestamp tick is reparsed on the next call. Atomic
+/// replaces also change the inode, which is part of the key.
+final class ProfileEmailCache: @unchecked Sendable {
+    static let shared = ProfileEmailCache()
+    static let racyWindow: TimeInterval = 2
+
+    struct Key: Equatable {
+        let path: String
+        let inode: UInt64
+        let size: Int64
+        let mtimeSec: Int
+        let mtimeNsec: Int
+        /// Moves on a permission change or a rewrite that restores the old mtime, neither
+        /// of which the fields above can see.
+        let ctimeSec: Int
+        let ctimeNsec: Int
+    }
+
+    private let lock = NSLock()
+    private var cachedKey: Key?
+    private var cachedEmail: String?
+    private var parses = 0
+
+    private let parse: (URL) -> String?
+    private let now: () -> Date
+
+    init(parse: @escaping (URL) -> String? = { Keychain.parseProfileEmail(at: $0) },
+         now: @escaping () -> Date = Date.init) {
+        self.parse = parse
+        self.now = now
+    }
+
+    var parseCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return parses
+    }
+
+    static func key(for url: URL) -> Key? {
+        var st = stat()
+        guard stat(url.path, &st) == 0 else { return nil }
+        return Key(path: url.path, inode: UInt64(st.st_ino), size: Int64(st.st_size),
+                   mtimeSec: Int(st.st_mtimespec.tv_sec), mtimeNsec: Int(st.st_mtimespec.tv_nsec),
+                   ctimeSec: Int(st.st_ctimespec.tv_sec), ctimeNsec: Int(st.st_ctimespec.tv_nsec))
+    }
+
+    func email(at url: URL) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let key = Self.key(for: url) else {
+            cachedKey = nil
+            cachedEmail = nil
+            return nil
+        }
+        if let cachedKey, cachedKey == key { return cachedEmail }
+        let email = parse(url)
+        parses += 1
+        let mtime = TimeInterval(key.mtimeSec) + TimeInterval(key.mtimeNsec) / 1e9
+        if now().timeIntervalSince1970 - mtime > Self.racyWindow {
+            cachedKey = key
+            cachedEmail = email
+        } else {
+            cachedKey = nil
+            cachedEmail = nil
+        }
+        return email
+    }
+}
+
+/// Physical footprint of this process (task_info), for attributing memory spikes.
+/// Logs only when the footprint moved by `deltaMB` since the last logged value or crosses a
+/// 512 MB multiple, so a 5 second poll stays quiet. No account data is logged.
+enum FootprintLog {
+    static let logger = Logger(subsystem: ProductIdentity.bundleIdentifier, category: "footprint")
+    static let deltaMB: UInt64 = 64
+    static let thresholdMB: UInt64 = 512
+    private static let lock = NSLock()
+    private static var lastLoggedMB: UInt64?
+
+    static func currentMB() -> UInt64? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr: kern_return_t = withUnsafeMutablePointer(to: &info) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { raw in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), raw, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return nil }
+        return UInt64(info.phys_footprint) / (1024 * 1024)
+    }
+
+    /// True when `mb` deserves a log line given the last logged value.
+    static func shouldLog(mb: UInt64, last: UInt64?) -> Bool {
+        guard let last else { return true }
+        let moved = mb > last ? mb - last : last - mb
+        return moved >= deltaMB || mb / thresholdMB != last / thresholdMB
+    }
+
+    static func note(_ site: String) {
+        guard let mb = currentMB() else { return }
+        lock.lock()
+        let log = shouldLog(mb: mb, last: lastLoggedMB)
+        if log { lastLoggedMB = mb }
+        lock.unlock()
+        if log { logger.notice("phys_footprint \(mb, privacy: .public) MB at \(site, privacy: .public)") }
     }
 }

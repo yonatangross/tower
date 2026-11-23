@@ -439,6 +439,7 @@ final class LimitsModel: ObservableObject {
         loginPollInFlight = true
         let epoch = loginRetentionEpoch
         Task.detached {
+            FootprintLog.note("login-tick")
             let credentials = Keychain.activeOAuth().map { [$0] } ?? []
             let identity = ClaudeConfigIdentity.read(at: ClaudeConfigIdentity.defaultURL())
             await MainActor.run {
@@ -681,6 +682,7 @@ final class LimitsModel: ObservableObject {
         refreshing = true
         lastAttempt = Date()
         copiedCommand = false
+        FootprintLog.note("refresh")
         defer {
             refreshing = false
             runNextQueuedLoginRefresh()
