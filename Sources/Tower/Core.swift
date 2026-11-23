@@ -2243,16 +2243,22 @@ final class Store {
         }
     }
 
-    /// Seed and refresh the Codex row from whatever is already on disk. Cheap enough to run
-    /// on every cycle: it is a bounded directory scan and a JSON decode, no network at all.
+    /// Seed the Codex row and fold the CLI's own answer (`CodexLive`), fetched by the caller
+    /// off the lock. With no attributed answer the row keeps its last reading: session files
+    /// are shared by every login on this machine and do not say whose quota they hold.
     ///
-    /// `live` is the Codex CLI's own answer (`CodexLive`), fetched by the caller off the
-    /// lock. It wins whenever it arrived: the disk reading only advances when a session
-    /// writes a rollout, so an idle hour would otherwise read as stale.
+    /// Returns the key the LIVE answer was folded into, or nil when there was none. The caller
+    /// keeps this key: reading the login again later could name a different account.
+    ///
+    /// `live.login` is the account the CLI itself said it answered for. If that is not the
+    /// login held at fold time, the numbers belong to another seat, so nothing is written
+    /// and neither seat counts as read this cycle.
+    @discardableResult
     func seedCodexAccount(into accounts: inout [String: AccountSnapshot],
-                          live: CodexReader.Reading? = nil,
-                          home: URL = FileManager.default.homeDirectoryForCurrentUser) {
-        guard let id = CodexAuth.identity(home: home) else { return }
+                          live: (reading: CodexReader.Reading, login: String)? = nil,
+                          home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
+        guard let id = CodexAuth.identity(home: home) else { return nil }
+        if let live, live.login.caseInsensitiveCompare(id.email) != .orderedSame { return nil }
         let key = AccountSnapshot.storeKey(email: id.email, provider: .codex)
         var snap = accounts[key] ?? AccountSnapshot(
             email: id.email,
@@ -2261,15 +2267,17 @@ final class Store {
         )
         snap.provider = .codex
         snap.plan = id.plan
-        snap.model = CodexReader.currentModel(home: home) ?? snap.model
-        if let reading = CodexReader.preferred(live: live, disk: CodexReader.latest(home: home)) {
-            // `disk` is an autoclosure: the rollout walk only runs when the CLI did not answer.
-            CodexReader.apply(reading, to: &snap)
-            // An exhaustion carries no `plan_type`, so fall back to the JWT's plan rather
-            // than blanking a field the auth token already answered.
-            snap.plan = reading.limits?.plan_type ?? id.plan
+        guard let live else {
+            accounts[key] = snap
+            return nil
         }
+        snap.model = CodexReader.currentModel(home: home) ?? snap.model
+        CodexReader.apply(live.reading, to: &snap)
+        // An exhaustion carries no `plan_type`, so fall back to the JWT's plan rather
+        // than blanking a field the auth token already answered.
+        snap.plan = live.reading.limits?.plan_type ?? id.plan
         accounts[key] = snap
+        return key
     }
 
     /// Seed and refresh the Cursor row.
@@ -2568,33 +2576,62 @@ struct RefreshResult {
     /// answer that was folded into `accounts` instead of reading them a second time (a
     /// second read would spawn `muse usage` twice per cycle).
     var lanes: [Provider: AgentLane.Outcome] = [:]
+    /// Store keys this invocation read successfully and saved. `accounts` is the shared
+    /// store, so a row in it may carry another process's newer capture.
+    var observedKeys: Set<String> = []
 }
 
 enum Refresher {
+    /// The seats one cycle really read. A lost save observed nothing that lasts.
+    static func observedKeys(claudeEmails: [String],
+                             cursor: CursorUsage.Outcome, cursorKey: String?,
+                             openRouter: OpenRouter.Outcome,
+                             codexKey: String?,
+                             lanes: [Provider: AgentLane.Outcome],
+                             saveError: String?) -> Set<String> {
+        guard saveError == nil else { return [] }
+        var keys = Set(claudeEmails.map { AccountSnapshot.storeKey(email: $0, provider: .claude) })
+        if case .ok = cursor, let cursorKey { keys.insert(cursorKey) }
+        if case .ok = openRouter {
+            keys.insert(AccountSnapshot.storeKey(email: OpenRouter.storeEmail, provider: .openrouter))
+        }
+        if let codexKey { keys.insert(codexKey) }
+        for lane in AgentLane.mirrorLanes {
+            guard let outcome = lanes[lane], AgentLane.publishableQuota(outcome)?.fetchedAt != nil
+            else { continue }
+            keys.insert(AccountSnapshot.storeKey(email: AgentLane.mirrorEmail(lane), provider: lane))
+        }
+        return keys
+    }
+
     /// Folds local identities and completed provider probes into one persisted account snapshot.
     @discardableResult
     private static func seed(into accounts: inout [String: AccountSnapshot],
                              store: Store,
                              cursor: CursorUsage.Outcome,
                              openRouter: OpenRouter.Outcome,
-                             codex: CodexReader.Reading? = nil,
+                             codex: CodexLive.Answer? = nil,
                              lanes: [Provider: AgentLane.Outcome] = [:],
                              gate: ProviderGate = .all,
-                             now: Date = Date()) -> String? {
+                             now: Date = Date()) -> (cursor: String?, liveCodex: String?) {
         if gate.on(.claude) {
             store.seedDeclaredAccounts(into: &accounts)
             store.seedKnownAccounts(into: &accounts)
         }
-        // Codex: the CLI's live answer when it came back, else the rollouts on disk, so it
-        // refreshes on every seed rather than only when a credential is pollable. OFF reads
-        // neither.
-        if gate.on(.codex) { store.seedCodexAccount(into: &accounts, live: codex) }
+        // Codex: the CLI's attributed live answer when it came back; with none, the row keeps
+        // its last reading, because session files do not say whose quota they hold. OFF
+        // reads nothing.
+        var liveCodexKey: String?
+        if gate.on(.codex) {
+            liveCodexKey = store.seedCodexAccount(
+                into: &accounts, live: codex.map { (reading: $0.reading, login: $0.owner) })
+        }
         // Cursor is the opposite: local identity, remote numbers. The fetch already ran
         // concurrently with the Claude poll, so only the fold happens under the lock.
         let cursorKey = store.seedCursorAccount(into: &accounts, outcome: cursor, now: now)
         store.seedOpenRouterAccount(into: &accounts, outcome: openRouter, now: now)
         store.seedAgentLaneAccounts(into: &accounts, outcomes: lanes, now: now)
-        return cursorKey
+        return (cursorKey, liveCodexKey)
     }
 
     /// Injectable Claude-only lane for focused roster tests.  Production combines the
@@ -2884,9 +2921,11 @@ enum Refresher {
         // Claude Code OFF: no Keychain read and no usage call; only the other folds land.
         guard gate.on(.claude) else {
             var cursorKey: String?
+            var liveCodexKey: String?
             let (accounts, saveError) = Store.shared.mutate { accounts in
-                cursorKey = seed(into: &accounts, store: Store.shared, cursor: cursor,
-                                 openRouter: openRouter, codex: codex, lanes: lanes, gate: gate)
+                (cursorKey, liveCodexKey) = seed(
+                    into: &accounts, store: Store.shared, cursor: cursor,
+                    openRouter: openRouter, codex: codex, lanes: lanes, gate: gate)
             }
             return RefreshResult(
                 accounts: accounts, activeEmail: nil,
@@ -2894,7 +2933,11 @@ enum Refresher {
                 openRouterOutcome: openRouter,
                 openRouterFoldCommitted: Self.openRouterFoldCommitted(outcome: openRouter, saveError: saveError),
                 cursorKey: cursorKey,
-                lanes: lanes)
+                lanes: lanes,
+                observedKeys: observedKeys(
+                    claudeEmails: [], cursor: cursor, cursorKey: cursorKey,
+                    openRouter: openRouter, codexKey: liveCodexKey,
+                    lanes: lanes, saveError: saveError))
         }
 
         let keychainCallsAtStart = KeychainCallCounter.shared.total
@@ -2938,12 +2981,16 @@ enum Refresher {
 
         var cursorKey: String?
         var verifiedActiveSeat: (email: String, token: String)?
+        var claudeEmailsRead: [String] = []
+        var liveCodexKey: String?
         let (accounts, saveError) = Store.shared.mutate({ accounts in
-            cursorKey = seed(into: &accounts, store: Store.shared,
-                             cursor: cursor, openRouter: openRouter, codex: codex,
-                             lanes: lanes, gate: gate)
+            (cursorKey, liveCodexKey) = seed(
+                into: &accounts, store: Store.shared,
+                cursor: cursor, openRouter: openRouter, codex: codex,
+                lanes: lanes, gate: gate)
             if let observation {
                 let filtered = observation.excluding(retiredEmails: Store.shared.retiredEmails)
+                claudeEmailsRead = filtered.successes.map(\.fetch.email)
                 ClaudeRoster.apply(
                     filtered,
                     to: &accounts,
@@ -2992,7 +3039,13 @@ enum Refresher {
             openRouterFoldCommitted: Self.openRouterFoldCommitted(
                 outcome: openRouter, saveError: saveError),
             cursorKey: cursorKey,
-            lanes: lanes)
+            lanes: lanes,
+            observedKeys: observedKeys(
+                claudeEmails: claudeEmailsRead, cursor: cursor, cursorKey: cursorKey,
+                openRouter: openRouter,
+                // Only the CLI's attributed live answer is a read of this cycle.
+                codexKey: liveCodexKey,
+                lanes: lanes, saveError: saveError))
     }
 
     /// This is deliberately independent from the Claude refresh outcome: a Claude API

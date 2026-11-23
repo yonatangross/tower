@@ -734,7 +734,7 @@ struct TowerMCPService: MCPService {
             annotations: read("Panel shot")),
         MCPToolSpec(
             name: "tower_refresh", title: "Refresh",
-            description: "One refresh cycle, the same one tower status runs: Cursor and OpenRouter probes, the Claude roster (active login plus retained seats, due seats renewed), one locked store mutation and mirror rewrite. Threshold and rail bookkeeping is left to the app so no notification is consumed here. With account, refuses a seat Tower cannot poll (NotPollable).",
+            description: "One refresh cycle, the same one tower status runs: Cursor and OpenRouter probes, the Claude roster (active login plus retained seats, due seats renewed), one locked store mutation and mirror rewrite. Threshold and rail bookkeeping is left to the app so no notification is consumed here. With account, refuses a seat Tower cannot poll (NotPollable) and a seat this cycle did not read (NotCaptured).",
             inputSchema: ["type": "object", "properties": ["account": accountRef], "additionalProperties": false],
             outputSchema: [
                 "type": "object", "required": ["generatedAt", "outcome", "error", "activeEmail", "keychainCalls", "openRouter", "cursorKey", "pendingAlerts", "accounts"],
@@ -2119,7 +2119,14 @@ struct TowerMCPService: MCPService {
         let active = reported ?? activeEmail(visible)
         var rows = visible.values
             .sorted { AccountSnapshot.ranked($0, $1, now: now) }
-        if let wanted { rows = rows.filter { $0.id == wanted.id } }
+        if let wanted {
+            rows = rows.filter { $0.id == wanted.id }
+            if let reason = ProviderCoverage.notCapturedReason(
+                wanted: wanted, after: rows.first,
+                observed: result.observedKeys.contains(wanted.id), now: now) {
+                return .refused("NotCaptured", reason)
+            }
+        }
         var pending: [JSON] = []
         for a in rows {
             var copy = a

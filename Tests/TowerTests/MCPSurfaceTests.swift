@@ -135,9 +135,21 @@ struct MCPFixture {
         return s
     }
 
+    /// A cycle that really reads the active login, the retained seat and Cursor.
     func refreshResult() -> RefreshResult {
+        var accounts = store.load()
+        let read = [Self.activeEmail, Self.retainedEmail,
+                    AccountSnapshot.storeKey(email: Self.staleEmail, provider: .cursor)]
+        for key in read { accounts[key]?.capturedAt = now }
+        var result = unreadRefreshResult(accounts)
+        result.observedKeys = Set(read)
+        return result
+    }
+
+    /// A cycle that succeeds overall and leaves `accounts` as they were.
+    func unreadRefreshResult(_ accounts: [String: AccountSnapshot]) -> RefreshResult {
         RefreshResult(
-            accounts: store.load(), activeEmail: Self.activeEmail, outcome: .ok(email: Self.activeEmail),
+            accounts: accounts, activeEmail: Self.activeEmail, outcome: .ok(email: Self.activeEmail),
             openRouterOutcome: .ok(OpenRouter.Budget(spent: 24.8, limit: 40)), openRouterFoldCommitted: true,
             cursorKey: AccountSnapshot.storeKey(email: Self.staleEmail, provider: .cursor))
     }
@@ -884,6 +896,123 @@ final class MCPSurfaceTests: XCTestCase {
         let activeOnly = try await call("tower_refresh", ["account": "alt1"])
         XCTAssertFalse(activeOnly.isError)
         let cursorRow = try await call("tower_refresh", ["account": "cursor:alt4"])
-        XCTAssertFalse(cursorRow.isError, "non Claude rows always refresh in a cycle")
+        XCTAssertFalse(cursorRow.isError, "a row this cycle read is a good answer")
+    }
+
+    func testARecentEarlierCaptureIsNotThisRefresh() async throws {
+        let fixture: MCPFixture = self.fixture
+        var env = fixture.environment()
+        env.refresh = { fixture.unreadRefreshResult(fixture.store.load()) }
+        let unread = try await TowerMCPService(env: env)
+            .callTool("tower_refresh", arguments: ["account": "cursor:alt4"])
+        XCTAssertTrue(unread.isError, "the cycle succeeded, but it did not read this seat")
+        XCTAssertEqual(unread.structuredContent?["error"]["code"], "NotCaptured")
+        XCTAssertTrue(unread.json["structuredContent"].isNull, "a refusal goes out as text only")
+
+        let key = AccountSnapshot.storeKey(email: MCPFixture.staleEmail, provider: .cursor)
+        env.refresh = {
+            var accounts = fixture.store.load()
+            accounts.removeValue(forKey: key)
+            return fixture.unreadRefreshResult(accounts)
+        }
+        let missing = try await TowerMCPService(env: env)
+            .callTool("tower_refresh", arguments: ["account": "cursor:alt4"])
+        XCTAssertEqual(missing.structuredContent?["error"]["code"], "NotCaptured")
+
+        env.refresh = {
+            var accounts = fixture.store.load()
+            accounts[key]?.lastError = "could not read Cursor usage"
+            accounts[key]?.readAt = fixture.now
+            return fixture.unreadRefreshResult(accounts)
+        }
+        let failed = try await TowerMCPService(env: env)
+            .callTool("tower_refresh", arguments: ["account": "cursor:alt4"])
+        XCTAssertEqual(failed.structuredContent?["error"]["code"], "NotCaptured")
+    }
+
+    /// The app writes a newer capture while this cycle runs, and this cycle cannot read the seat.
+    func testAnotherWritersCaptureIsNotThisRefresh() async throws {
+        let fixture: MCPFixture = self.fixture
+        let key = AccountSnapshot.storeKey(email: MCPFixture.staleEmail, provider: .cursor)
+        var env = fixture.environment()
+        env.refresh = {
+            var accounts = fixture.store.load()
+            accounts[key]?.capturedAt = fixture.now
+            accounts[key]?.lastError = "could not read Cursor usage"
+            return fixture.unreadRefreshResult(accounts)
+        }
+        let failed = try await TowerMCPService(env: env)
+            .callTool("tower_refresh", arguments: ["account": "cursor:alt4"])
+        XCTAssertEqual(failed.structuredContent?["error"]["code"], "NotCaptured")
+
+        env.refresh = {
+            var accounts = fixture.store.load()
+            accounts[key]?.capturedAt = fixture.now
+            return fixture.unreadRefreshResult(accounts)
+        }
+        let clean = try await TowerMCPService(env: env)
+            .callTool("tower_refresh", arguments: ["account": "cursor:alt4"])
+        XCTAssertEqual(clean.structuredContent?["error"]["code"], "NotCaptured",
+                       "a clean newer row from another writer is still not this cycle's read")
+    }
+
+    func testObservedKeysNameOnlyWhatThisCycleRead() {
+        let cursorKey = AccountSnapshot.storeKey(email: "c@example.test", provider: .cursor)
+        let keys = Refresher.observedKeys(
+            claudeEmails: ["a@example.test"], cursor: .unavailable, cursorKey: cursorKey,
+            openRouter: .unavailable, codexKey: nil, lanes: [.devin: .notConfigured], saveError: nil)
+        XCTAssertEqual(keys, [AccountSnapshot.storeKey(email: "a@example.test", provider: .claude)])
+        let needsConnect = Refresher.observedKeys(
+            claudeEmails: [], cursor: .connectNeeded(CursorUsage.connectReason), cursorKey: cursorKey,
+            openRouter: .notConfigured, codexKey: nil, lanes: [:], saveError: nil)
+        XCTAssertTrue(needsConnect.isEmpty, "only a Cursor read that answered counts")
+        XCTAssertTrue(Refresher.observedKeys(
+            claudeEmails: ["a@example.test"], cursor: .unavailable, cursorKey: cursorKey,
+            openRouter: .unavailable, codexKey: nil, lanes: [:], saveError: "disk full").isEmpty,
+                      "a lost save observed nothing that lasts")
+    }
+
+    func testRefreshOfASeatItDidNotReadIsNeverOK() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        var devin = AccountSnapshot(email: "devin@local", nickname: "devin", plan: "max")
+        devin.provider = .devin
+        devin.weeklyPct = 83
+        devin.capturedAt = now.addingTimeInterval(-5 * 3600)
+        let reason = ProviderCoverage.notCapturedReason(wanted: devin, after: devin, observed: true, now: now)
+        XCTAssertTrue(reason?.contains("was not captured") == true, reason ?? "nil")
+        XCTAssertTrue(reason?.contains("run a Devin session") == true, reason ?? "nil")
+        XCTAssertFalse(reason?.contains("switch") == true, "a non Claude row is not fixed by switching in")
+
+        var read = devin
+        read.capturedAt = now.addingTimeInterval(-60)
+        XCTAssertNil(ProviderCoverage.notCapturedReason(wanted: devin, after: read, observed: true, now: now))
+        XCTAssertNotNil(ProviderCoverage.notCapturedReason(wanted: devin, after: read, observed: false, now: now),
+                        "a fresh row this cycle did not read is not evidence")
+
+        var failed = read
+        failed.lastError = "could not read"
+        XCTAssertNotNil(ProviderCoverage.notCapturedReason(wanted: failed, after: failed, observed: true, now: now),
+                        "a young capture with a failed read was not read")
+    }
+
+    func testStaleNonClaudeRowsNameTheirOwnFix() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        var codex = AccountSnapshot(email: "codex@example.test", nickname: "codex", plan: "pro")
+        codex.provider = .codex
+        codex.weeklyPct = 40
+        codex.capturedAt = now.addingTimeInterval(-3 * 3600)
+        let codexWhy = ProviderCoverage.notCapturedReason(wanted: codex, after: codex, observed: false, now: now)
+        XCTAssertTrue(codexWhy?.contains("run a Codex session") == true, codexWhy ?? "nil")
+
+        var cursor = AccountSnapshot(email: "cursor@example.test", nickname: "cur", plan: "pro")
+        cursor.provider = .cursor
+        cursor.weeklyPct = 40
+        cursor.capturedAt = now.addingTimeInterval(-3 * 3600)
+        let cursorWhy = ProviderCoverage.notCapturedReason(wanted: cursor, after: cursor, observed: false, now: now)
+        XCTAssertTrue(cursorWhy?.contains("see tower_coverage") == true, cursorWhy ?? "nil")
+        cursor.lastError = CursorUsage.connectReason
+        let connectWhy = ProviderCoverage.notCapturedReason(wanted: cursor, after: cursor, observed: true, now: now)
+        XCTAssertTrue(connectWhy?.contains(AccountSnapshot.connectCursorRemedy) == true, connectWhy ?? "nil")
+        XCTAssertFalse(connectWhy?.contains("switch") == true)
     }
 }

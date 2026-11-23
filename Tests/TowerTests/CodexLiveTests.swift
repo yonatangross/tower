@@ -54,15 +54,28 @@ final class CodexLiveTests: XCTestCase {
                        "the window that is full decides the reopening, not the primary")
     }
 
-    func testLiveWinsOverDiskAndDiskIsTheFallback() {
-        let disk = CodexReader.Reading(limits: nil, capturedAt: now.addingTimeInterval(-2 * 3600))
-        let live = CodexReader.Reading(limits: nil, capturedAt: now)
-        XCTAssertEqual(CodexReader.preferred(live: live, disk: disk)?.capturedAt, now)
-        XCTAssertEqual(CodexReader.preferred(live: nil, disk: disk)?.capturedAt, disk.capturedAt)
-        XCTAssertNil(CodexReader.preferred(live: nil, disk: nil))
-        var diskRead = false
-        _ = CodexReader.preferred(live: live, disk: { diskRead = true; return disk }())
-        XCTAssertFalse(diskRead, "the rollout walk is skipped when the CLI answered")
+    /// Session files are shared by every login, so another account's rollout must not
+    /// overwrite the quota this seat last read with an attributed answer.
+    func testADiskSessionFromAnotherAccountNeverOverwritesTheSeat() throws {
+        let home = try FakeCodexHome(email: "a@example.test")
+        defer { home.remove() }
+        try home.rollout(minutesAgo: 1, now: now, lines: [
+            #"{"type":"turn_context","payload":{"turn_id":"t","model":"gpt-6-luna"}}"#,
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":71,"window_minutes":10080,"resets_at":1790412485},"plan_type":"pro"}}}"#,
+        ])
+        let store = Store(dir: home.root.appendingPathComponent("support"),
+                          mirror: home.root.appendingPathComponent("claude/quota-cache.json"), now: { self.now })
+        let key = AccountSnapshot.storeKey(email: "a@example.test", provider: .codex)
+        var row = AccountSnapshot(email: "a@example.test", nickname: "a", plan: "pro")
+        row.provider = .codex
+        row.weeklyPct = 10
+        row.model = "gpt-6-sol"
+        row.capturedAt = now.addingTimeInterval(-3_600)
+        var accounts = [key: row]
+        XCTAssertNil(store.seedCodexAccount(into: &accounts, live: nil, home: home.root))
+        XCTAssertEqual(accounts[key]?.weeklyPct, 10)
+        XCTAssertEqual(accounts[key]?.capturedAt, row.capturedAt)
+        XCTAssertEqual(accounts[key]?.model, "gpt-6-sol")
     }
 
     func testSeedFoldsTheLiveReadingAndTheModel() throws {
@@ -79,7 +92,7 @@ final class CodexLiveTests: XCTestCase {
         let live = try XCTUnwrap(CodexLive.parse(line: Data(liveAnswer.utf8), now: now))
 
         var accounts: [String: AccountSnapshot] = [:]
-        store.seedCodexAccount(into: &accounts, live: live, home: home.root)
+        store.seedCodexAccount(into: &accounts, live: (live, "user-d@example.com"), home: home.root)
         let row = try XCTUnwrap(accounts.values.first { $0.kind == .codex })
         XCTAssertEqual(row.weeklyPct, 72, "the CLI's answer, not the two-hour-old rollout")
         XCTAssertEqual(row.capturedAt, now)
@@ -87,7 +100,128 @@ final class CodexLiveTests: XCTestCase {
 
         var diskOnly: [String: AccountSnapshot] = [:]
         store.seedCodexAccount(into: &diskOnly, live: nil, home: home.root)
-        XCTAssertEqual(diskOnly.values.first?.weeklyPct, 71, "disk still serves when the CLI cannot be asked")
+        XCTAssertNil(diskOnly.values.first?.weeklyPct, "an unattributed rollout is not a reading")
+        XCTAssertNil(diskOnly.values.first?.capturedAt)
+    }
+
+    /// The login changes after the fold: the observed seat stays the one the answer updated.
+    func testTheObservedCodexSeatIsTheOneTheLiveAnswerFoldedInto() throws {
+        let first = try FakeCodexHome(email: "first@example.test")
+        let second = try FakeCodexHome(email: "second@example.test")
+        defer { first.remove(); second.remove() }
+        let store = Store(dir: first.root.appendingPathComponent("support"),
+                          mirror: first.root.appendingPathComponent("claude/quota-cache.json"), now: { self.now })
+        let live = try XCTUnwrap(CodexLive.parse(line: Data(liveAnswer.utf8), now: now))
+        let firstKey = AccountSnapshot.storeKey(email: "first@example.test", provider: .codex)
+        let secondKey = AccountSnapshot.storeKey(email: "second@example.test", provider: .codex)
+
+        var accounts: [String: AccountSnapshot] = [:]
+        let folded = store.seedCodexAccount(into: &accounts, live: (live, "first@example.test"), home: first.root)
+        XCTAssertEqual(folded, firstKey)
+        XCTAssertEqual(CodexAuth.identity(home: second.root)?.email, "second@example.test")
+        let observed = Refresher.observedKeys(
+            claudeEmails: [], cursor: .unavailable, cursorKey: nil, openRouter: .unavailable,
+            codexKey: folded, lanes: [:], saveError: nil)
+        XCTAssertTrue(observed.contains(firstKey))
+        XCTAssertFalse(observed.contains(secondKey), "the login now held was not the one read")
+
+        var diskOnly: [String: AccountSnapshot] = [:]
+        XCTAssertNil(store.seedCodexAccount(into: &diskOnly, live: nil, home: first.root),
+                     "a disk fallback is not a read of this cycle")
+    }
+
+    /// The login switches between asking the CLI and folding its answer.
+    func testALoginSwitchBetweenFetchAndFoldWritesNothing() throws {
+        let second = try FakeCodexHome(email: "second@example.test")
+        defer { second.remove() }
+        let store = Store(dir: second.root.appendingPathComponent("support"),
+                          mirror: second.root.appendingPathComponent("claude/quota-cache.json"), now: { self.now })
+        let live = try XCTUnwrap(CodexLive.parse(line: Data(liveAnswer.utf8), now: now))
+        let firstKey = AccountSnapshot.storeKey(email: "first@example.test", provider: .codex)
+        let secondKey = AccountSnapshot.storeKey(email: "second@example.test", provider: .codex)
+        var old = AccountSnapshot(email: "second@example.test", nickname: "second", plan: "pro")
+        old.provider = .codex
+        old.weeklyPct = 10
+        old.capturedAt = now.addingTimeInterval(-60)
+        var accounts = [secondKey: old]
+
+        let folded = store.seedCodexAccount(into: &accounts, live: (live, "first@example.test"), home: second.root)
+        XCTAssertNil(folded)
+        XCTAssertEqual(accounts[secondKey]?.weeklyPct, 10, "the first login's numbers never reach the second row")
+        XCTAssertEqual(accounts[secondKey]?.capturedAt, old.capturedAt)
+        XCTAssertNil(accounts[firstKey])
+
+        let observed = Refresher.observedKeys(
+            claudeEmails: [], cursor: .unavailable, cursorKey: nil, openRouter: .unavailable,
+            codexKey: folded, lanes: [:], saveError: nil)
+        XCTAssertFalse(observed.contains(firstKey))
+        XCTAssertFalse(observed.contains(secondKey))
+        XCTAssertNotNil(ProviderCoverage.notCapturedReason(
+            wanted: old, after: accounts[secondKey], observed: observed.contains(secondKey), now: now))
+    }
+
+    private func ownerLine(_ id: Int, _ email: String) -> Data {
+        Data(#"{"id":\#(id),"result":{"account":{"type":"chatgpt","email":"\#(email)","planType":"pro"}}}"#.utf8)
+    }
+
+    /// The login goes A, B, A while the CLI answers: B's numbers must never land on A.
+    func testAnAnswerFromAnotherOwnerNeverLandsOnTheSeatHeldAtFold() throws {
+        let holder = try FakeCodexHome(email: "a@example.test")
+        defer { holder.remove() }
+        let store = Store(dir: holder.root.appendingPathComponent("support"),
+                          mirror: holder.root.appendingPathComponent("claude/quota-cache.json"), now: { self.now })
+        var collector = CodexLive.AnswerCollector()
+        XCTAssertEqual(collector.add(line: ownerLine(CodexLive.ownerBeforeID, "b@example.test"), now: now),
+                       CodexLive.rateLimitsRequest, "the quota is asked only after the owner answered")
+        XCTAssertEqual(collector.add(line: Data(liveAnswer.utf8), now: now),
+                       CodexLive.ownerAfterRequest, "the second owner read is asked only after the quota")
+        XCTAssertNil(collector.add(line: ownerLine(CodexLive.ownerAfterID, "b@example.test"), now: now))
+        XCTAssertTrue(collector.isDone)
+        let answer = try XCTUnwrap(collector.answer)
+        XCTAssertEqual(answer.owner, "b@example.test")
+
+        let key = AccountSnapshot.storeKey(email: "a@example.test", provider: .codex)
+        var row = AccountSnapshot(email: "a@example.test", nickname: "a", plan: "pro")
+        row.provider = .codex
+        row.weeklyPct = 10
+        row.capturedAt = now.addingTimeInterval(-60)
+        var accounts = [key: row]
+        let folded = store.seedCodexAccount(into: &accounts, live: (answer.reading, answer.owner),
+                                            home: holder.root)
+        XCTAssertNil(folded)
+        XCTAssertEqual(accounts[key]?.weeklyPct, 10, "B's 72 % must not reach A's row")
+        XCTAssertEqual(accounts[key]?.capturedAt, row.capturedAt)
+        let observed = Refresher.observedKeys(
+            claudeEmails: [], cursor: .unavailable, cursorKey: nil, openRouter: .unavailable,
+            codexKey: folded, lanes: [:], saveError: nil)
+        XCTAssertFalse(observed.contains(key))
+    }
+
+    func testAnAnswerNeedsOneOwnerOnBothSides() {
+        var moved = CodexLive.AnswerCollector()
+        moved.add(line: ownerLine(CodexLive.ownerBeforeID, "a@example.test"), now: now)
+        moved.add(line: Data(liveAnswer.utf8), now: now)
+        moved.add(line: ownerLine(CodexLive.ownerAfterID, "b@example.test"), now: now)
+        XCTAssertTrue(moved.isDone)
+        XCTAssertNil(moved.answer, "the owner changed around the read")
+
+        var unnamed = CodexLive.AnswerCollector()
+        unnamed.add(line: Data(#"{"id":3,"error":{"code":-32601,"message":"unknown method"}}"#.utf8), now: now)
+        XCTAssertTrue(unnamed.isDone, "a CLI that cannot name its account stops the read at once")
+        XCTAssertNil(unnamed.answer)
+    }
+
+    func testRepliesOutOfOrderGiveNoAnswer() {
+        var quotaFirst = CodexLive.AnswerCollector()
+        XCTAssertNil(quotaFirst.add(line: Data(liveAnswer.utf8), now: now))
+        XCTAssertTrue(quotaFirst.isDone)
+        XCTAssertNil(quotaFirst.answer, "a quota with no owner read before it")
+
+        var ownerTwice = CodexLive.AnswerCollector()
+        ownerTwice.add(line: ownerLine(CodexLive.ownerBeforeID, "a@example.test"), now: now)
+        XCTAssertNil(ownerTwice.add(line: ownerLine(CodexLive.ownerAfterID, "a@example.test"), now: now))
+        XCTAssertTrue(ownerTwice.isDone)
+        XCTAssertNil(ownerTwice.answer, "both owner reads came before the quota")
     }
 
     func testConfigModelReadsOnlyTheTopLevelKey() {
@@ -102,12 +236,12 @@ final class CodexLiveTests: XCTestCase {
     private struct FakeCodexHome {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("tower-codex-\(UUID().uuidString)")
 
-        init() throws {
+        init(email: String = "user-d@example.com") throws {
             let codex = root.appendingPathComponent(".codex")
             try FileManager.default.createDirectory(at: codex.appendingPathComponent("sessions/2026/09/22"),
                                                     withIntermediateDirectories: true)
-            // id_token payload: {"email":"user-d@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}
-            let payload = #"{"email":"user-d@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}"#
+            // id_token payload: {"email":"<email>","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}
+            let payload = #"{"email":"\#(email)","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}"#
             let b64 = Data(payload.utf8).base64EncodedString()
                 .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
                 .replacingOccurrences(of: "=", with: "")

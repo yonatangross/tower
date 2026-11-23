@@ -152,8 +152,32 @@ enum ProviderCoverage {
         switch a.kind {
         case .claude: return "switch into \(a.nickname) with /login to read it"
         case .devin: return "run a Devin session; Tower reads the status cache the CLI writes"
+        case .codex: return "run a Codex session to renew it"
+        case .cursor:
+            // Tower signs in to Cursor itself, so the fix is never a sign-in inside the app.
+            return a.cursorRestingRemedy == AccountSnapshot.connectCursorRemedy
+                ? AccountSnapshot.connectCursorRemedy
+                : "see tower_coverage for why Cursor cannot be read"
         default: return nil
         }
+    }
+
+    /// Why a refresh of one seat did not read that seat, or nil when it did. A cycle can
+    /// succeed for the active login and leave the asked-for row untouched, so its outcome
+    /// says nothing about this row. `observed` is this invocation's own per-seat result
+    /// (`RefreshResult.observedKeys`). Stored times cannot answer it, because another
+    /// process may write a newer capture while this cycle runs. An observed row must also
+    /// be clean and fresh: a lane can be read just now from a cache that is hours old.
+    static func notCapturedReason(wanted: AccountSnapshot, after: AccountSnapshot?,
+                                  observed: Bool, now: Date) -> String? {
+        guard let after else { return "\(wanted.nickname) is no longer in the store" }
+        let error = after.lastError.flatMap { $0.isEmpty || isCodexCap(after) ? nil : $0 }
+        let age = after.capturedAt.map { now.timeIntervalSince($0) }
+        if observed, error == nil, let age, age >= 0, age <= AccountSnapshot.freshnessTTL { return nil }
+        let lastCapture = "last capture " + CLI.age(after.capturedAt, now: now)
+        let why = error ?? (observed ? lastCapture : "this cycle has no reading for it; \(lastCapture)")
+        let step = staleStep(after).map { "; \($0)" } ?? ""
+        return "\(after.nickname) was not captured by this refresh: \(why)\(step)"
     }
 
     /// A lane's own latest outcome outranks its stored row: a read that failed just now

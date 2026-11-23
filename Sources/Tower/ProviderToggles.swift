@@ -133,7 +133,7 @@ struct ProviderGate: Equatable, Sendable {
 struct ProviderReaders: Sendable {
     var cursor: @Sendable () async -> CursorUsage.Outcome
     var openRouter: @Sendable () async -> OpenRouter.Outcome
-    var codex: @Sendable () async -> CodexReader.Reading?
+    var codex: @Sendable () async -> CodexLive.Answer?
     var lanes: @Sendable (Set<Provider>) async -> [Provider: AgentLane.Outcome]
 
     static let live = ProviderReaders(
@@ -150,7 +150,7 @@ struct ProviderReaders: Sendable {
 struct ProviderProbes {
     var cursor: CursorUsage.Outcome
     var openRouter: OpenRouter.Outcome
-    var codex: CodexReader.Reading?
+    var codex: CodexLive.Answer?
     var lanes: [Provider: AgentLane.Outcome]
 }
 
@@ -161,7 +161,7 @@ extension ProviderReaders {
     func probe(_ gate: ProviderGate) async -> ProviderProbes {
         async let cursorOut: CursorUsage.Outcome = gate.on(.cursor) ? cursor() : .notConfigured
         async let orOut: OpenRouter.Outcome = gate.on(.openrouter) ? openRouter() : .notConfigured
-        async let codexOut: CodexReader.Reading? = gate.on(.codex) ? codex() : nil
+        async let codexOut: CodexLive.Answer? = gate.on(.codex) ? codex() : nil
         let allowedLanes = gate.lanes
         async let laneOut: [Provider: AgentLane.Outcome] = allowedLanes.isEmpty ? [:] : lanes(allowedLanes)
         return ProviderProbes(cursor: await cursorOut, openRouter: await orOut,
