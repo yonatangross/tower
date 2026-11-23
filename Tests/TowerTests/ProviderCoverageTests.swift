@@ -149,6 +149,24 @@ final class ProviderCoverageTests: XCTestCase {
         XCTAssertEqual(ProviderCoverage.accountRow(seat, now: now).state, .live)
     }
 
+    func testWeeklyOnlyClaudeReadIsLiveButStillDoesNotRank() {
+        let seat = claude(age: 30)
+        XCTAssertNil(seat.fiveHourPct)
+        XCTAssertEqual(ProviderCoverage.accountRow(seat, now: now).state, .live)
+        XCTAssertEqual(seat.worstTrust(now: now), .unknown)
+    }
+
+    func testPiProbeDecidesItsRowWhenNothingIsStored() {
+        let readable = matrix([], lanes: [.pi: lane(.pi, .notExposed)]).first { $0.provider == .pi }
+        XCTAssertEqual(readable?.state, .notExposed)
+        XCTAssertEqual(readable?.isLive, false)
+        let unreadable = AgentLane.Outcome.unavailable("could not read Pi's settings.json")
+        let failed = matrix([], lanes: [.pi: unreadable]).first { $0.provider == .pi }
+        XCTAssertEqual(failed?.state, .failed)
+        let absent = matrix([], lanes: [.pi: .notConfigured]).first { $0.provider == .pi }
+        XCTAssertEqual(absent?.state, .notConfigured)
+    }
+
     func testEveryProviderHasARow() {
         let named = Set(matrix([]).map(\.provider))
         XCTAssertEqual(named, Set(Provider.allCases))

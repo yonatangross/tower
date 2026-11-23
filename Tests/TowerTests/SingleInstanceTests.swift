@@ -87,6 +87,20 @@ final class SingleInstanceTests: XCTestCase {
             isDevCopy: true, env: ["TOWER_SUPPORT_DIR": "/tmp/x"], applicationSupport: base))
     }
 
+    func testADemoRunWithNoStoreStillRefusesOnADevCopy() {
+        let base = URL(fileURLWithPath: "/tmp/support")
+        let env = ["TOWER_DEMO": "1"]
+        XCTAssertNil(DevCopyIsolation.supportOverride(isDevCopy: true, env: env, applicationSupport: base))
+        XCTAssertTrue(DemoMode.isMisconfigured(env: env))
+    }
+
+    func testADevCopyKeepsItsOwnCursorSignInItem() {
+        let installed = KeychainCursorTokenStore.serviceName(domain: ProductIdentity.bundleIdentifier)
+        let dev = KeychainCursorTokenStore.serviceName(domain: ProductIdentity.bundleIdentifier + ".dev")
+        XCTAssertEqual(installed, "ai.yonyon.tower.cursor-signin")
+        XCTAssertNotEqual(dev, installed)
+    }
+
     func testADevCopyDoesNotWriteTheRealMirror() {
         let env = ["TOWER_SUPPORT_DIR": "/tmp/tower-dev", "CLAUDE_CONFIG_DIR": "/tmp/claude"]
         XCTAssertEqual(Store.defaultMirrorPath(env: env, devCopy: true).path, "/tmp/tower-dev/quota-cache.json")

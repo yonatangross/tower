@@ -93,9 +93,10 @@ enum DevCopyIsolation {
     static let refusal = "A dev copy does not change the installed Tower's seats or start at login."
 
     /// The support folder a dev copy must use, or nil when the process keeps its own. An explicit
-    /// `TOWER_SUPPORT_DIR` wins.
+    /// `TOWER_SUPPORT_DIR` wins. A demo run gets no default, so the demo gate still refuses a
+    /// run that named no demo store instead of opening the dev copy's live one.
     static func supportOverride(isDevCopy: Bool, env: [String: String], applicationSupport: URL) -> String? {
-        guard isDevCopy, (env["TOWER_SUPPORT_DIR"] ?? "").isEmpty else { return nil }
+        guard isDevCopy, env["TOWER_DEMO"] != "1", (env["TOWER_SUPPORT_DIR"] ?? "").isEmpty else { return nil }
         return applicationSupport.appendingPathComponent(supportDirectoryName, isDirectory: true).path
     }
 
