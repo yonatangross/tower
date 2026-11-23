@@ -21,7 +21,8 @@ final class RestingCauseTests: XCTestCase {
     /// The same ItemTable the Cursor app keeps, with fake values only. It supplies the row's
     /// label (email and plan), never a token Tower would send.
     private func seedCursorApp(email: String) throws {
-        let sql = "create table ItemTable (key text unique on conflict replace, value blob);"
+        // A test may seed more than once, so the table is created only when it is missing.
+        let sql = "create table if not exists ItemTable (key text unique on conflict replace, value blob);"
             + "insert into ItemTable values ('cursorAuth/cachedEmail','\(email)');"
             + "insert into ItemTable values ('cursorAuth/stripeMembershipType','ultra');"
         let p = Process()
