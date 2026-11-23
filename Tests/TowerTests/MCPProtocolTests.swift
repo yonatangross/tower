@@ -132,8 +132,16 @@ final class MCPProtocolTests: XCTestCase {
         let refused = await request(12, "tools/call", ["name": "echo", "arguments": ["text": "refuse"]])
         XCTAssertTrue(refused["error"].isNull, "a tool refusal is a result, not a protocol error")
         XCTAssertEqual(refused["result"]["isError"], true)
-        XCTAssertEqual(refused["result"]["structuredContent"]["error"]["code"], "Nope")
+        XCTAssertTrue(refused["result"]["structuredContent"].isNull,
+                      "an {error} payload fails the output schema, so a client would hide the refusal")
         XCTAssertEqual(refused["result"]["content"][0]["text"], "Nope: refused on purpose")
+    }
+
+    func testARefusalKeepsItsDetailsInTheText() {
+        let refused = MCPToolResult.refused("UnknownKey", "no such key", extra: ["known": ["a", "b"]])
+        XCTAssertTrue(refused.json["structuredContent"].isNull)
+        XCTAssertEqual(refused.json["content"][0]["text"], "UnknownKey: no such key")
+        XCTAssertTrue(refused.json["content"][1]["text"].stringValue?.contains("known") == true)
     }
 
     func testResourcesSubscribeAndNotify() async {

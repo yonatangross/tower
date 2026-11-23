@@ -87,22 +87,33 @@ struct MCPToolResult: Equatable, Sendable {
         MCPToolResult(content: [.text(summary)], structuredContent: structured)
     }
 
-    /// A named refusal: the code leads the text and sits in `structuredContent.error`.
+    /// A named refusal: the code leads the text. Its details, such as the valid keys, follow
+    /// as a second text block, because `json` sends a refusal as text only.
     static func refused(_ code: String, _ message: String, extra: [String: JSON] = [:]) -> MCPToolResult {
         var error: [String: JSON] = ["code": .string(code), "message": .string(message)]
         for (k, v) in extra { error[k] = v }
+        var content: [Content] = [.text("\(code): \(message)")]
+        if !extra.isEmpty { content.append(.text(JSON.object(extra).prettyText)) }
         return MCPToolResult(
-            content: [.text("\(code): \(message)")],
+            content: content,
             structuredContent: ["error": .object(error)],
             isError: true)
     }
 
+    /// A named refusal's `{error}` payload matches no tool's output schema.
+    private var isRefusal: Bool {
+        isError && structuredContent?["error"]["code"].stringValue != nil
+    }
+
+    /// A refusal goes out as text only. Clients validate `structuredContent` against the
+    /// tool's output schema even on `isError`, so sending `{error}` replaced the named
+    /// refusal with a raw -32602. The text already leads with the code.
     var json: JSON {
         var out: [String: JSON] = [
             "content": .array(content.map(\.json)),
             "isError": .bool(isError),
         ]
-        if let structuredContent { out["structuredContent"] = structuredContent }
+        if let structuredContent, !isRefusal { out["structuredContent"] = structuredContent }
         return .object(out)
     }
 }

@@ -345,14 +345,6 @@ enum CodexReader {
         }
     }
 
-    /// Which reading a refresh folds. The live answer is the plan's state now; a disk
-    /// reading is only as new as the last rollout, so it serves only when the CLI could
-    /// not be asked. A disk exhaustion NEWER than the live answer cannot exist (live is
-    /// taken at fold time), so there is no case where disk should override it.
-    static func preferred(live: Reading?, disk: @autoclosure () -> Reading?) -> Reading? {
-        live ?? disk()
-    }
-
     /// The model the newest session ran, from its last `turn_context` record. Rollouts
     /// name the model per turn, so this is what a seat actually ran, which can differ from
     /// the config default (measured 2026-09-22: config said gpt-6-astra while the newest
@@ -429,13 +421,74 @@ enum CodexLive {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    /// The three messages one read needs: the handshake, its notification, the request.
+    /// One read: the handshake, then the rate limits between two reads of the account the
+    /// CLI is authenticated as. Each request is sent only after the one before it answered,
+    /// so the two account reads really do bracket the quota.
     static let requestID = 2
-    static let requests: [String] = [
+    static let ownerBeforeID = 3
+    static let ownerAfterID = 4
+    static let openingRequests: [String] = [
         #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"tower","version":"1"}}}"#,
         #"{"method":"initialized"}"#,
-        #"{"id":2,"method":"account/rateLimits/read","params":null}"#,
+        #"{"id":3,"method":"account/read","params":{"refreshToken":false}}"#,
     ]
+    static let rateLimitsRequest = #"{"id":2,"method":"account/rateLimits/read","params":null}"#
+    static let ownerAfterRequest = #"{"id":4,"method":"account/read","params":{"refreshToken":false}}"#
+
+    /// A usage reading and the account the CLI itself said it answered for.
+    struct Answer {
+        let reading: CodexReader.Reading
+        let owner: String
+    }
+
+    /// Walks one read's three replies in their one valid order: owner, quota, owner. Any
+    /// other reply, an error, or an owner that moved ends the read with no answer, because
+    /// a reading nobody can attribute is not published.
+    struct AnswerCollector {
+        private var before: String?
+        private var after: String?
+        private var reading: CodexReader.Reading?
+        private var failed = false
+
+        var isDone: Bool { failed || after != nil }
+
+        var answer: Answer? {
+            guard !failed, let reading, let before, let after,
+                  before.caseInsensitiveCompare(after) == .orderedSame else { return nil }
+            return Answer(reading: reading, owner: before)
+        }
+
+        private static func owner(in message: [String: Any]) -> String? {
+            let result = message["result"] as? [String: Any]
+            let account = result?["account"] as? [String: Any]
+            return (account?["email"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        }
+
+        /// Takes one line and returns the request to send next, if this reply earned one.
+        @discardableResult
+        mutating func add(line: Data, now: Date) -> String? {
+            guard !isDone,
+                  let message = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
+                  let id = message["id"] as? Int,
+                  [CodexLive.requestID, CodexLive.ownerBeforeID, CodexLive.ownerAfterID].contains(id)
+            else { return nil }
+            if before == nil, id == CodexLive.ownerBeforeID, let owner = Self.owner(in: message) {
+                before = owner
+                return CodexLive.rateLimitsRequest
+            }
+            if before != nil, reading == nil, id == CodexLive.requestID,
+               let parsed = CodexLive.parse(line: line, now: now) {
+                reading = parsed
+                return CodexLive.ownerAfterRequest
+            }
+            if reading != nil, id == CodexLive.ownerAfterID, let owner = Self.owner(in: message) {
+                after = owner
+                return nil
+            }
+            failed = true
+            return nil
+        }
+    }
 
     private struct Response: Decodable {
         struct Result: Decodable {
@@ -497,8 +550,9 @@ enum CodexLive {
     /// timeout, not signed in, unparseable): the caller falls back to the disk reader, so
     /// a broken CLI costs freshness, never a wrong number. Blocking; call off the main actor.
     /// Eight seconds: the probe runs beside the Cursor fetch (15 s), so a hung CLI must
-    /// never become the slowest part of a refresh.
-    static func fetch(timeout: TimeInterval = 8, now: @escaping () -> Date = Date.init) -> CodexReader.Reading? {
+    /// never become the slowest part of a refresh. A CLI that cannot name its account also
+    /// answers nil, so its numbers are never attributed by guesswork.
+    static func fetch(timeout: TimeInterval = 8, now: @escaping () -> Date = Date.init) -> Answer? {
         guard let bin = binary() else { return nil }
         let p = Process()
         p.executableURL = bin
@@ -509,26 +563,32 @@ enum CodexLive {
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
         defer { if p.isRunning { p.terminate() } }
-        let payload = requests.joined(separator: "\n") + "\n"
+        let payload = openingRequests.joined(separator: "\n") + "\n"
         // The throwing API: a child that exited early surfaces as an error, not an
         // Objective-C exception out of the legacy `write(_:)`.
         guard (try? input.fileHandleForWriting.write(contentsOf: Data(payload.utf8))) != nil else { return nil }
 
         let done = DispatchSemaphore(value: 0)
         let lock = NSLock()
-        var reading: CodexReader.Reading?
+        var collector = AnswerCollector()
         var buffer = Data()
         output.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
             lock.lock(); defer { lock.unlock() }
-            guard reading == nil else { return }
+            guard !collector.isDone else { return }
             if chunk.isEmpty { done.signal(); handle.readabilityHandler = nil; return }
             buffer.append(chunk)
             while let nl = buffer.firstIndex(of: 10) {
                 let line = Data(buffer[..<nl])
                 buffer.removeSubrange(...nl)
-                if let r = parse(line: line, now: now()) {
-                    reading = r
+                if let next = collector.add(line: line, now: now()),
+                   (try? input.fileHandleForWriting.write(contentsOf: Data((next + "\n").utf8))) == nil {
+                    // The child is gone: nothing further can answer, so stop waiting.
+                    handle.readabilityHandler = nil
+                    done.signal()
+                    return
+                }
+                if collector.isDone {
                     handle.readabilityHandler = nil
                     done.signal()
                     return
@@ -539,7 +599,7 @@ enum CodexLive {
         output.fileHandleForReading.readabilityHandler = nil
         try? input.fileHandleForWriting.close()
         lock.lock(); defer { lock.unlock() }
-        return reading
+        return collector.answer
     }
 }
 

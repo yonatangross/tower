@@ -346,7 +346,8 @@ enum OnboardingSelfTest {
             let r = service.configSet(key: key, value: value)
             let refusedRight = r.isError
                 && r.structuredContent?["error"]["code"] == .string(SettingsConfig.consentRefusalCode)
-                && r.content == [.text("\(SettingsConfig.consentRefusalCode): \(key) is the user's choice: change this in Tower Settings")]
+                // The code and message lead; the refusal's details follow as a second block.
+                && r.content.first == .text("\(SettingsConfig.consentRefusalCode): \(key) is the user's choice: change this in Tower Settings")
             if !refusedRight { writable.append(key) }
         }
         check("config: tower_config_set refuses every consent key with UserConsentRequired",

@@ -162,7 +162,7 @@ the panel or the CLI performs (`tower_refresh`,
 returns `structuredContent` under a published `outputSchema`, every write is
 annotated (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`) and is refused with a named code when one of Tower's own
-preconditions fails (`NoResetTime`, `NotPollable`).
+preconditions fails (`NoResetTime`, `NotPollable`, `NotCaptured`).
 The quota cache is a subscribable resource (`tower://quota-cache`), each
 account is a resource (`tower://accounts/{id}`), and three prompts ask the
 questions a multi-agent setup asks ("pick an account for a lane of class X",
