@@ -627,9 +627,9 @@ struct AccountSnapshot: Codable, Identifiable {
     /// still comes from `capturedAt` and the window from `resetsAt`. Optional for the
     /// same decode reason as `provider`.
     var source: String?
-    /// When Tower last tried to read this lane. `capturedAt` is when the tool observed
-    /// its numbers; this is when Tower looked, so a 2 hour old Devin cache read now has
-    /// `readAt` fresh and `capturedAt` old. Key omitted on every other row.
+    /// When Tower last tried to read this lane or Cursor row. `capturedAt` is when the tool
+    /// observed its numbers; this is when Tower looked, so a 2 hour old Devin cache read now
+    /// has `readAt` fresh and `capturedAt` old. Key omitted on every other row.
     var readAt: Date?
 
     var kind: Provider { provider ?? .claude }
@@ -705,9 +705,12 @@ struct AccountSnapshot: Codable, Identifiable {
     func restingStateText(_ why: RestReason, now: Date) -> String {
         var parts: [String] = []
         switch why {
-        case .capped, .meteredCapped:
-            parts.append(why.isCapped
-                ? (restingCapWords(now: now) ?? why.text) : why.text)
+        case .capped:
+            parts.append(restingCapWords(now: now) ?? why.text)
+            if let cause = restingCause { parts.append(cause) }
+        case .meteredCapped:
+            // Keeps its own words: Auto still runs, so a plain "capped" would read as a dead seat.
+            parts.append(why.text)
             if let cause = restingCause { parts.append(cause) }
         case .cappedAndStale, .stale:
             if case .cappedAndStale = why, let cap = restingCapWords(now: now) {

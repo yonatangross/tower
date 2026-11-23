@@ -3132,12 +3132,13 @@ enum CLI {
         var lines = ["  " + head]
 
         if !account.isRecommendable(now: now) {
-            let state = account.capturedAt == nil && account.restingCause == nil
-                ? "never captured"
-                : account.restingStateText(
-                    account.restingReason(now: now)
-                        ?? (account.capturedAt == nil ? .neverCaptured : .stale(0)),
-                    now: now)
+            // This row is not live, so it never states a cap as current: only the stored
+            // cause and the ages.
+            let state = account.restingCause == nil
+                ? (account.capturedAt == nil ? "never captured"
+                    : "unknown since " + age(account.capturedAt, now: now))
+                : account.restingStateText(account.capturedAt == nil ? .neverCaptured : .stale(0),
+                                           now: now)
             lines.append("      " + state)
             if let error = account.lastError, error != refreshError {
                 lines.append("      ⚠️ " + error)
@@ -3206,6 +3207,7 @@ enum CLI {
         if account.fiveHourUnreported(now: now) {
             return SeatUsagePresentation.fiveHourUnreportedText
         }
+        if why == .neverCaptured, account.restingCause == nil { return why.text }
         return account.restingStateText(why, now: now)
     }
 
