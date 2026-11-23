@@ -312,6 +312,7 @@ final class MCPSurfaceTests: XCTestCase {
             ("tower_advice", [:]), ("tower_rotate", [:]), ("tower_resets", [:]), ("tower_alerts", [:]),
             ("tower_freshness", [:]), ("tower_seats", [:]), ("tower_lanes", [:]), ("tower_sessions", [:]),
             ("tower_openrouter_history", [:]), ("tower_config_get", [:]),
+            ("tower_coverage", [:]), ("tower_room", ["provider": "typesafe"]),
         ]
         for (name, args) in reads {
             let result = try await call(name, args)

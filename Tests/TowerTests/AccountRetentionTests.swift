@@ -51,11 +51,13 @@ final class MockSeatKeychain: ClaudeSeatKeychain {
 
     func vault(in dir: URL, enabled: @escaping () -> Bool = { true },
                setEnabled: @escaping (Bool) -> Void = { _ in },
-               log: @escaping (String) -> Void = { _ in }) -> ClaudeSeatVault {
+               log: @escaping (String) -> Void = { _ in },
+               refusesSeatChanges: @escaping () -> Bool = { false }) -> ClaudeSeatVault {
         ClaudeSeatVault(keychain: self,
                         lockURL: dir.appendingPathComponent("seat.lock"),
                         stateURL: dir.appendingPathComponent("seat-state.plist"),
-                        retentionEnabled: enabled, setRetentionEnabled: setEnabled, log: log)
+                        retentionEnabled: enabled, setRetentionEnabled: setEnabled, log: log,
+                        refusesSeatChanges: refusesSeatChanges)
     }
 }
 

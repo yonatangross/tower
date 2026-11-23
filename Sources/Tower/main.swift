@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 // The one single-instance gate, before NSApplication exists. A LIVE other Tower (by pid, so a
-// dead Launch Services record such as the 2026-11-05 temp build 16867 never counts) is asked
+// dead Launch Services record of a build that has exited never counts) is asked
 // to show its panel and brought forward; this launch then exits without a menu bar item.
 func enforceSingleInstance() {
     guard let other = MainActor.assumeIsolated({ SingleInstance.otherLiveInstance() }) else { return }
@@ -12,6 +12,9 @@ func enforceSingleInstance() {
     NSRunningApplication(processIdentifier: other)?.activate()
     exit(0)
 }
+
+// First, before anything can open the store: a dev copy never shares the installed Tower's.
+DevCopyIsolation.apply()
 
 // `tower status`            -> one-shot text table, no GUI.
 // `tower selftest`          -> pure-logic checks, no network, no GUI.

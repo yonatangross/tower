@@ -219,8 +219,16 @@ final class MemoryCursorTokenStore: CursorTokenStore, @unchecked Sendable {
 /// written by Tower itself, so Tower is on its access list from the start.
 struct KeychainCursorTokenStore: CursorTokenStore {
     static let shared = KeychainCursorTokenStore()
-    static let service = "ai.yonyon.tower.cursor-signin"
+    static let service = serviceName(domain: TowerPreferences.domainName)
     static let account = "cursor"
+
+    /// A dev copy keeps its own item. `save` deletes and replaces the item under this name
+    /// with one trusting the running build, so a shared name would lock the installed Tower
+    /// out of its Cursor sign-in.
+    static func serviceName(domain: String) -> String {
+        let installed = "ai.yonyon.tower.cursor-signin"
+        return TowerPreferences.isDevCopy(domain: domain) ? "\(installed).\(domain)" : installed
+    }
 
     private func baseQuery() -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,

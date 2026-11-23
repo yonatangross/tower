@@ -56,7 +56,8 @@ enum LaunchAtLogin {
     }
 
     /// Only the SMAppService login item. The installer calls this after it loads the agent.
-    static func unregisterService() -> String? {
+    static func unregisterService(devCopy: Bool = TowerPreferences.runningAsDevCopy) -> String? {
+        if devCopy { return DevCopyIsolation.refusal }
         do {
             try SMAppService.mainApp.unregister()
             return nil
@@ -87,7 +88,9 @@ enum LaunchAtLogin {
         }
     }
 
-    static func set(_ on: Bool) -> String? {
+    /// The agent's label, plist and off marker are the installed Tower's, so a dev copy changes none.
+    static func set(_ on: Bool, devCopy: Bool = TowerPreferences.runningAsDevCopy) -> String? {
+        if devCopy { return DevCopyIsolation.refusal }
         markOff(!on)
         if on {
             // An installed agent already starts Tower at login; a second login item would start two.
@@ -439,6 +442,7 @@ final class LimitsModel: ObservableObject {
         loginPollInFlight = true
         let epoch = loginRetentionEpoch
         Task.detached {
+            FootprintLog.note("login-tick")
             let credentials = Keychain.activeOAuth().map { [$0] } ?? []
             let identity = ClaudeConfigIdentity.read(at: ClaudeConfigIdentity.defaultURL())
             await MainActor.run {
@@ -545,7 +549,7 @@ final class LimitsModel: ObservableObject {
     func toggleClaudeSeatRetention(_ on: Bool) {
         seatRetentionError = nil
         guard !on else {
-            ClaudeSeatVault.shared.enableRetention()
+            seatRetentionError = ClaudeSeatVault.shared.enableRetention()
             retainClaudeSeats = ClaudeSeatRetention.isEnabled()
             return
         }
@@ -681,6 +685,7 @@ final class LimitsModel: ObservableObject {
         refreshing = true
         lastAttempt = Date()
         copiedCommand = false
+        FootprintLog.note("refresh")
         defer {
             refreshing = false
             runNextQueuedLoginRefresh()

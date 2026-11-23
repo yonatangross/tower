@@ -200,6 +200,7 @@ agent prompts are in the [MCP playbook](docs/playbooks/mcp.md).
 | `tower_advice`, `tower_room`, `tower_rotate` | advice on the active seat, what is left per seat, a login plan |
 | `tower_status`, `tower_accounts`, `tower_account` | every account, or one, with its usage windows |
 | `tower_resets`, `tower_freshness`, `tower_alerts` | reset times, how fresh each reading is, threshold state |
+| `tower_coverage` | one row per provider seat: live, stale, failed or signed out, and the step that fixes it |
 | `tower_seats`, `tower_lanes`, `tower_sessions` | remembered seats, agent lanes, running Claude Code sessions |
 | `tower_openrouter_history`, `tower_config_get`, `tower_selftest`, `tower_panelshot` | balance trend, settings, checks, a panel image |
 | `tower_refresh`, `tower_retrust`, `tower_forget_seats`, `tower_config_set`, `tower_alert_ack` | writes, each annotated and refused with a named code when a precondition fails |

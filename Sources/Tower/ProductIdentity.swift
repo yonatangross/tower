@@ -77,6 +77,64 @@ enum TowerPreferences {
 
     static let domainName = domain(runningBundleIdentifier: ProductIdentity.runningBundle()?.bundleIdentifier)
     static let shared = defaults(domain: domainName, mainBundleIdentifier: Bundle.main.bundleIdentifier)
+
+    /// A copy re-identified as `<product id>.<suffix>`.
+    static func isDevCopy(domain: String) -> Bool {
+        domain.hasPrefix(ProductIdentity.bundleIdentifier + ".")
+    }
+    static let runningAsDevCopy = isDevCopy(domain: domainName)
+}
+
+/// What lets a dev copy run beside the installed Tower. It gets its own store and mirror,
+/// and it refuses every change to what the installed Tower owns: remembered seats, the
+/// LaunchAgent and the login item.
+enum DevCopyIsolation {
+    static let supportDirectoryName = "Tower Dev"
+    static let refusal = "A dev copy does not change the installed Tower's seats or start at login."
+
+    /// The support folder a dev copy must use, or nil when the process keeps its own. An explicit
+    /// `TOWER_SUPPORT_DIR` wins. A demo run gets no default, so the demo gate still refuses a
+    /// run that named no demo store instead of opening the dev copy's live one.
+    static func supportOverride(isDevCopy: Bool, env: [String: String], applicationSupport: URL) -> String? {
+        guard isDevCopy, env["TOWER_DEMO"] != "1", (env["TOWER_SUPPORT_DIR"] ?? "").isEmpty else { return nil }
+        return applicationSupport.appendingPathComponent(supportDirectoryName, isDirectory: true).path
+    }
+
+    /// Runs before anything reads the store. Through the existing override because the support
+    /// rename and the lineage import already skip an overridden folder, so a dev copy cannot
+    /// migrate or publish the production store.
+    static func apply() {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        guard let path = supportOverride(isDevCopy: TowerPreferences.runningAsDevCopy,
+                                         env: ProcessInfo.processInfo.environment,
+                                         applicationSupport: base) else { return }
+        // Without the override this copy would open the production store, so it must not continue.
+        guard setenv("TOWER_SUPPORT_DIR", path, 1) == 0 else {
+            fputs("TOWER_DEV_ISOLATION_FAILED: could not select the dev support folder\n", stderr)
+            exit(1)
+        }
+    }
+}
+
+/// Which bundle identifier the single-instance guard compares against.
+extension SingleInstance {
+    /// A dev copy's own identifier, so it can run beside the installed Tower. Every other id
+    /// compares against the product constant: only a dev copy gets `DevCopyIsolation`, so
+    /// nothing else may run alongside and share the installed Tower's state.
+    static func identifier(runningBundleIdentifier: String?) -> String {
+        guard let id = runningBundleIdentifier, TowerPreferences.isDevCopy(domain: id) else {
+            return ProductIdentity.bundleIdentifier
+        }
+        return id
+    }
+
+    /// The ids the guard looks up. A dev copy looks for its own id only. Any other id also
+    /// looks for itself, so two launches of the same custom bundle collapse too.
+    static func lookupIdentifiers(runningBundleIdentifier: String?) -> [String] {
+        let primary = identifier(runningBundleIdentifier: runningBundleIdentifier)
+        guard let id = runningBundleIdentifier, !id.isEmpty, id != primary else { return [primary] }
+        return [primary, id]
+    }
 }
 
 /// #121 readability: one multiplier for every font and text-bearing width in the panel.
