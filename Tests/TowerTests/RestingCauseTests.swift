@@ -154,7 +154,20 @@ final class RestingCauseTests: XCTestCase {
         XCTAssertNil(row.failedPollAt)
     }
 
-    func testABindingCapSurvivesAFailedRefresh() {
+    func testAMeteredCursorCapKeepsItsAutoWords() {
+        let row = seat("mt", week: 100, agoHours: 0, provider: .cursor)
+        let text = CLI.restingRowState(row, .meteredCapped(100), now: now)
+        XCTAssertEqual(text, "Opus pool capped 100% · Auto unmetered")
+    }
+
+    func testANeverCapturedRowKeepsItsWords() {
+        var row = seat("nv", week: nil, agoHours: 0)
+        row.capturedAt = nil
+        XCTAssertEqual(CLI.restingRowState(row, .neverCaptured, now: now),
+                       AccountSnapshot.RestReason.neverCaptured.text)
+    }
+
+    func testAFailedRefreshKeepsItsCauseAndBothAges() {
         var row = seat("cp", week: 99, agoHours: 2, provider: .cursor,
                        error: CursorUsage.refusedOwnReason(code: 401))
         row.readAt = now.addingTimeInterval(-120)
