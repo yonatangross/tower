@@ -3,9 +3,9 @@ import Darwin
 
 /// One Tower per login session.
 ///
-/// 2026-11-05: two Tower panels and two menu bar items were up at once, and a plain `open`
+/// Two Tower panels and two menu bar items were once up at once, and a plain `open`
 /// started nothing because Launch Services still listed a temp build that had exited
-/// (pid 16867, "exited-with-subordinates") and sent the reopen to it. So a launch checks for
+/// ("exited-with-subordinates") and sent the reopen to it. So a launch checks for
 /// a LIVE other instance by pid, hands off to it, and exits; a listed but dead pid is ignored.
 enum SingleInstance {
     /// The name the live instance listens on; posting it shows that instance's panel.

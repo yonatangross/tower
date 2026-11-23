@@ -2948,7 +2948,7 @@ enum Thresholds {
     /// `resets_at` comes back with sub-second jitter, and truncating to a whole second
     /// minted a BRAND NEW key whenever that jitter crossed an integer boundary, which
     /// re-armed every threshold for a window that had already announced. Observed live in
-    /// the operator's own store: `7d@1785383999: 95` and `7d@1785384000: 95` side by side,
+    /// a real store: `7d@1785383999: 95` and `7d@1785384000: 95` side by side,
     /// one second apart, for a window that resets WEEKLY. The 95% alert fired twice.
     private static let keyQuantum: TimeInterval = 60
 
