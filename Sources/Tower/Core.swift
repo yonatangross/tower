@@ -641,6 +641,96 @@ struct AccountSnapshot: Codable, Identifiable {
     /// owned Keychain item this build could not read. Either way it must not rank.
     var needsLogin: Bool { kind == .claude && lastError?.hasPrefix(Self.needsLoginText) == true }
 
+    /// The cause a resting or unrated row leads with, or nil when Tower has no named
+    /// reason beyond age. "unknown since" is only honest when nothing is stored: a seat
+    /// Tower holds no login for says so, and a refused Cursor sign-in says so. The full
+    /// error still renders in the row's detail; this is only the column word.
+    var restingCause: String? {
+        if needsLogin { return Self.needsLoginText }
+        guard let error = lastError, !error.isEmpty else { return nil }
+        // Codex reports a spent plan as a successful read, with the cap message in
+        // `lastError` beside a measured 100 %. That is a cap, not a failed read.
+        if kind == .codex, (weeklyPct ?? 0) >= 100 { return nil }
+        if error.contains("refused") { return "session refused" }
+        if kind == .cursor, CursorUsage.needsConnect(error) { return "not connected" }
+        return "read failed"
+    }
+
+    static let connectCursorRemedy = "connect Cursor"
+    static let retryOnRefreshRemedy = "retry on refresh"
+
+    /// The fix a resting Cursor row names. Tower signs in to Cursor itself, so a refused or
+    /// missing sign-in is fixed by the Connect Cursor action and never by signing in again
+    /// inside the Cursor app. Any other read failure retries on the next poll.
+    var cursorRestingRemedy: String {
+        if CursorUsage.needsConnect(lastError) || restingCause == "session refused" {
+            return Self.connectCursorRemedy
+        }
+        return Self.retryOnRefreshRemedy
+    }
+
+    /// The poll attempt that explains a stored cause: `readAt` postdating the last
+    /// good capture means the failure is younger than the numbers. A row without it
+    /// simply carries no evidence of when its last read was tried.
+    var failedPollAt: Date? {
+        guard restingCause != nil, let readAt else { return nil }
+        return readAt > (capturedAt ?? .distantPast) ? readAt : nil
+    }
+
+    /// The cap text a capped resting row leads with: the binding window named, or
+    /// the raw "X + Y blocked" list when no binding can be presented. nil when no
+    /// window sits at the cap.
+    func restingCapWords(now: Date = Date()) -> String? {
+        if let binding = presentableBindingQuota(now: now) {
+            let room = Int(max(0, 100 - binding.percent).rounded())
+            return "\(room)% room · \(binding.label(for: kind)) capped"
+        }
+        var names: [String] = []
+        if kind.hasFiveHourWindow,
+           (effectiveFiveHour(now: now).pct ?? 0) >= Self.cappedPct {
+            names.append("5-hour")
+        }
+        if (effectiveWeekly(now: now).pct ?? 0) >= Self.cappedPct {
+            names.append("7-day")
+        }
+        return names.isEmpty ? nil : names.joined(separator: " + ") + " blocked"
+    }
+
+    /// The resting row's state text, shared by the CLI table and the panel drawer
+    /// so both say the same words for the same row. A known binding cap stays
+    /// visible even when a failed poll left a reason on the row, a stored cause
+    /// names the real state, and the time of a failed poll is told apart from
+    /// the age of the numbers it could not refresh. "unknown since" is only
+    /// honest when nothing is stored.
+    func restingStateText(_ why: RestReason, now: Date) -> String {
+        var parts: [String] = []
+        switch why {
+        case .capped, .meteredCapped:
+            parts.append(why.isCapped
+                ? (restingCapWords(now: now) ?? why.text) : why.text)
+            if let cause = restingCause { parts.append(cause) }
+        case .cappedAndStale, .stale:
+            if case .cappedAndStale = why, let cap = restingCapWords(now: now) {
+                parts.append(cap)
+            }
+            if let cause = restingCause {
+                parts.append(cause)
+            } else if parts.isEmpty {
+                return capturedAt.map { "unknown since " + CLI.age($0, now: now) }
+                    ?? "unknown"
+            }
+        case .neverCaptured:
+            parts.append(restingCause ?? "not checked")
+        }
+        if let failed = failedPollAt {
+            parts.append("last poll failed " + CLI.age(failed, now: now))
+            if let c = capturedAt { parts.append("captured " + CLI.age(c, now: now)) }
+        } else if let c = capturedAt, restingCause != nil, why != .neverCaptured {
+            parts.append(CLI.age(c, now: now))
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// Store key. Codex is namespaced because the same person can hold a Claude account and
     /// a ChatGPT account on ONE email (the operator does), and an email-keyed
     /// dictionary would let whichever refreshed last overwrite the other.
@@ -2211,6 +2301,11 @@ final class Store {
             plan: label.plan)
         snap.provider = .cursor
         snap.plan = label.plan
+
+        // The attempt happened now whatever it returned, so `readAt` advances on every
+        // attempted outcome. That keeps a failure's age separate from the age of the
+        // numbers, which only `capturedAt` tracks.
+        if case .notConfigured = outcome {} else { snap.readAt = now }
 
         switch outcome {
         case .ok(let reading):

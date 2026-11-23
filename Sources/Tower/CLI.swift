@@ -110,8 +110,11 @@ enum CLI {
         if !unknown.isEmpty {
             lines.append("  UNKNOWN USAGE (excluded from room and next)")
             for seat in unknown {
-                let state = seat.capturedAt == nil ? "never captured"
-                    : "unknown since " + age(seat.capturedAt, now: now)
+                let state = seat.restingCause.map { cause in
+                    seat.capturedAt == nil ? cause
+                        : cause + " · " + age(seat.capturedAt, now: now)
+                } ?? (seat.capturedAt == nil ? "never captured"
+                    : "unknown since " + age(seat.capturedAt, now: now))
                 lines.append("  \(seat.nickname)  \(state)  \(switchProfiles[seat.email]?.label ?? "-")")
             }
         }
@@ -1681,6 +1684,66 @@ enum CLI {
               AccountSnapshot.restingStaleTTL == 24 * 3600
               && AccountSnapshot.freshnessTTL == 15 * 60)
 
+        // Resting row wording: a stored cause beats "unknown", and a Cursor row's fix is
+        // Tower's own Connect Cursor action, never signing in again inside the Cursor app.
+        var loginRow = acct("lg", five: 20, week: 40, agoHours: 72)
+        loginRow.lastError = AccountSnapshot.needsLoginText
+        let loginReason = loginRow.restingReason(now: t0)!
+        check("a needs-login row says needs login in the drawer",
+              RestingDrawer.state(loginRow, loginReason, now: t0) == "needs login · 3d ago",
+              "got \(RestingDrawer.state(loginRow, loginReason, now: t0))")
+        check("the CLI resting row words match the drawer for needs login",
+              restingRowState(loginRow, loginReason, now: t0)
+                  == "needs login · 3d ago",
+              "got \(restingRowState(loginRow, loginReason, now: t0))")
+        var refusedRow = acct("rf", five: 20, week: 60, agoHours: 29 * 24, provider: .cursor)
+        refusedRow.lastError = CursorUsage.refusedOwnReason(code: 401)
+        let refusedReason = refusedRow.restingReason(now: t0)!
+        check("a refused Cursor session says refused, not unknown",
+              RestingDrawer.state(refusedRow, refusedReason, now: t0) == "session refused · 29d ago",
+              "got \(RestingDrawer.state(refusedRow, refusedReason, now: t0))")
+        check("a refused Cursor session names connect Cursor, not a sign-in in the Cursor app",
+              RestingDrawer.action(refusedRow, refusedReason, now: t0) == "connect Cursor",
+              "got \(RestingDrawer.action(refusedRow, refusedReason, now: t0))")
+        var notConnected = acct("nc", five: nil, week: 60, agoHours: 5 * 24, provider: .cursor)
+        notConnected.lastError = CursorUsage.connectReason
+        let ncReason = notConnected.restingReason(now: t0)!
+        check("a Cursor row with no Tower sign-in names connect Cursor",
+              RestingDrawer.action(notConnected, ncReason, now: t0) == "connect Cursor"
+                  && notConnected.restingCause == "not connected",
+              "got \(RestingDrawer.action(notConnected, ncReason, now: t0))")
+        var netFail = acct("nf", five: nil, week: 60, agoHours: 5 * 24, provider: .cursor)
+        netFail.lastError = "could not read Cursor usage (network, or the response "
+            + "did not parse)"
+        let netReason = netFail.restingReason(now: t0)!
+        check("a network failure names a failed read and retries on refresh",
+              RestingDrawer.state(netFail, netReason, now: t0) == "read failed · 5d ago"
+                  && RestingDrawer.action(netFail, netReason, now: t0) == "retry on refresh",
+              "got \(RestingDrawer.state(netFail, netReason, now: t0))")
+        check("a stale row with no stored reason still says unknown since",
+              restingRowState(rStale, .stale(120 * 3600), now: t0) == "unknown since 5d ago",
+              "got \(restingRowState(rStale, .stale(120 * 3600), now: t0))")
+        var failedPoll = refusedRow
+        failedPoll.readAt = t0.addingTimeInterval(-3_600)
+        check("a failed poll is told apart from the last capture",
+              restingRowState(failedPoll, refusedReason, now: t0)
+                  == "session refused · last poll failed 1h ago · captured 29d ago",
+              "got \(restingRowState(failedPoll, refusedReason, now: t0))")
+        var codexCap = acct("cc", five: nil, week: 100, agoHours: 0, provider: .codex)
+        codexCap.lastError = "usage limit reached"
+        codexCap.readAt = t0.addingTimeInterval(60)
+        check("a spent Codex plan is a cap, not a failed read",
+              codexCap.restingCause == nil && codexCap.failedPollAt == nil,
+              "got \(codexCap.restingCause ?? "nil")")
+        var capRow = acct("cp", five: nil, week: 99, agoHours: 2, provider: .cursor)
+        capRow.lastError = CursorUsage.refusedOwnReason(code: 401)
+        capRow.readAt = t0.addingTimeInterval(-120)
+        let capReason = capRow.restingReason(now: t0)!
+        check("a binding cap survives a failed refresh",
+              restingRowState(capRow, capReason, now: t0).contains("session refused")
+                  && restingRowState(capRow, capReason, now: t0).contains("captured 2h ago"),
+              "got \(restingRowState(capRow, capReason, now: t0))")
+
         var codexSnap = acct("cx", five: nil, week: 6, agoHours: 0, provider: .codex)
         codexSnap.fiveHourResetsAt = nil
         let part = AccountSnapshot.partition([rHealthy, rCapped, rStale, rBoth, codexSnap], now: t0)
@@ -3069,8 +3132,13 @@ enum CLI {
         var lines = ["  " + head]
 
         if !account.isRecommendable(now: now) {
-            lines.append("      " + (account.capturedAt == nil ? "never captured"
-                : "unknown since " + age(account.capturedAt, now: now)))
+            let state = account.capturedAt == nil && account.restingCause == nil
+                ? "never captured"
+                : account.restingStateText(
+                    account.restingReason(now: now)
+                        ?? (account.capturedAt == nil ? .neverCaptured : .stale(0)),
+                    now: now)
+            lines.append("      " + state)
             if let error = account.lastError, error != refreshError {
                 lines.append("      ⚠️ " + error)
             }
@@ -3129,6 +3197,16 @@ enum CLI {
         if let error = account.lastError, error != refreshError { notes.append("⚠️ \(error)") }
         if !notes.isEmpty { lines.append("      " + notes.joined(separator: " · ")) }
         return lines
+    }
+
+    /// The state column of a RESTING row, extracted so the selftest reads the same
+    /// words the table prints rather than a parallel formatting approximation.
+    static func restingRowState(_ account: AccountSnapshot,
+                                _ why: AccountSnapshot.RestReason, now: Date) -> String {
+        if account.fiveHourUnreported(now: now) {
+            return SeatUsagePresentation.fiveHourUnreportedText
+        }
+        return account.restingStateText(why, now: now)
     }
 
     /// Renders one complete provider section, including its semantic heading and all rows.
@@ -3280,19 +3358,18 @@ enum CLI {
                     when = "opens " + clock(d)
                 } else {
                     // "switch to refresh" is a Claude remedy: a Claude seat
-                    // re-polls on login. Cursor re-reads itself every cycle,
-                    // so a stale Cursor row means its session is refused, and
-                    // Codex numbers advance only when a codex session runs.
+                    // re-polls on login. Cursor re-reads itself every cycle with
+                    // Tower's own sign-in: a missing or refused one is fixed by
+                    // connecting Cursor, any other failure retries on the next
+                    // poll. Codex numbers advance only when a codex session runs.
                     switch a.kind {
                     case .claude: when = "switch to refresh"
-                    case .cursor:  when = "fix the Cursor session"
+                    case .cursor:  when = a.cursorRestingRemedy
                     case .codex:   when = "run a codex session"
                     default:       when = "no switch remedy"
                     }
                 }
-                let state = a.fiveHourUnreported(now: now) ? SeatUsagePresentation.fiveHourUnreportedText
-                    : why.isStale && a.capturedAt != nil
-                    ? "unknown since " + age(a.capturedAt, now: now) : why.text
+                let state = restingRowState(a, why, now: now)
                 let restingRows = split.resting.map(\.0)
                 print("    " + pad(AccountSnapshot.listName(a, among: restingRows), 15) + pad(state, 30) + when)
             }

@@ -1032,6 +1032,10 @@ struct AccountRow: View {
     /// people do not have to subtract red percentages across different clocks.
     func availableSummary() -> String? {
         guard account.isRecommendable(now: now) else {
+            if let cause = account.restingCause {
+                return account.capturedAt == nil ? cause
+                    : cause + " · " + CLI.age(account.capturedAt, now: now)
+            }
             return account.capturedAt == nil ? "never captured"
                 : "unknown since " + CLI.age(account.capturedAt, now: now)
         }
@@ -1605,6 +1609,10 @@ struct RestingDrawer: View {
     /// resets between polls would otherwise keep printing its old number (#17).
     static func limitWindows(_ account: AccountSnapshot, now: Date) -> [String] {
         guard account.isRecommendable(now: now) else {
+            if let cause = account.restingCause {
+                return [account.capturedAt == nil ? cause
+                    : cause + " · " + CLI.age(account.capturedAt, now: now)]
+            }
             return [account.capturedAt == nil ? "never captured"
                 : "unknown since " + CLI.age(account.capturedAt, now: now)]
         }
@@ -1637,18 +1645,6 @@ struct RestingDrawer: View {
         return parts
     }
 
-    private static func cappedWindows(_ account: AccountSnapshot, now: Date) -> String {
-        var names: [String] = []
-        if account.kind.hasFiveHourWindow,
-           (account.effectiveFiveHour(now: now).pct ?? 0) >= AccountSnapshot.cappedPct {
-            names.append("5-hour")
-        }
-        if (account.effectiveWeekly(now: now).pct ?? 0) >= AccountSnapshot.cappedPct {
-            names.append("7-day")
-        }
-        return names.joined(separator: " + ")
-    }
-
     /// The default row names the actionable category, while percentages and ages stay in
     /// detail. This keeps capped, stale, and never-captured semantics visibly distinct.
     static func state(_ account: AccountSnapshot,
@@ -1658,27 +1654,23 @@ struct RestingDrawer: View {
             let age = account.capturedAt.map { " · \(ageText(max(0, now.timeIntervalSince($0)))) ago" } ?? ""
             return "needs login" + age
         }
-        let capState: String
-        if let binding = account.presentableBindingQuota(now: now) {
-            let room = Int(max(0, 100 - binding.percent).rounded())
-            capState = "\(room)% room · \(binding.label(for: account.kind)) capped"
-        } else {
-            capState = cappedWindows(account, now: now) + " blocked"
-        }
         switch reason {
-        case .capped: return capState
-        case .meteredCapped: return reason.text
+        case .capped, .meteredCapped: return account.restingStateText(reason, now: now)
         case .cappedAndStale, .stale:
             // The same one unknown state the seat board uses: "unknown · <why>".
             if account.fiveHourUnreported(now: now) {
                 return SeatUsagePresentation.unknownText(SeatUsagePresentation.fiveHourUnreportedText)
             }
+            // A stored cause names the real state; the shared composer words it.
+            if account.restingCause != nil { return account.restingStateText(reason, now: now) }
             guard let capturedAt = account.capturedAt else {
                 return SeatUsagePresentation.unknownText("never read")
             }
             return SeatUsagePresentation.unknownText(
                 SeatUsagePresentation.readText(now.timeIntervalSince(capturedAt)))
-        case .neverCaptured: return SeatUsagePresentation.unknownText("never read")
+        case .neverCaptured:
+            if account.restingCause != nil { return account.restingStateText(reason, now: now) }
+            return SeatUsagePresentation.unknownText("never read")
         }
     }
 
@@ -1700,7 +1692,16 @@ struct RestingDrawer: View {
         if reason.isTimeGated, let opens = AccountSnapshot.reopening(account, now: now) {
             return "reset \(CLI.clock(opens))"
         }
-        return reason.isTimeGated ? "await reset" : "switch to check"
+        if reason.isTimeGated { return "await reset" }
+        // "switch to check" is the Claude remedy: a Claude seat re-polls on login.
+        // Cursor re-reads itself every cycle with Tower's own sign-in, so its fix is
+        // the Connect Cursor action when the sign-in is missing or refused, and a
+        // retry on the next poll for any other read failure.
+        switch account.kind {
+        case .cursor: return account.cursorRestingRemedy
+        case .codex:  return "run a session"
+        default:      return "switch to check"
+        }
     }
 
     private var cappedCount: Int { rows.filter { $0.1.isCapped }.count }
@@ -1772,7 +1773,12 @@ struct RestingDrawer: View {
                                 }
                                 switch row.1 {
                                 case .stale(let age), .cappedAndStale(_, let age):
-                                    Text("Last checked \(Self.ageText(age)) ago; switch into this account to refresh.")
+                                    // "switch into this account" is only the Claude
+                                    // remedy; a non-Claude row's own error carries
+                                    // the right fix and prints below.
+                                    Text("Last checked \(Self.ageText(age)) ago"
+                                        + (row.0.kind == .claude
+                                            ? "; switch into this account to refresh." : "."))
                                         .font(TowerType.font(.small))
                                         .foregroundStyle(TowerType.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
